@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Tenant Resource Quotas</title>
+<link rel="stylesheet" href="assets/app.css">
+<style>
+.qe-overlay{position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:200;display:none}
+.qe-overlay.open{display:block}
+.qe-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(560px,calc(100vw - 32px));max-height:88vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:0 24px 64px rgba(0,0,0,.22);z-index:201;display:none}
+.qe-modal.open{display:block}
+.qe-modal .qeh{display:flex;align-items:center;gap:12px;padding:18px 24px;border-bottom:1px solid var(--line);font-size:16px;font-weight:700}
+.qe-modal .qeh .xbtn{margin-left:auto;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center}
+.qe-modal .qeb{padding:24px}
+.qe-row{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;margin-bottom:8px}
+.qe-row .qe-label{min-width:120px;font-size:13px;font-weight:600}
+.qe-row .qe-current{font-size:12px;color:var(--muted);min-width:100px}
+.qe-row input,.qe-row select{flex:1;padding:7px 10px;border-radius:7px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13px;font-family:var(--font)}
+.qe-bar{height:6px;border-radius:3px;background:var(--line);margin-top:6px;overflow:hidden}
+.qe-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+</style>
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1>Tenant Resource Quotas</h1>
+      <div class="meta"><span>per-tenant limits &middot; noisy-neighbor prevention</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--danger-soft);color:var(--danger)">&#9888;</span> Tenants at limit</div><div class="kv" style="color:var(--danger)">3</div><div class="kd down">approaching or at quota</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9650;</span> Soft warnings</div><div class="kv" style="color:var(--amber)">5</div><div class="kd down">above 70% utilization</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9673;</span> Hard blocks</div><div class="kv" style="color:var(--green)">0</div><div class="kd up">no tenants blocked</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Avg utilization</div><div class="kv">62%</div><div class="kd">across all quotas</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;border-left:3px solid var(--amber)">
+    <div class="bd" style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;color:var(--amber)">&#9888;</span>
+      <div>
+        <b style="color:var(--amber)">Quota Warning</b><br>
+        <span>TechStart Inc (Starter trial) hit 80% of event quota &mdash; notify account team</span>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn" onclick="pf.toast('Notification sent to account team','ok')">Notify team</button>
+        <button class="btn" onclick="pf.toast('Alert acknowledged','ok')">Acknowledge</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Quota Usage by Tenant</span><span class="s">7 tenants</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="quotaTbl">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Plan</th>
+            <th class="num">Events/day Limit</th>
+            <th class="num">Events/day Actual</th>
+            <th class="num">DBs Limit</th>
+            <th class="num">DBs Actual</th>
+            <th class="num">Storage Limit</th>
+            <th class="num">Storage Actual</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Meridian Financial</b><br><small class="muted">meridian-fin</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">Custom</td>
+            <td class="num">142.6M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">186</td>
+            <td class="num">5 TB</td>
+            <td class="num">3.2 TB</td>
+            <td><span class="badge green dot">OK</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Meridian quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>Bharat National Bank</b><br><small class="muted">bnb-india</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">Custom</td>
+            <td class="num">198.4M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">240</td>
+            <td class="num">8 TB</td>
+            <td class="num"><b style="color:var(--amber)">6.8 TB</b></td>
+            <td><span class="badge amber dot">Warning</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening BNB quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>Nordic Insurance Group</b><br><small class="muted">nordic-ins</small></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">500M</td>
+            <td class="num">67.2M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">89</td>
+            <td class="num">1 TB</td>
+            <td class="num">620 GB</td>
+            <td><span class="badge green dot">OK</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Nordic quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>Pacific Health Partners</b><br><small class="muted">pacific-hp</small></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">500M</td>
+            <td class="num">84.1M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">112</td>
+            <td class="num">1 TB</td>
+            <td class="num"><b style="color:var(--amber)">840 GB</b></td>
+            <td><span class="badge amber dot">Warning</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Pacific Health quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>Royal Commerce UK</b><br><small class="muted">royal-comm</small></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">500M</td>
+            <td class="num">41.8M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">64</td>
+            <td class="num">1 TB</td>
+            <td class="num">480 GB</td>
+            <td><span class="badge green dot">OK</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Royal Commerce quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr style="background:var(--danger-soft)">
+            <td><b>TechStart Inc</b><br><small class="muted">techstart &middot; trial</small></td>
+            <td><span class="badge amber">Starter / Trial</span></td>
+            <td class="num">1M</td>
+            <td class="num"><b style="color:var(--danger)">0.8M</b></td>
+            <td class="num">5</td>
+            <td class="num"><b style="color:var(--danger)">3</b></td>
+            <td class="num">10 GB</td>
+            <td class="num"><b style="color:var(--amber)">7.2 GB</b></td>
+            <td><span class="badge amber dot">At limit</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening TechStart quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>GovData India</b><br><small class="muted">govdata-in</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">Custom</td>
+            <td class="num">124.8M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">156</td>
+            <td class="num">10 TB</td>
+            <td class="num">4.6 TB</td>
+            <td><span class="badge green dot">OK</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening GovData quota editor','ok')">Edit</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card">
+      <div class="hd"><span class="t">Default Quotas by Plan Tier</span></div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Plan</th>
+              <th class="num">Events/day</th>
+              <th class="num">Databases</th>
+              <th class="num">Storage</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge amber">Starter</span></td>
+              <td class="num">1M</td>
+              <td class="num">5</td>
+              <td class="num">10 GB</td>
+              <td><small class="muted">14-day trial, shared infrastructure</small></td>
+            </tr>
+            <tr>
+              <td><span class="badge blue">Business</span></td>
+              <td class="num">500M</td>
+              <td class="num">200</td>
+              <td class="num">1 TB</td>
+              <td><small class="muted">Dedicated cluster, expandable on request</small></td>
+            </tr>
+            <tr>
+              <td><span class="badge ind">Enterprise</span></td>
+              <td class="num">200M&ndash;500M</td>
+              <td class="num">400&ndash;1000</td>
+              <td class="num">5&ndash;20 TB</td>
+              <td><small class="muted">Per-contract negotiation, SLA-backed</small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd"><span class="t">Enforcement Behavior</span><span class="s">what happens at each threshold</span></div>
+      <div class="bd" style="padding:12px 16px">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span class="badge amber" style="font-size:10px;flex:none;margin-top:2px">70-94%</span>
+            <div style="font-size:12.5px;line-height:1.5"><b>Soft warning</b> &mdash; Tenant continues operating normally. Notifications sent to internal teams only. Tenant admin is not notified. No throttling.</div>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span class="badge red" style="font-size:10px;flex:none;margin-top:2px">95-99%</span>
+            <div style="font-size:12.5px;line-height:1.5"><b>Hard warning</b> &mdash; Tenant admin sees a banner in the UI. P2 incident auto-created. Ops decides whether to extend quota or prepare for throttling.</div>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span class="badge red" style="font-size:10px;flex:none;margin-top:2px">100%</span>
+            <div style="font-size:12.5px;line-height:1.5"><b>Hard limit</b> &mdash; Ingestion throttled (events queued, not dropped). New DB registrations blocked. P1 incident auto-created. Tenant admin notified via email.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Quota Utilization</span><span class="s">visual breakdown</span></div>
+    <div class="bd">
+      <div id="quotaBars"></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Quota Alert Rules</span><span class="s">automated threshold notifications</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="alertRulesTbl">
+        <thead>
+          <tr>
+            <th>Threshold</th>
+            <th>Severity</th>
+            <th>Action</th>
+            <th>Channels</th>
+            <th>Auto-ITSM</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>70% utilization</b><br><small class="muted">Soft warning &mdash; any quota metric</small></td>
+            <td><span class="badge amber">Warning</span></td>
+            <td>Notify account team &mdash; upsell opportunity</td>
+            <td>
+              <span class="badge" style="font-size:10px">Slack #customer-success</span>
+              <span class="badge" style="font-size:10px">Email &rarr; account manager</span>
+            </td>
+            <td><span class="muted">&mdash;</span></td>
+            <td><span class="badge green dot">Active</span></td>
+          </tr>
+          <tr>
+            <td><b>85% utilization</b><br><small class="muted">Approaching limit &mdash; any quota metric</small></td>
+            <td><span class="badge amber">High</span></td>
+            <td>Notify ops + account team &mdash; plan upgrade conversation</td>
+            <td>
+              <span class="badge" style="font-size:10px">Slack #platform-ops</span>
+              <span class="badge" style="font-size:10px">Slack #customer-success</span>
+              <span class="badge" style="font-size:10px">Email &rarr; account manager</span>
+            </td>
+            <td><span class="badge" style="font-size:10px;background:var(--info-soft);color:var(--info)">Jira &rarr; CS-QUOTA</span></td>
+            <td><span class="badge green dot">Active</span></td>
+          </tr>
+          <tr>
+            <td><b>95% utilization</b><br><small class="muted">Critical &mdash; imminent hard limit</small></td>
+            <td><span class="badge red">Critical</span></td>
+            <td>Page on-call + auto-create P2 incident &mdash; decide: throttle or extend</td>
+            <td>
+              <span class="badge" style="font-size:10px">PagerDuty &rarr; Platform On-Call</span>
+              <span class="badge" style="font-size:10px">Slack #platform-ops</span>
+              <span class="badge" style="font-size:10px">Email &rarr; VP Eng</span>
+            </td>
+            <td><span class="badge" style="font-size:10px;background:var(--danger-soft);color:var(--danger)">ServiceNow &rarr; P2 INC</span></td>
+            <td><span class="badge green dot">Active</span></td>
+          </tr>
+          <tr>
+            <td><b>100% hard limit</b><br><small class="muted">Quota exhausted &mdash; enforcement triggered</small></td>
+            <td><span class="badge red">Critical</span></td>
+            <td>Auto-throttle ingestion + page on-call + create P1 incident</td>
+            <td>
+              <span class="badge" style="font-size:10px">PagerDuty &rarr; Platform On-Call</span>
+              <span class="badge" style="font-size:10px">Slack #platform-ops</span>
+              <span class="badge" style="font-size:10px">Slack #customer-success</span>
+              <span class="badge" style="font-size:10px">Email &rarr; tenant admin</span>
+            </td>
+            <td><span class="badge" style="font-size:10px;background:var(--danger-soft);color:var(--danger)">ServiceNow &rarr; P1 INC</span></td>
+            <td><span class="badge green dot">Active</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card">
+      <div class="hd"><span class="t">Notification Channels</span><span class="s">configured integrations</span></div>
+      <div class="bd" style="padding:12px 16px">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span style="font-size:16px;flex:none">&#128172;</span>
+            <div style="flex:1"><b style="font-size:13px">Slack</b><br><small class="muted">#platform-ops &middot; #customer-success</small></div>
+            <span class="badge green dot" style="font-size:10px">Connected</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span style="font-size:16px;flex:none">&#128276;</span>
+            <div style="flex:1"><b style="font-size:13px">PagerDuty</b><br><small class="muted">Escalation policy: Platform On-Call</small></div>
+            <span class="badge green dot" style="font-size:10px">Connected</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span style="font-size:16px;flex:none">&#9873;</span>
+            <div style="flex:1"><b style="font-size:13px">ServiceNow</b><br><small class="muted">Auto-create INC for P1/P2 quota breaches</small></div>
+            <span class="badge green dot" style="font-size:10px">Connected</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span style="font-size:16px;flex:none">&#9881;</span>
+            <div style="flex:1"><b style="font-size:13px">Jira</b><br><small class="muted">Project: CS-QUOTA &middot; auto-create for upsell tracking</small></div>
+            <span class="badge green dot" style="font-size:10px">Connected</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span style="font-size:16px;flex:none">&#9993;</span>
+            <div style="flex:1"><b style="font-size:13px">Email</b><br><small class="muted">Account manager + VP Eng + tenant admin (on hard limit)</small></div>
+            <span class="badge green dot" style="font-size:10px">Connected</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd"><span class="t">Recent Quota Alerts</span><span class="s">last 7 days</span></div>
+      <div class="bd" style="padding:12px 16px">
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-2);font-size:13px">
+            <span class="badge amber" style="font-size:10px">85%</span>
+            <div style="flex:1"><b>TechStart Inc</b> &mdash; events/day at 80% <span class="muted">&middot; Jira CS-QUOTA-142 created</span></div>
+            <span class="muted" style="font-size:11px">2h ago</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-2);font-size:13px">
+            <span class="badge amber" style="font-size:10px">85%</span>
+            <div style="flex:1"><b>Bharat National Bank</b> &mdash; storage at 85% <span class="muted">&middot; Slack notified</span></div>
+            <span class="muted" style="font-size:11px">1d ago</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-2);font-size:13px">
+            <span class="badge amber" style="font-size:10px">70%</span>
+            <div style="flex:1"><b>Pacific Health Partners</b> &mdash; storage at 84% <span class="muted">&middot; email sent to AM</span></div>
+            <span class="muted" style="font-size:11px">3d ago</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line-2);font-size:13px">
+            <span class="badge red" style="font-size:10px">95%</span>
+            <div style="flex:1"><b>TechStart Inc</b> &mdash; storage at 72% <span class="muted">&middot; warning only</span></div>
+            <span class="muted" style="font-size:11px">5d ago</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 0;font-size:13px">
+            <span class="badge green" style="font-size:10px">Resolved</span>
+            <div style="flex:1"><b>Nordic Insurance</b> &mdash; events/day dropped below 70% <span class="muted">&middot; auto-resolved</span></div>
+            <span class="muted" style="font-size:11px">6d ago</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quota edit modal -->
+  <div class="qe-overlay" id="qeOv"></div>
+  <div class="qe-modal" id="qeMod">
+    <div class="qeh"><b id="qeTitle">Edit Quotas</b><button class="xbtn" id="qeX">&times;</button></div>
+    <div class="qeb" id="qeBody"></div>
+  </div>
+
+  <!-- Upgrade modal -->
+  <div class="qe-overlay" id="ugOv"></div>
+  <div class="qe-modal" id="ugMod" style="width:min(680px,calc(100vw - 32px))">
+    <div class="qeh"><b id="ugTitle">Upgrade to Enterprise</b><button class="xbtn" id="ugX">&times;</button></div>
+    <div class="qeb" id="ugBody"></div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doTenantQuotas, 100);
+})();
+function doTenantQuotas(){
+  var QT = [
+    {name:"Meridian Financial", slug:"meridian-fin", plan:"Enterprise", planCls:"ind", evLimit:"250M", evActual:"142.6M", evPct:57, dbLimit:"500", dbActual:186, dbPct:37, stLimit:"5 TB", stActual:"3.2 TB", stPct:64, st:"ok"},
+    {name:"Bharat National Bank", slug:"bnb-india", plan:"Enterprise", planCls:"ind", evLimit:"300M", evActual:"198.4M", evPct:66, dbLimit:"600", dbActual:240, dbPct:40, stLimit:"8 TB", stActual:"6.8 TB", stPct:85, st:"warning"},
+    {name:"Nordic Insurance Group", slug:"nordic-ins", plan:"Business", planCls:"", evLimit:"500M", evActual:"67.2M", evPct:13, dbLimit:"200", dbActual:89, dbPct:45, stLimit:"1 TB", stActual:"620 GB", stPct:62, st:"ok"},
+    {name:"Pacific Health Partners", slug:"pacific-hp", plan:"Business", planCls:"", evLimit:"500M", evActual:"84.1M", evPct:17, dbLimit:"200", dbActual:112, dbPct:56, stLimit:"1 TB", stActual:"840 GB", stPct:84, st:"warning"},
+    {name:"Royal Commerce UK", slug:"royal-comm", plan:"Business", planCls:"", evLimit:"500M", evActual:"41.8M", evPct:8, dbLimit:"200", dbActual:64, dbPct:32, stLimit:"1 TB", stActual:"480 GB", stPct:48, st:"ok"},
+    {name:"TechStart Inc", slug:"techstart", plan:"Starter / Trial", planCls:"amber", evLimit:"1M", evActual:"0.8M", evPct:80, dbLimit:"5", dbActual:3, dbPct:60, stLimit:"10 GB", stActual:"7.2 GB", stPct:72, st:"at-limit"},
+    {name:"GovData India", slug:"govdata-in", plan:"Enterprise", planCls:"ind", evLimit:"200M", evActual:"124.8M", evPct:62, dbLimit:"400", dbActual:156, dbPct:39, stLimit:"10 TB", stActual:"4.6 TB", stPct:46, st:"ok"}
+  ];
+
+  function renderQuotaTable(){
+    var tbody = document.getElementById("quotaTbl");
+    if(!tbody) return;
+    var tBody = tbody.querySelector("tbody");
+    if(!tBody) return;
+    var html = "";
+    for(var i = 0; i < QT.length; i++){
+      var q = QT[i];
+      var rowStyle = q.st === "at-limit" ? ' style="background:var(--danger-soft)"' : "";
+      var stBadge = q.st === "ok" ? '<span class="badge green dot">OK</span>' : q.st === "warning" ? '<span class="badge amber dot">Warning</span>' : '<span class="badge amber dot">At limit</span>';
+      html += "<tr" + rowStyle + ">" +
+        "<td><b>" + q.name + "</b><br><small class='muted'>" + q.slug + "</small></td>" +
+        '<td><span class="badge ' + q.planCls + '">' + q.plan + "</span></td>" +
+        '<td class="num">' + q.evLimit + "</td>" +
+        '<td class="num">' + (q.evPct >= 80 ? '<b style="color:var(--danger)">' + q.evActual + '</b>' : q.evActual) + "</td>" +
+        '<td class="num">' + q.dbLimit + "</td>" +
+        '<td class="num">' + (q.dbPct >= 80 ? '<b style="color:var(--danger)">' + q.dbActual + '</b>' : q.dbActual) + "</td>" +
+        '<td class="num">' + q.stLimit + "</td>" +
+        '<td class="num">' + (q.stPct >= 80 ? '<b style="color:var(--amber)">' + q.stActual + '</b>' : q.stActual) + "</td>" +
+        "<td>" + stBadge + "</td>" +
+        '<td>' + (q.plan === "Business" ? (q.pendingUpgrade ? '<a href="approvals.html" class="badge amber dot" style="font-size:10px;text-decoration:none;cursor:pointer" title="Click to track in Approvals">Upgrade pending &#8599;</a>' : '<button class="btn upgradeBtn" style="padding:5px 12px" data-name="' + q.name + '">Upgrade</button>') : '<button class="btn editQuotaBtn" style="padding:5px 12px" data-idx="' + i + '">Edit</button>') + '</td>' +
+      "</tr>";
+    }
+    tBody.innerHTML = html;
+  }
+  renderQuotaTable();
+
+  // Quota bars
+  if(window.pf){
+    var container = document.getElementById("quotaBars");
+    if(container){
+      var barData = QT.map(function(q){
+        var maxPct = Math.max(q.evPct, q.stPct, q.dbPct);
+        return {name:q.name, pct:maxPct, color: maxPct >= 80 ? "var(--danger)" : maxPct >= 70 ? "var(--amber)" : "var(--green)"};
+      }).sort(function(a,b){ return b.pct - a.pct; });
+      var bhtml = "";
+      for(var j = 0; j < barData.length; j++){
+        var bd = barData[j];
+        bhtml += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">' +
+          '<span style="min-width:180px;font-size:13px;font-weight:600">' + bd.name + '</span>' +
+          '<div style="flex:1">' + pf.progress(bd.pct, bd.color) + '</div>' +
+          '<span style="min-width:40px;text-align:right;font-size:13px;font-weight:600;color:' + bd.color + '">' + bd.pct + '%</span>' +
+        '</div>';
+      }
+      container.innerHTML = bhtml;
+    }
+  }
+
+  // ========== QUOTA EDIT MODAL ==========
+  function openQeModal(){
+    var ov = document.getElementById("qeOv");
+    var mod = document.getElementById("qeMod");
+    if(ov){ document.body.appendChild(ov); ov.classList.add("open"); }
+    if(mod){ document.body.appendChild(mod); mod.classList.add("open"); }
+  }
+  function closeQeModal(){
+    var ov = document.getElementById("qeOv");
+    var mod = document.getElementById("qeMod");
+    if(ov) ov.classList.remove("open");
+    if(mod) mod.classList.remove("open");
+  }
+
+  document.addEventListener("click", function(e){
+    var editBtn = e.target.closest && e.target.closest(".editQuotaBtn");
+    if(editBtn){
+      var idx = parseInt(editBtn.getAttribute("data-idx"));
+      openQuotaEditor(QT[idx]);
+      return;
+    }
+    var upgradeBtn = e.target.closest && e.target.closest(".upgradeBtn");
+    if(upgradeBtn){
+      var tName = upgradeBtn.getAttribute("data-name");
+      var idx = -1;
+      for(var ui = 0; ui < QT.length; ui++){ if(QT[ui].name === tName){ idx = ui; break; } }
+      if(idx >= 0) openUpgradeModal(QT[idx]);
+      return;
+    }
+    if(e.target.id === "qeOv" || (e.target.closest && e.target.closest("#qeX"))){ closeQeModal(); return; }
+    if(e.target.id === "ugOv" || (e.target.closest && e.target.closest("#ugX"))){ closeUgModal(); return; }
+  });
+
+  function openQuotaEditor(q){
+    var title = document.getElementById("qeTitle");
+    var body = document.getElementById("qeBody");
+    if(!title || !body) return;
+    title.textContent = "Edit Quotas -- " + q.name;
+
+    var evColor = q.evPct >= 80 ? "var(--danger)" : q.evPct >= 70 ? "var(--amber)" : "var(--green)";
+    var stColor = q.stPct >= 80 ? "var(--danger)" : q.stPct >= 70 ? "var(--amber)" : "var(--green)";
+    var dbColor = q.dbPct >= 80 ? "var(--danger)" : q.dbPct >= 70 ? "var(--amber)" : "var(--green)";
+
+    body.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;margin-bottom:18px;font-size:13px">' +
+        '<span class="badge ' + q.planCls + '">' + q.plan + '</span>' +
+        '<span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--muted)">' + q.slug + '</span>' +
+      '</div>' +
+
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Events / day</div>' +
+      '<div class="qe-row">' +
+        '<span class="qe-label">Current limit</span>' +
+        '<span class="qe-current">' + q.evLimit + '</span>' +
+        '<input type="text" id="qeEvLimit" value="' + q.evLimit + '">' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:0 14px">' +
+        '<span style="font-size:12px;color:var(--muted)">Usage: <b style="color:' + evColor + '">' + q.evActual + '</b> (' + q.evPct + '%)</span>' +
+        '<div style="flex:1"><div class="qe-bar"><div class="qe-bar-fill" style="width:' + q.evPct + '%;background:' + evColor + '"></div></div></div>' +
+      '</div>' +
+
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Databases</div>' +
+      '<div class="qe-row">' +
+        '<span class="qe-label">Current limit</span>' +
+        '<span class="qe-current">' + q.dbLimit + '</span>' +
+        '<input type="text" id="qeDbLimit" value="' + q.dbLimit + '">' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:0 14px">' +
+        '<span style="font-size:12px;color:var(--muted)">Usage: <b>' + q.dbActual + '</b>' + (q.dbPct > 0 ? ' (' + q.dbPct + '%)' : '') + '</span>' +
+        (q.dbPct > 0 ? '<div style="flex:1"><div class="qe-bar"><div class="qe-bar-fill" style="width:' + q.dbPct + '%;background:' + dbColor + '"></div></div></div>' : '') +
+      '</div>' +
+
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Storage</div>' +
+      '<div class="qe-row">' +
+        '<span class="qe-label">Current limit</span>' +
+        '<span class="qe-current">' + q.stLimit + '</span>' +
+        '<input type="text" id="qeStLimit" value="' + q.stLimit + '">' +
+      '</div>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;padding:0 14px">' +
+        '<span style="font-size:12px;color:var(--muted)">Usage: <b style="color:' + stColor + '">' + q.stActual + '</b> (' + q.stPct + '%)</span>' +
+        '<div style="flex:1"><div class="qe-bar"><div class="qe-bar-fill" style="width:' + q.stPct + '%;background:' + stColor + '"></div></div></div>' +
+      '</div>' +
+
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Justification</div>' +
+      '<textarea class="input" id="qeJustify" rows="2" placeholder="Reason for override (required for audit trail)" style="width:100%;resize:vertical;font-family:var(--font);margin-bottom:16px"></textarea>' +
+
+      '<div style="background:var(--info-soft);border:1px solid rgba(8,145,178,.15);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12.5px;color:var(--ink);line-height:1.5">' +
+        '<b style="color:var(--info)">Audit trail:</b> All quota changes are logged with the operator identity, timestamp, previous values, and justification. Visible in Platform Audit Log.' +
+      '</div>' +
+
+      '<div style="display:flex;gap:10px;padding-top:14px;border-top:1px solid var(--line);justify-content:flex-end">' +
+        '<button class="btn" id="qeCancel">Cancel</button>' +
+        '<button class="btn primary" id="qeSave">Save quota override</button>' +
+      '</div>';
+
+    var cancelBtn = body.querySelector("#qeCancel");
+    if(cancelBtn) cancelBtn.onclick = function(){ closeQeModal(); };
+    var saveBtn = body.querySelector("#qeSave");
+    if(saveBtn) saveBtn.onclick = function(){
+      var justify = (body.querySelector("#qeJustify") || {}).value || "";
+      if(!justify){ if(window.pf) pf.toast("Justification is required for audit trail", "err"); return; }
+      closeQeModal();
+      if(window.pf) pf.toast("Quota override saved for " + q.name + " -- logged to audit trail", "ok");
+    };
+
+    openQeModal();
+  }
+
+  // ========== UPGRADE MODAL ==========
+  function openUgModal(){
+    var ov = document.getElementById("ugOv");
+    var mod = document.getElementById("ugMod");
+    if(ov){ document.body.appendChild(ov); ov.classList.add("open"); }
+    if(mod){ document.body.appendChild(mod); mod.classList.add("open"); }
+  }
+  function closeUgModal(){
+    var ov = document.getElementById("ugOv");
+    var mod = document.getElementById("ugMod");
+    if(ov) ov.classList.remove("open");
+    if(mod) mod.classList.remove("open");
+  }
+
+  function openUpgradeModal(q){
+    var title = document.getElementById("ugTitle");
+    var body = document.getElementById("ugBody");
+    if(!title || !body) return;
+    title.textContent = "Upgrade to Enterprise -- " + q.name;
+
+    var reqId = "UPG-" + Math.floor(1000 + Math.random() * 9000);
+
+    body.innerHTML =
+      '<div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;margin-bottom:18px;font-size:13px">' +
+        '<span class="badge ' + q.planCls + '">' + q.plan + '</span> <span style="font-size:16px;color:var(--muted)">&#8594;</span> <span class="badge ind">Enterprise</span>' +
+        '<span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;color:var(--muted);margin-left:auto">' + q.slug + '</span>' +
+      '</div>' +
+
+      // New limits
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">New Enterprise Limits</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px">' +
+        '<div class="qe-row" style="flex-direction:column;align-items:stretch;gap:4px">' +
+          '<span style="font-size:11px;font-weight:600;color:var(--muted)">Events/day</span>' +
+          '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px;color:var(--subtle);text-decoration:line-through">' + q.evLimit + '</span> <span style="font-size:14px">&#8594;</span> <input type="text" id="ugEv" value="250M" style="flex:1;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13px;font-family:var(--font)"></div>' +
+        '</div>' +
+        '<div class="qe-row" style="flex-direction:column;align-items:stretch;gap:4px">' +
+          '<span style="font-size:11px;font-weight:600;color:var(--muted)">Databases</span>' +
+          '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px;color:var(--subtle);text-decoration:line-through">' + q.dbLimit + '</span> <span style="font-size:14px">&#8594;</span> <input type="text" id="ugDb" value="500" style="flex:1;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13px;font-family:var(--font)"></div>' +
+        '</div>' +
+        '<div class="qe-row" style="flex-direction:column;align-items:stretch;gap:4px">' +
+          '<span style="font-size:11px;font-weight:600;color:var(--muted)">Storage</span>' +
+          '<div style="display:flex;align-items:center;gap:6px"><span style="font-size:12px;color:var(--subtle);text-decoration:line-through">' + q.stLimit + '</span> <span style="font-size:14px">&#8594;</span> <input type="text" id="ugSt" value="5 TB" style="flex:1;padding:6px 8px;border-radius:6px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-size:13px;font-family:var(--font)"></div>' +
+        '</div>' +
+      '</div>' +
+
+      // Features to enable
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Enterprise Features to Enable</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:16px">' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox" checked> Behavioral Analytics (UEBA)</label>' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox" checked> Inline Blocking</label>' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox" checked> BYOK / Custom KMS</label>' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox" checked> Custom Compliance Packs</label>' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox"> Static Data Masking</label>' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox"> Deception (Decoy Tables)</label>' +
+      '</div>' +
+
+      // Contract & retention
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">' +
+        '<div class="fld"><label style="font-size:11.5px;font-weight:600;display:block;margin-bottom:4px">Contract reference <span style="color:var(--danger)">*</span></label><input class="input" id="ugContract" placeholder="e.g. MSA-2026-0142" style="width:100%"></div>' +
+        '<div class="fld"><label style="font-size:11.5px;font-weight:600;display:block;margin-bottom:4px">Retention policy</label>' +
+          '<select class="input" id="ugRetention" style="width:100%"><option>90 days hot / 1 year cold</option><option selected>90 days hot / 7 years cold</option><option>90 days hot / 10 years cold</option></select>' +
+        '</div>' +
+      '</div>' +
+
+      // Approval chain
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Approval Chain</div>' +
+      '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:16px">' +
+        '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">' +
+          '<span style="width:24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none">1</span>' +
+          '<div style="flex:1"><b style="font-size:13px">Sales / Account Manager</b><br><small class="muted">Confirms contract is signed and terms match</small></div>' +
+          '<select class="input" style="width:180px;padding:5px 8px;font-size:12px"><option>Select approver...</option><option>James Rivera (Sales)</option><option>Priya Nair (Sales)</option><option selected>Auto: Account owner</option></select>' +
+          '<span class="badge amber dot" style="font-size:10px">Pending</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">' +
+          '<span style="width:24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none">2</span>' +
+          '<div style="flex:1"><b style="font-size:13px">Finance</b><br><small class="muted">Confirms billing is configured and PO received</small></div>' +
+          '<select class="input" style="width:180px;padding:5px 8px;font-size:12px"><option>Select approver...</option><option selected>Lisa Wong (Finance)</option><option>Mark Chen (Finance)</option></select>' +
+          '<span class="badge amber dot" style="font-size:10px">Pending</span>' +
+        '</div>' +
+        '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">' +
+          '<span style="width:24px;height:24px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none">3</span>' +
+          '<div style="flex:1"><b style="font-size:13px">Platform Lead</b><br><small class="muted">Final sign-off -- confirms infrastructure capacity</small></div>' +
+          '<select class="input" style="width:180px;padding:5px 8px;font-size:12px"><option>Select approver...</option><option selected>Alex Torres (Platform Lead)</option></select>' +
+          '<span class="badge amber dot" style="font-size:10px">Pending</span>' +
+        '</div>' +
+      '</div>' +
+
+      // Notification
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Notification Method</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:16px">' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox" checked> Email with approve/reject link</label>' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox" checked> Slack action buttons</label>' +
+        '<label style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;font-size:12.5px;cursor:pointer"><input type="checkbox"> Jira ticket (CS-UPGRADE)</label>' +
+      '</div>' +
+
+      '<div style="background:var(--info-soft);border:1px solid rgba(8,145,178,.15);border-radius:10px;padding:12px 14px;margin-bottom:16px;font-size:12.5px;color:var(--ink);line-height:1.5">' +
+        '<b style="color:var(--info)">How it works:</b> Once submitted, each approver receives a notification. They approve or reject via email link or Slack. When all three approve, the upgrade is applied automatically -- quotas updated, features enabled, plan changed. The initiator cannot approve their own request.' +
+      '</div>' +
+
+      '<div style="display:flex;gap:10px;padding-top:14px;border-top:1px solid var(--line);justify-content:flex-end">' +
+        '<button class="btn" id="ugCancel">Cancel</button>' +
+        '<button class="btn primary" id="ugSubmit">Submit for approval</button>' +
+      '</div>';
+
+    var cancelBtn = body.querySelector("#ugCancel");
+    if(cancelBtn) cancelBtn.onclick = function(){ closeUgModal(); };
+
+    var submitBtn = body.querySelector("#ugSubmit");
+    if(submitBtn) submitBtn.onclick = function(){
+      var contract = (body.querySelector("#ugContract") || {}).value || "";
+      if(!contract){ if(window.pf) pf.toast("Contract reference is required", "err"); return; }
+
+      // Show submitted confirmation
+      title.textContent = "Upgrade Submitted -- " + q.name;
+      body.innerHTML =
+        '<div style="text-align:center;padding:20px 0">' +
+          '<div style="width:56px;height:56px;border-radius:50%;display:inline-flex;align-items:center;justify-content:center;font-size:26px;background:var(--green-soft);color:var(--green);margin-bottom:12px">&#10003;</div>' +
+          '<h3 style="margin:0 0 4px;font-size:18px">Approval request submitted</h3>' +
+          '<p style="color:var(--muted);font-size:13.5px;margin:0 0 18px;max-width:460px;display:inline-block">Upgrade request <b>' + reqId + '</b> for <b>' + q.name + '</b> (Business &#8594; Enterprise) has been submitted. Approvers will be notified via email and Slack.</p>' +
+        '</div>' +
+
+        '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:18px">' +
+          '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">' +
+            '<span style="width:24px;height:24px;border-radius:50%;background:var(--amber);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none">1</span>' +
+            '<div style="flex:1"><b style="font-size:13px">Sales / Account Manager</b></div>' +
+            '<span class="badge amber dot" style="font-size:10px">Awaiting approval</span>' +
+            '<span class="muted" style="font-size:11px">notified just now</span>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">' +
+            '<span style="width:24px;height:24px;border-radius:50%;background:var(--line);color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none">2</span>' +
+            '<div style="flex:1"><b style="font-size:13px">Finance</b></div>' +
+            '<span class="badge dot" style="font-size:10px">Waiting</span>' +
+          '</div>' +
+          '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">' +
+            '<span style="width:24px;height:24px;border-radius:50%;background:var(--line);color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:none">3</span>' +
+            '<div style="flex:1"><b style="font-size:13px">Platform Lead</b></div>' +
+            '<span class="badge dot" style="font-size:10px">Waiting</span>' +
+          '</div>' +
+        '</div>' +
+
+        '<div style="display:flex;gap:10px;justify-content:center">' +
+          '<button class="btn" id="ugDone">Close</button>' +
+          '<a class="btn primary" href="approvals.html" style="text-decoration:none">Track in Approvals</a>' +
+        '</div>';
+
+      var doneBtn = body.querySelector("#ugDone");
+      if(doneBtn) doneBtn.onclick = function(){ closeUgModal(); };
+      q.pendingUpgrade = true;
+      renderQuotaTable();
+      if(window.pf) pf.toast("Upgrade request " + reqId + " submitted -- awaiting 3 approvals", "ok");
+    };
+
+    openUgModal();
+  }
+}
+</script>
+</body></html>

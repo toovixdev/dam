@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Platform Audit Log</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="platform-audit">
+
+  <div class="phead">
+    <div>
+      <h1>Platform Audit Log</h1>
+      <div class="meta"><span>immutable &middot; hash-chained &middot; all vendor actions</span></div>
+    </div>
+    <div class="acts">
+      <button class="btn" onclick="pf.tableToCSV('#auditTbl','platform-audit-log.csv')">&#8615; Export Evidence</button>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Events today</div><div class="kv">1,247</div><div class="kd up">&#9650; 8% vs yesterday</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#9637;</span> Actors active</div><div class="kv">8</div><div class="kd">platform operators</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#8776;</span> Tenants accessed</div><div class="kv">12</div><div class="kd">of 42 total</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--danger-soft);color:var(--danger)">&#9888;</span> Impersonation sessions</div><div class="kv">2</div><div class="kd down">currently active</div></div>
+  </div>
+
+  <!-- Filter bar -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="bd" style="padding:10px 16px">
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+        <div class="fld" style="margin-bottom:0;flex:0 0 auto">
+          <label style="font-size:11px">Date Range</label>
+          <div style="display:flex;gap:6px">
+            <input type="date" value="2026-06-23" style="width:140px">
+            <input type="date" value="2026-06-23" style="width:140px">
+          </div>
+        </div>
+        <div class="fld" style="margin-bottom:0;flex:0 0 150px">
+          <label style="font-size:11px">Actor</label>
+          <select>
+            <option value="">All actors</option>
+            <option>Ravi Mehta</option>
+            <option>Priya Sharma</option>
+            <option>Akash Patel</option>
+            <option>James Wilson</option>
+            <option>System</option>
+          </select>
+        </div>
+        <div class="fld" style="margin-bottom:0;flex:0 0 160px">
+          <label style="font-size:11px">Action Type</label>
+          <select>
+            <option value="">All actions</option>
+            <option>tenant.create</option>
+            <option>tenant.config.update</option>
+            <option>impersonation.start</option>
+            <option>impersonation.end</option>
+            <option>billing.adjust</option>
+            <option>content-pack.push</option>
+            <option>break-glass.activate</option>
+            <option>user.password.reset</option>
+          </select>
+        </div>
+        <div class="fld" style="margin-bottom:0;flex:0 0 160px">
+          <label style="font-size:11px">Tenant</label>
+          <select>
+            <option value="">All tenants</option>
+            <option>Meridian Financial</option>
+            <option>Bharat National Bank</option>
+            <option>Nordic Insurance Group</option>
+            <option>Pacific Health Partners</option>
+            <option>Royal Commerce UK</option>
+            <option>GovData India</option>
+          </select>
+        </div>
+        <div class="fld" style="margin-bottom:0;flex:1 1 160px">
+          <label style="font-size:11px">Search</label>
+          <input type="text" placeholder="Search events, resources, IPs...">
+        </div>
+        <button class="btn primary" style="margin-bottom:0;padding:9px 14px">Filter</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audit events table -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Audit Events</span><span class="s">1,247 events &middot; showing latest 15</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="auditTbl">
+        <thead>
+          <tr>
+            <th>Timestamp</th>
+            <th>Actor</th>
+            <th>Action</th>
+            <th>Tenant</th>
+            <th>Resource</th>
+            <th>IP</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 14:22:18</small></td>
+            <td><b>Ravi Mehta</b></td>
+            <td><span class="badge red">impersonation.start</span></td>
+            <td>Bharat National Bank</td>
+            <td><small class="mono muted">session/imp-9f3a</small></td>
+            <td><small class="mono muted">10.0.4.22</small></td>
+            <td><small class="muted">SUP-2026-4821 &middot; Slow query alert config</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 13:55:04</small></td>
+            <td><b>Priya Sharma</b></td>
+            <td><span class="badge red">impersonation.start</span></td>
+            <td>Meridian Financial</td>
+            <td><small class="mono muted">session/imp-8b2d</small></td>
+            <td><small class="mono muted">10.0.4.18</small></td>
+            <td><small class="muted">SUP-2026-4819 &middot; SAML attribute mapping</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 13:41:22</small></td>
+            <td><b>Akash Patel</b></td>
+            <td><span class="badge ind">tenant.config.update</span></td>
+            <td>GovData India</td>
+            <td><small class="mono muted">config/retention-policy</small></td>
+            <td><small class="mono muted">10.0.4.15</small></td>
+            <td><small class="muted">Retention changed 365d to 730d</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 12:18:47</small></td>
+            <td><b>James Wilson</b></td>
+            <td><span class="badge amber">billing.adjust</span></td>
+            <td>Pacific Health Partners</td>
+            <td><small class="mono muted">invoice/INV-2026-1845</small></td>
+            <td><small class="mono muted">10.0.4.30</small></td>
+            <td><small class="muted">Overage credit $240 applied &middot; mgr-approved</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 11:55:13</small></td>
+            <td><b>System</b></td>
+            <td><span class="badge blue">content-pack.push</span></td>
+            <td><em class="muted">All tenants</em></td>
+            <td><small class="mono muted">pack/classifiers-v2.14</small></td>
+            <td><small class="mono muted">internal</small></td>
+            <td><small class="muted">Classifier pack v2.14 pushed to 42 tenants</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 11:30:08</small></td>
+            <td><b>Ravi Mehta</b></td>
+            <td><span class="badge">user.password.reset</span></td>
+            <td>Nordic Insurance Group</td>
+            <td><small class="mono muted">user/erik.lindqvist</small></td>
+            <td><small class="mono muted">10.0.4.22</small></td>
+            <td><small class="muted">Admin password reset &middot; SUP-2026-4818</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 10:47:31</small></td>
+            <td><b>Priya Sharma</b></td>
+            <td><span class="badge ind">tenant.create</span></td>
+            <td>FinServ Analytics</td>
+            <td><small class="mono muted">tenant/finserv-anl</small></td>
+            <td><small class="mono muted">10.0.4.18</small></td>
+            <td><small class="muted">New Business-tier tenant &middot; US-East &middot; 12 DBs</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 10:12:55</small></td>
+            <td><b>Akash Patel</b></td>
+            <td><span class="badge red">break-glass.activate</span></td>
+            <td>Royal Commerce UK</td>
+            <td><small class="mono muted">session/bg-7c1e</small></td>
+            <td><small class="mono muted">10.0.4.15</small></td>
+            <td><small class="muted">Emergency: data pipeline stall &middot; INC-2026-0312</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 09:44:18</small></td>
+            <td><b>System</b></td>
+            <td><span class="badge blue">platform.deploy</span></td>
+            <td><em class="muted">Platform</em></td>
+            <td><small class="mono muted">release/v2.4.1</small></td>
+            <td><small class="mono muted">internal</small></td>
+            <td><small class="muted">Rolling deploy v2.4.1 &middot; 5 regions &middot; zero-downtime</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 09:18:42</small></td>
+            <td><b>James Wilson</b></td>
+            <td><span class="badge ind">tenant.config.update</span></td>
+            <td>Meridian Financial</td>
+            <td><small class="mono muted">config/alert-thresholds</small></td>
+            <td><small class="mono muted">10.0.4.30</small></td>
+            <td><small class="muted">Updated brute-force threshold 5 to 3 attempts</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 08:55:01</small></td>
+            <td><b>System</b></td>
+            <td><span class="badge">cert.rotate</span></td>
+            <td><em class="muted">Platform</em></td>
+            <td><small class="mono muted">cert/agent-mtls-ca</small></td>
+            <td><small class="mono muted">internal</small></td>
+            <td><small class="muted">CA-Central mTLS CA rotated &middot; 30d validity</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">23 Jun 08:22:39</small></td>
+            <td><b>Ravi Mehta</b></td>
+            <td><span class="badge amber">billing.adjust</span></td>
+            <td>Royal Commerce UK</td>
+            <td><small class="mono muted">invoice/INV-2026-1842</small></td>
+            <td><small class="mono muted">10.0.4.22</small></td>
+            <td><small class="muted">Storage overage waived &middot; goodwill credit $680</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">22 Jun 23:15:44</small></td>
+            <td><b>Akash Patel</b></td>
+            <td><span class="badge">impersonation.end</span></td>
+            <td>GovData India</td>
+            <td><small class="mono muted">session/imp-6a4f</small></td>
+            <td><small class="mono muted">10.0.4.15</small></td>
+            <td><small class="muted">Session ended &middot; 84 actions &middot; 1h 12min</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">22 Jun 22:03:11</small></td>
+            <td><b>Akash Patel</b></td>
+            <td><span class="badge red">impersonation.start</span></td>
+            <td>GovData India</td>
+            <td><small class="mono muted">session/imp-6a4f</small></td>
+            <td><small class="mono muted">10.0.4.15</small></td>
+            <td><small class="muted">SUP-2026-4815 &middot; KMS key rotation</small></td>
+          </tr>
+          <tr style="cursor:pointer" onclick="pf.toast('Full event detail would open in slide-over','ok')">
+            <td><small class="mono muted">22 Jun 17:48:26</small></td>
+            <td><b>Priya Sharma</b></td>
+            <td><span class="badge ind">tenant.config.update</span></td>
+            <td>Bharat National Bank</td>
+            <td><small class="mono muted">config/sso-saml</small></td>
+            <td><small class="mono muted">10.0.4.18</small></td>
+            <td><small class="muted">SAML IdP metadata updated &middot; cert rotation</small></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doAudit, 100);
+})();
+function doAudit(){
+  /* page is static -- no dynamic rendering needed */
+}
+</script>
+</body></html>

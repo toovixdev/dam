@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Feature Flags</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1>Feature Flags</h1>
+      <div class="meta"><span>per-tenant feature toggles &middot; staged rollout</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9654;</span> Features</div><div class="kv">16</div><div class="kd">across 3 plan tiers</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> GA</div><div class="kv">12</div><div class="kd up">generally available</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9737;</span> Beta</div><div class="kv">3</div><div class="kd">UEBA &middot; Static Mask &middot; Deception</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Alpha</div><div class="kv">1</div><div class="kd">JIT Access &middot; internal only</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Global Feature List</span><span class="s">10 features</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="featureTbl">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th style="text-align:center">Starter</th>
+            <th style="text-align:center">Business</th>
+            <th style="text-align:center">Enterprise</th>
+            <th>Rollout</th>
+            <th class="num">Enabled</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Activity Monitoring</b><br><small class="muted">Real-time capture, audit trail, hash-chain</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">42 / 42</td>
+            <td><span class="muted">Core — always on</span></td>
+          </tr>
+          <tr>
+            <td><b>Alert Rules &amp; Policies</b><br><small class="muted">Custom rules, threshold, pattern, correlation</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">5 rules</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">unlimited</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">unlimited</small></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">42 / 42</td>
+            <td><span class="muted">Core — always on</span></td>
+          </tr>
+          <tr>
+            <td><b>VA Scanner</b><br><small class="muted">6000+ vulnerability tests, CIS, PCI-DSS</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">basic</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">full</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">full</small></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">40 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Compliance Packs</b><br><small class="muted">PCI-DSS, GDPR, HIPAA, SOX, DPDPA, RBI</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">1 framework</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">all</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">all + custom</small></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">42 / 42</td>
+            <td><span class="muted">Tier-gated</span></td>
+          </tr>
+          <tr>
+            <td><b>Behavioral Analytics (UEBA)</b><br><small class="muted">Baselines, peer groups, risk scoring, anomaly</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge amber">Beta</span></td>
+            <td class="num">18 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Dynamic Masking</b><br><small class="muted">Query-time masking by role, format-preserving</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">32 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Static Masking</b><br><small class="muted">Non-prod clones, referential integrity preserved</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge amber">Beta</span></td>
+            <td class="num">14 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Inline Blocking / Proxy</b><br><small class="muted">DAM proxy gateway, real-time block, virtual patch</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">35 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>LLM Monitoring</b><br><small class="muted">Monitor AI/LLM queries, prompt redaction, AI firewall</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">38 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>DSAR Module</b><br><small class="muted">Data subject access/erasure requests, GDPR/DPDPA</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">28 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>BYOK / Customer KMS</b><br><small class="muted">Bring your own key — Azure KV, AWS KMS, Vault</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">12 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>SQL Grammar Allowlist</b><br><small class="muted">Train approved SQL patterns, block deviations</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">36 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Deception Console</b><br><small class="muted">Honeypot tables, decoy records, trap detection</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge amber">Beta</span></td>
+            <td class="num">8 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>JIT Access</b><br><small class="muted">Just-in-time privileged access, auto-expiry, approvals</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge blue">Alpha</span></td>
+            <td class="num">5 / 42</td>
+            <td><button class="btn" onclick="">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>SSO (SAML / OIDC)</b><br><small class="muted">Azure AD, Okta, Google, LDAP/Kerberos</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">37 / 42</td>
+            <td><span class="muted">Tier-gated</span></td>
+          </tr>
+          <tr>
+            <td><b>On-Prem / Air-Gapped</b><br><small class="muted">Customer-managed K8s, offline licensing</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td><span class="badge green">GA</span></td>
+            <td class="num">4 / 42</td>
+            <td><span class="muted">Tier-gated</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="overridePanel" style="margin-bottom:14px;display:none">
+    <div class="hd"><span class="t" id="overrideTitle">Per-Tenant Overrides</span><button class="btn" style="margin-left:auto;padding:4px 10px;font-size:11px" onclick="document.getElementById('overridePanel').style.display='none'">Close</button></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead><tr><th>Tenant</th><th>Plan</th><th>Tier eligible</th><th>Current status</th><th>Actions</th></tr></thead>
+        <tbody id="overrideBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Staged Rollout &mdash; Behavioral Analytics (UEBA)</span><span class="s">beta phase</span></div>
+    <div class="bd">
+      <div style="display:flex;gap:24px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+        <div>
+          <small class="muted">Current phase</small><br>
+          <span class="badge amber" style="font-size:13px">Beta</span>
+        </div>
+        <div>
+          <small class="muted">Tenants enabled</small><br>
+          <b>18 / 42</b> <span class="muted">(43%)</span>
+        </div>
+        <div>
+          <small class="muted">Target</small><br>
+          <b>100% by Q3 2026</b>
+        </div>
+        <div>
+          <small class="muted">Error rate</small><br>
+          <b style="color:var(--green)">0.02%</b>
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span class="muted">Rollout progress</span>
+          <b>43%</b>
+        </div>
+        <div id="rolloutBar"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn primary" onclick="pf.toast('Expanding to next batch of 5 tenants','ok')">Expand to next batch</button>
+        <button class="btn" onclick="pf.toast('Rollout paused','ok')">Pause rollout</button>
+        <button class="btn" style="color:var(--danger)" onclick="pf.toast('Rollback would revert all beta tenants','err')">Rollback</button>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doFeatureFlags, 100);
+})();
+
+function doFeatureFlags(){
+  var bar = document.getElementById("rolloutBar");
+  if(bar && window.pf){
+    bar.innerHTML = pf.progress(43, "var(--amber)");
+  }
+
+  var TENANTS = [
+    {n:"Meridian Financial", slug:"meridian-fin", plan:"Enterprise", planCls:"ind"},
+    {n:"Bharat National Bank", slug:"bnb-india", plan:"Enterprise", planCls:"ind"},
+    {n:"Nordic Insurance Group", slug:"nordic-ins", plan:"Business", planCls:""},
+    {n:"Pacific Health Partners", slug:"pacific-hp", plan:"Business", planCls:""},
+    {n:"Royal Commerce UK", slug:"royal-comm", plan:"Business", planCls:""},
+    {n:"TechStart Inc", slug:"techstart", plan:"Starter", planCls:"amber"},
+    {n:"GovData India", slug:"govdata-in", plan:"Enterprise", planCls:"ind"}
+  ];
+
+  var OVERRIDES = {
+    "VA Scanner":           {"Nordic Insurance Group":"disabled"},
+    "Behavioral Analytics (UEBA)": {"Meridian Financial":"enabled","Bharat National Bank":"beta","GovData India":"enabled"},
+    "Dynamic Masking":      {"TechStart Inc":"disabled"},
+    "Static Masking":       {"Meridian Financial":"enabled","Bharat National Bank":"enabled"},
+    "Inline Blocking / Proxy": {"Meridian Financial":"enabled","Bharat National Bank":"enabled","GovData India":"enabled","Pacific Health Partners":"disabled"},
+    "LLM Monitoring":       {"Meridian Financial":"enabled","Bharat National Bank":"beta","Nordic Insurance Group":"disabled"},
+    "DSAR Module":          {"Meridian Financial":"enabled","Bharat National Bank":"enabled","GovData India":"enabled"},
+    "BYOK / Customer KMS":  {"Meridian Financial":"enabled","Bharat National Bank":"enabled","GovData India":"enabled"},
+    "SQL Grammar Allowlist": {"Meridian Financial":"enabled","GovData India":"enabled"},
+    "Deception Console":    {"Meridian Financial":"beta","Bharat National Bank":"beta"},
+    "JIT Access":           {"Meridian Financial":"alpha"}
+  };
+
+  var TIER_ACCESS = {
+    "VA Scanner":           {Starter:true, Business:true, Enterprise:true},
+    "Behavioral Analytics (UEBA)": {Starter:false, Business:true, Enterprise:true},
+    "Dynamic Masking":      {Starter:false, Business:true, Enterprise:true},
+    "Static Masking":       {Starter:false, Business:true, Enterprise:true},
+    "Inline Blocking / Proxy": {Starter:false, Business:false, Enterprise:true},
+    "LLM Monitoring":       {Starter:false, Business:false, Enterprise:true},
+    "DSAR Module":          {Starter:false, Business:false, Enterprise:true},
+    "BYOK / Customer KMS":  {Starter:false, Business:false, Enterprise:true},
+    "SQL Grammar Allowlist": {Starter:false, Business:false, Enterprise:true},
+    "Deception Console":    {Starter:false, Business:false, Enterprise:true},
+    "JIT Access":           {Starter:false, Business:false, Enterprise:true}
+  };
+
+  // Wire all Manage buttons via delegation
+  document.addEventListener("click", function(e){
+    var btn = e.target.closest && e.target.closest("button.btn");
+    if(btn && btn.textContent.trim() === "Manage"){
+      var row = btn.closest("tr");
+      if(!row) return;
+      var featureName = row.querySelector("b");
+      if(!featureName) return;
+      showOverrides(featureName.textContent);
+    }
+    // Toggle buttons inside override panel
+    if(btn && btn.getAttribute("data-action")){
+      var action = btn.getAttribute("data-action");
+      var tenant = btn.getAttribute("data-tenant");
+      var feature = btn.getAttribute("data-feature");
+      if(action === "enable") btn.closest("tr").querySelector(".ov-status").innerHTML = '<span class="badge green dot">Enabled (override)</span>';
+      if(action === "disable") btn.closest("tr").querySelector(".ov-status").innerHTML = '<span class="badge" style="color:var(--danger)">Disabled (override)</span>';
+      if(action === "reset") btn.closest("tr").querySelector(".ov-status").innerHTML = '<span class="badge dot">Default</span>';
+      if(window.pf) pf.toast(tenant + " — " + feature + " " + action + "d", "ok");
+    }
+  });
+
+  window.showOverrides = function(featureName){
+    var panel = document.getElementById("overridePanel");
+    var title = document.getElementById("overrideTitle");
+    var tbody = document.getElementById("overrideBody");
+    if(!panel || !title || !tbody) return;
+
+    title.textContent = "Per-Tenant Overrides — " + featureName;
+
+    var overrides = OVERRIDES[featureName] || {};
+    var tierAccess = TIER_ACCESS[featureName] || {Starter:true, Business:true, Enterprise:true};
+
+    var html = "";
+    for(var i = 0; i < TENANTS.length; i++){
+      var t = TENANTS[i];
+      var eligible = tierAccess[t.plan] || false;
+      var override = overrides[t.n] || null;
+
+      var statusHtml;
+      if(override === "enabled") statusHtml = '<span class="badge green dot">Enabled (override)</span>';
+      else if(override === "beta") statusHtml = '<span class="badge amber dot">Beta</span>';
+      else if(override === "alpha") statusHtml = '<span class="badge blue dot">Alpha</span>';
+      else if(override === "disabled") statusHtml = '<span class="badge" style="color:var(--danger)">Disabled (override)</span>';
+      else if(eligible) statusHtml = '<span class="badge dot">Default (tier-included)</span>';
+      else statusHtml = '<span class="badge" style="color:var(--subtle)">Not available (plan)</span>';
+
+      var actionsHtml;
+      if(!eligible && !override){
+        actionsHtml = '<span class="muted" style="font-size:11.5px">Plan upgrade required</span>';
+      } else {
+        actionsHtml =
+          '<button class="btn" style="padding:3px 8px;font-size:11px" data-action="enable" data-tenant="' + t.n + '" data-feature="' + featureName + '">Enable</button> ' +
+          '<button class="btn" style="padding:3px 8px;font-size:11px" data-action="disable" data-tenant="' + t.n + '" data-feature="' + featureName + '">Disable</button> ' +
+          '<button class="btn" style="padding:3px 8px;font-size:11px" data-action="reset" data-tenant="' + t.n + '" data-feature="' + featureName + '">Reset</button>';
+      }
+
+      html += "<tr>" +
+        "<td><b>" + t.n + "</b><br><small class='muted'>" + t.slug + "</small></td>" +
+        '<td><span class="badge ' + t.planCls + '">' + t.plan + "</span></td>" +
+        "<td>" + (eligible ? '<span style="color:var(--green);font-weight:700">&#10003; Yes</span>' : '<span style="color:var(--subtle)">&#10007; No</span>') + "</td>" +
+        '<td class="ov-status">' + statusHtml + "</td>" +
+        "<td>" + actionsHtml + "</td>" +
+        "</tr>";
+    }
+    tbody.innerHTML = html;
+
+    panel.style.display = "block";
+    panel.scrollIntoView({behavior:"smooth", block:"start"});
+  };
+}
+</script>
+</body></html>

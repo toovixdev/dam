@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Infrastructure Health</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="infra-health">
+
+  <div class="phead">
+    <div>
+      <h1>Infrastructure Health</h1>
+      <div class="meta"><span>TooVix DAM &middot; Super Admin &middot; All regions</span><span>&middot;</span><span id="lastRefresh" style="color:var(--green)">updated just now</span></div>
+    </div>
+    <div class="acts" style="display:flex;align-items:center;gap:10px">
+      <span id="wsStatus" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--green);background:var(--green-soft);padding:4px 10px;border-radius:6px">&#9679; WebSocket connected</span>
+      <button class="btn" id="manualRefresh">&#8635; Refresh now</button>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Services healthy</div><div class="kv" style="color:var(--green)">24/26</div><div class="kd down">2 degraded</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Avg latency</div><div class="kv">1.2s</div><div class="kd">ingest p95</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9637;</span> ClickHouse cluster</div><div class="kv">3 nodes</div><div class="kd down">78% disk used</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9655;</span> Kafka</div><div class="kv" style="color:var(--green)">Healthy</div><div class="kd up">12 partitions &middot; 0 lag</div></div>
+  </div>
+
+  <div id="infraContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doInfra, 100);
+})();
+function doInfra(){
+  var c = document.getElementById("infraContent");
+  if(!c) return;
+
+  var regions = [
+    { name:"US-East", cp:"Healthy", dp:"Healthy", lag:"0.8s", eps:"680K", disk:72, cpCol:"var(--green)", dpCol:"var(--green)" },
+    { name:"EU-West", cp:"Healthy", dp:"Degraded", lag:"2.1s", eps:"420K", disk:65, cpCol:"var(--green)", dpCol:"var(--amber)" },
+    { name:"IN-Mumbai", cp:"Healthy", dp:"Healthy", lag:"1.1s", eps:"540K", disk:87, cpCol:"var(--green)", dpCol:"var(--green)" },
+    { name:"UK-South", cp:"Healthy", dp:"Healthy", lag:"0.6s", eps:"210K", disk:54, cpCol:"var(--green)", dpCol:"var(--green)" },
+    { name:"CA-Central", cp:"Healthy", dp:"Healthy", lag:"0.9s", eps:"180K", disk:48, cpCol:"var(--green)", dpCol:"var(--green)" }
+  ];
+
+  var regionCards = "";
+  for(var i=0; i<regions.length; i++){
+    var r = regions[i];
+    var diskColor = r.disk > 80 ? "var(--danger)" : r.disk > 60 ? "var(--amber)" : "var(--green)";
+    regionCards +=
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">" + r.name + "</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;justify-content:space-between;margin-bottom:8px\">" +
+            "<div><small class=\"muted\">Control Plane</small><br><span class=\"badge " + (r.cp==="Healthy"?"green":"amber") + " dot\">" + r.cp + "</span></div>" +
+            "<div><small class=\"muted\">Data Plane</small><br><span class=\"badge " + (r.dp==="Healthy"?"green":"amber") + " dot\">" + r.dp + "</span></div>" +
+          "</div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\">" +
+            "<span class=\"muted\">Ingest lag</span><b>" + r.lag + "</b>" +
+          "</div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\">" +
+            "<span class=\"muted\">Events/s</span><b>" + r.eps + "</b>" +
+          "</div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px\">" +
+            "<span class=\"muted\">Disk usage</span><b style=\"color:" + diskColor + "\">" + r.disk + "%</b>" +
+          "</div>" +
+          (window.pf ? pf.progress(r.disk, diskColor) : "") +
+        "</div>" +
+      "</div>";
+  }
+
+  c.innerHTML =
+    "<div style=\"margin-bottom:10px\"><h2 style=\"font-size:14px;font-weight:700;margin:0 0 10px\">Region Health</h2></div>" +
+    "<div class=\"grid\" style=\"grid-template-columns:repeat(5,1fr);margin-bottom:14px\">" + regionCards + "</div>" +
+
+    "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr 1fr;margin-bottom:14px\">" +
+      "<div class=\"card\"><div class=\"hd\"><span class=\"t\">CPU Utilization Trend</span><span class=\"s\">30-day by region</span></div><div class=\"bd\"><div id=\"chCpuTrend\"></div></div></div>" +
+      "<div class=\"card\"><div class=\"hd\"><span class=\"t\">Storage Growth Trend</span><span class=\"s\">30-day ClickHouse disk %</span></div><div class=\"bd\"><div id=\"chStorageTrend\"></div></div></div>" +
+      "<div class=\"card\"><div class=\"hd\"><span class=\"t\">Event Throughput Trend</span><span class=\"s\">30-day events/s</span></div><div class=\"bd\"><div id=\"chEventTrend\"></div></div></div>" +
+    "</div>" +
+
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Capacity Forecast</span><span class=\"s\">projected at current growth rate</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Region</th><th class=\"num\">CPU Now</th><th class=\"num\">CPU 30d Trend</th><th class=\"num\">Storage Now</th><th class=\"num\">Storage 30d Trend</th><th class=\"num\">Days to 90% Disk</th><th>Risk</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>US-East</b></td><td class=\"num\">42%</td><td class=\"num\" style=\"color:var(--green)\">&#9650; +3%</td><td class=\"num\">72%</td><td class=\"num\" style=\"color:var(--amber)\">&#9650; +6%</td><td class=\"num\"><b>82 days</b></td><td><span class=\"badge green\">Low</span></td></tr>" +
+            "<tr><td><b>EU-West</b></td><td class=\"num\">38%</td><td class=\"num\" style=\"color:var(--green)\">&#9650; +2%</td><td class=\"num\">65%</td><td class=\"num\" style=\"color:var(--green)\">&#9650; +4%</td><td class=\"num\"><b>112 days</b></td><td><span class=\"badge green\">Low</span></td></tr>" +
+            "<tr style=\"background:var(--danger-soft)\"><td><b>IN-Mumbai</b></td><td class=\"num\">56%</td><td class=\"num\" style=\"color:var(--danger)\">&#9650; +8%</td><td class=\"num\"><b style=\"color:var(--danger)\">87%</b></td><td class=\"num\" style=\"color:var(--danger)\">&#9650; +12%</td><td class=\"num\"><b style=\"color:var(--danger)\">18 days</b></td><td><span class=\"badge red\">Critical</span></td></tr>" +
+            "<tr><td><b>UK-South</b></td><td class=\"num\">28%</td><td class=\"num\" style=\"color:var(--green)\">&#9650; +1%</td><td class=\"num\">54%</td><td class=\"num\" style=\"color:var(--green)\">&#9650; +3%</td><td class=\"num\"><b>186 days</b></td><td><span class=\"badge green\">Low</span></td></tr>" +
+            "<tr><td><b>CA-Central</b></td><td class=\"num\">22%</td><td class=\"num\" style=\"color:var(--green)\">&#9660; -1%</td><td class=\"num\">48%</td><td class=\"num\" style=\"color:var(--green)\">&#9650; +2%</td><td class=\"num\"><b>210+ days</b></td><td><span class=\"badge green\">Low</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>" +
+
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Component Status</span><span class=\"s\">26 services across all regions</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Component</th><th>Version</th><th class=\"num\">Replicas</th><th class=\"num\">CPU</th><th class=\"num\">Memory</th><th>US-East</th><th>EU-West</th><th>IN-Mumbai</th><th>UK-South</th><th>CA-Central</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>Ingest Service</b><br><small class=\"muted\">Event ingestion gateway</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.1</td><td class=\"num\">6</td><td class=\"num\">42%</td><td class=\"num\">3.8 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Persistence Layer</b><br><small class=\"muted\">ClickHouse write path</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.1</td><td class=\"num\">3</td><td class=\"num\">68%</td><td class=\"num\">12.4 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Alert Dispatcher</b><br><small class=\"muted\">Rule engine + notification</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.0</td><td class=\"num\">4</td><td class=\"num\">28%</td><td class=\"num\">1.6 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Query API</b><br><small class=\"muted\">REST + GraphQL gateway</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.1</td><td class=\"num\">8</td><td class=\"num\">35%</td><td class=\"num\">2.2 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Classification Engine</b><br><small class=\"muted\">ML-based event classification</small></td><td class=\"mono\" style=\"font-size:12px\">v2.3.8</td><td class=\"num\">4</td><td class=\"num\">72%</td><td class=\"num\">8.1 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"muted\" style=\"font-size:10px\">&mdash;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"muted\" style=\"font-size:10px\">&mdash;</span></td><td style=\"text-align:center\"><span class=\"muted\" style=\"font-size:10px\">&mdash;</span></td></tr>" +
+            "<tr><td><b>VA Scanner</b><br><small class=\"muted\">Vulnerability assessment</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.1</td><td class=\"num\">3</td><td class=\"num\">54%</td><td class=\"num\">4.2 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Hash-Chain Verifier</b><br><small class=\"muted\">Tamper-proof audit chain</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.1</td><td class=\"num\">2</td><td class=\"num\">18%</td><td class=\"num\">0.9 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Event Hub Consumer</b><br><small class=\"muted\">Ingestion stream consumer</small></td><td class=\"mono\" style=\"font-size:12px\">v3.6.0</td><td class=\"num\">3</td><td class=\"num\">61%</td><td class=\"num\">5.4 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge amber dot\" style=\"font-size:10px\">Lag</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Agent Gateway</b><br><small class=\"muted\">mTLS termination + routing</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.1</td><td class=\"num\">6</td><td class=\"num\">31%</td><td class=\"num\">1.8 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>SCIM Sync</b><br><small class=\"muted\">Identity provisioning bridge</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.0</td><td class=\"num\">2</td><td class=\"num\">12%</td><td class=\"num\">0.6 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Checkpoint Scheduler</b><br><small class=\"muted\">Periodic chain anchor</small></td><td class=\"mono\" style=\"font-size:12px\">v2.4.1</td><td class=\"num\">2</td><td class=\"num\">8%</td><td class=\"num\">0.4 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+            "<tr><td><b>Export Service</b><br><small class=\"muted\">Scheduled + on-demand exports</small></td><td class=\"mono\" style=\"font-size:12px\">v2.3.9</td><td class=\"num\">2</td><td class=\"num\">22%</td><td class=\"num\">1.1 GB</td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge amber dot\" style=\"font-size:10px\">Slow</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td><td style=\"text-align:center\"><span class=\"badge amber dot\" style=\"font-size:10px\">Slow</span></td><td style=\"text-align:center\"><span class=\"badge green dot\" style=\"font-size:10px\">&#10003;</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>";
+  // Render trend charts
+  if(window.pf){
+    pf.line("#chCpuTrend",{labels:["W1","W2","W3","W4","Now"],lines:[
+      {name:"US-East",color:"var(--primary)",points:[36,38,39,41,42]},
+      {name:"EU-West",color:"var(--info)",points:[34,35,36,37,38]},
+      {name:"IN-Mumbai",color:"var(--danger)",points:[40,44,48,52,56]},
+      {name:"UK-South",color:"var(--green)",points:[26,27,27,28,28]},
+      {name:"CA-Central",color:"var(--amber)",points:[24,23,23,22,22]}
+    ]},{height:180,max:80});
+
+    pf.line("#chStorageTrend",{labels:["W1","W2","W3","W4","Now"],lines:[
+      {name:"US-East",color:"var(--primary)",points:[64,66,68,70,72]},
+      {name:"EU-West",color:"var(--info)",points:[58,60,62,63,65]},
+      {name:"IN-Mumbai",color:"var(--danger)",points:[72,76,80,84,87]},
+      {name:"UK-South",color:"var(--green)",points:[48,50,51,53,54]},
+      {name:"CA-Central",color:"var(--amber)",points:[44,45,46,47,48]}
+    ]},{height:180,max:100});
+
+    pf.line("#chEventTrend",{labels:["W1","W2","W3","W4","Now"],lines:[
+      {name:"US-East",color:"var(--primary)",points:[620,640,650,670,680]},
+      {name:"EU-West",color:"var(--info)",points:[380,390,400,410,420]},
+      {name:"IN-Mumbai",color:"var(--danger)",points:[440,470,500,520,540]},
+      {name:"UK-South",color:"var(--green)",points:[190,195,200,205,210]},
+      {name:"CA-Central",color:"var(--amber)",points:[170,174,176,178,180]}
+    ]},{height:180});
+  }
+
+  // WebSocket push simulation
+  var lastRefreshEl = document.getElementById("lastRefresh");
+  var wsStatus = document.getElementById("wsStatus");
+  var refreshCount = 0;
+
+  function simulatePush(){
+    refreshCount++;
+    if(lastRefreshEl) lastRefreshEl.textContent = "updated just now";
+    // Flash the status to show data arrived
+    if(wsStatus){
+      wsStatus.innerHTML = "&#9679; Push received";
+      wsStatus.style.color = "var(--primary)";
+      wsStatus.style.background = "var(--primary-soft)";
+      setTimeout(function(){
+        wsStatus.innerHTML = "&#9679; WebSocket connected";
+        wsStatus.style.color = "var(--green)";
+        wsStatus.style.background = "var(--green-soft)";
+      }, 1500);
+    }
+    // Update the "updated X ago" text over time
+    if(lastRefreshEl){
+      var elapsed = 0;
+      clearInterval(window._refreshTimer);
+      window._refreshTimer = setInterval(function(){
+        elapsed++;
+        if(elapsed < 60) lastRefreshEl.textContent = "updated " + elapsed + "s ago";
+        else lastRefreshEl.textContent = "updated " + Math.floor(elapsed/60) + "m ago";
+      }, 1000);
+    }
+  }
+
+  // Simulate periodic WebSocket pushes (every 45-90s with jitter)
+  function schedulePush(){
+    var delay = 45000 + Math.floor(Math.random() * 45000);
+    setTimeout(function(){
+      simulatePush();
+      if(window.pf) pf.toast("Live update received via WebSocket", "ok");
+      schedulePush();
+    }, delay);
+  }
+  schedulePush();
+
+  // Manual refresh
+  var manualRefresh = document.getElementById("manualRefresh");
+  if(manualRefresh) manualRefresh.onclick = function(){
+    simulatePush();
+    if(window.pf) pf.toast("Manual refresh -- fetching latest metrics", "ok");
+  };
+}
+</script>
+</body></html>

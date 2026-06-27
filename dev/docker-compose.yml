@@ -1,0 +1,263 @@
+version: "3.9"
+
+# ─── TWO ISOLATED NETWORKS ───────────────────────────────────
+# client-net : simulates the customer's database infrastructure
+# dam-net    : the TooVix DAM platform
+# The collector bridges both (like a real agent deployment)
+
+networks:
+  client-net:
+    driver: bridge
+  dam-net:
+    driver: bridge
+
+volumes:
+  client-pg-data:
+  client-mysql-data:
+  client-mongo-data:
+  dam-pg-data:
+  dam-ch-data:
+  dam-redis-data:
+
+services:
+
+  # ═══════════════════════════════════════════════════════════
+  #  CLIENT ENVIRONMENT (customer databases)
+  # ═══════════════════════════════════════════════════════════
+
+  client-postgres:
+    image: postgres:16-alpine
+    container_name: client-postgres
+    environment:
+      POSTGRES_DB: crm
+      POSTGRES_USER: app_crm
+      POSTGRES_PASSWORD: ${CLIENT_PG_PASSWORD}
+    ports:
+      - "5432:5432"
+    volumes:
+      - client-pg-data:/var/lib/postgresql/data
+      - ./client/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - client-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app_crm -d crm"]
+      interval: 5s
+      retries: 5
+
+  client-mysql:
+    image: mysql:8.0
+    container_name: client-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: payments
+      MYSQL_USER: app_payments
+      MYSQL_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+    ports:
+      - "3306:3306"
+    volumes:
+      - client-mysql-data:/var/lib/mysql
+      - ./client/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - client-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      retries: 5
+
+  client-mongo:
+    image: mongo:7
+    container_name: client-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: ${CLIENT_MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: profiles
+    ports:
+      - "27017:27017"
+    volumes:
+      - client-mongo-data:/data/db
+      - ./client/mongo/init.js:/docker-entrypoint-initdb.d/01-init.js
+    networks:
+      - client-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      retries: 5
+
+  traffic-gen:
+    build: ./client/traffic-gen
+    container_name: traffic-gen
+    depends_on:
+      client-postgres:
+        condition: service_healthy
+      client-mysql:
+        condition: service_healthy
+      client-mongo:
+        condition: service_healthy
+    environment:
+      PG_HOST: client-postgres
+      PG_PASSWORD: ${CLIENT_PG_PASSWORD}
+      MYSQL_HOST: client-mysql
+      MYSQL_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+      MONGO_HOST: client-mongo
+      MONGO_PASSWORD: ${CLIENT_MONGO_PASSWORD}
+    networks:
+      - client-net
+
+  # ═══════════════════════════════════════════════════════════
+  #  DAM PLATFORM
+  # ═══════════════════════════════════════════════════════════
+
+  dam-postgres:
+    image: postgres:16-alpine
+    container_name: dam-postgres
+    environment:
+      POSTGRES_DB: dam_control
+      POSTGRES_USER: dam_admin
+      POSTGRES_PASSWORD: ${DAM_PG_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - dam-pg-data:/var/lib/postgresql/data
+      - ./dam/control-plane/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - dam-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dam_admin -d dam_control"]
+      interval: 5s
+      retries: 5
+
+  dam-clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    container_name: dam-clickhouse
+    environment:
+      CLICKHOUSE_DB: dam_analytics
+      CLICKHOUSE_USER: dam_writer
+      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"   # HTTP interface
+      - "9000:9000"   # Native TCP
+    volumes:
+      - dam-ch-data:/var/lib/clickhouse
+      - ./dam/clickhouse/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - dam-net
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  dam-redis:
+    image: redis:7-alpine
+    container_name: dam-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - dam-redis-data:/data
+    networks:
+      - dam-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 5
+
+  dam-nats:
+    image: nats:2-alpine
+    container_name: dam-nats
+    ports:
+      - "4222:4222"   # Client
+      - "8222:8222"   # Monitoring
+    command: ["--jetstream", "--store_dir=/data", "-m", "8222"]
+    networks:
+      - dam-net
+
+  dam-api:
+    build: ./dam/api
+    container_name: dam-api
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PG_HOST: dam-postgres
+      PG_PORT: 5432
+      PG_USER: dam_admin
+      PG_PASSWORD: ${DAM_PG_PASSWORD}
+      PG_DATABASE: dam_control
+      CLICKHOUSE_HOST: dam-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: dam_writer
+      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+      REDIS_URL: redis://dam-redis:6379
+      NATS_URL: nats://dam-nats:4222
+      JWT_SECRET: ${DAM_JWT_SECRET}
+    depends_on:
+      dam-postgres:
+        condition: service_healthy
+      dam-redis:
+        condition: service_healthy
+      dam-clickhouse:
+        condition: service_started
+      dam-nats:
+        condition: service_started
+    networks:
+      - dam-net
+
+  dam-frontend:
+    image: nginx:alpine
+    container_name: dam-frontend
+    ports:
+      - "8091:80"
+    volumes:
+      - ../mockups:/usr/share/nginx/html:ro
+      - ./dam/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - dam-net
+    depends_on:
+      - dam-api
+
+  dam-admin-frontend:
+    image: nginx:alpine
+    container_name: dam-admin-frontend
+    ports:
+      - "8092:80"
+    volumes:
+      - ../admin-mockups:/usr/share/nginx/html:ro
+      - ./dam/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - dam-net
+    depends_on:
+      - dam-api
+
+  # ═══════════════════════════════════════════════════════════
+  #  COLLECTOR (bridges both networks — like a real agent)
+  # ═══════════════════════════════════════════════════════════
+
+  dam-collector:
+    build: ./dam/collector
+    container_name: dam-collector
+    environment:
+      PG_HOST: client-postgres
+      PG_USER: app_crm
+      PG_PASSWORD: ${CLIENT_PG_PASSWORD}
+      PG_DATABASE: crm
+      MYSQL_HOST: client-mysql
+      MYSQL_USER: app_payments
+      MYSQL_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: payments
+      MONGO_HOST: client-mongo
+      MONGO_USER: admin
+      MONGO_PASSWORD: ${CLIENT_MONGO_PASSWORD}
+      NATS_URL: nats://dam-nats:4222
+      CLICKHOUSE_HOST: dam-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_USER: dam_writer
+      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+    depends_on:
+      - client-postgres
+      - client-mysql
+      - client-mongo
+      - dam-nats
+      - dam-clickhouse
+    networks:
+      - client-net
+      - dam-net

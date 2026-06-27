@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Break-Glass Access</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="platform-audit">
+
+  <div class="phead">
+    <div>
+      <h1>Break-Glass Access</h1>
+      <div class="meta"><span>emergency production access &middot; manager approval required</span></div>
+    </div>
+  </div>
+
+  <!-- Warning banner -->
+  <div style="background:var(--danger-soft);border:1.5px solid var(--danger);border-radius:var(--radius-lg);padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-start;gap:12px">
+    <span style="font-size:18px;flex-shrink:0;margin-top:1px">&#9888;</span>
+    <div>
+      <div style="font-weight:700;font-size:14px;color:var(--danger);margin-bottom:4px">Emergency Access Only &mdash; Break-Glass Protocol</div>
+      <div style="font-size:12.5px;color:var(--danger);opacity:.85;line-height:1.55">
+        Break-glass access bypasses normal RBAC controls and grants elevated production access to tenant data planes.
+        This mechanism is <b>strictly for emergencies</b> (P1 incidents, data recovery, security response).
+        All sessions require <b>manager approval</b>, are <b>time-limited</b>, <b>fully recorded</b>, and subject to mandatory <b>post-incident review</b>.
+        Unauthorized use triggers immediate security escalation.
+      </div>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <!-- Request form -->
+    <div class="card">
+      <div class="hd"><span class="t">Request Break-Glass Access</span></div>
+      <div class="bd">
+        <div class="fld">
+          <label>Tenant <span class="req">*</span></label>
+          <select id="bgTenant">
+            <option value="">-- Select tenant --</option>
+            <option value="meridian">Meridian Financial (US-East)</option>
+            <option value="bnb">Bharat National Bank (IN-Mumbai)</option>
+            <option value="nordic">Nordic Insurance Group (EU-West)</option>
+            <option value="pacific">Pacific Health Partners (US-West)</option>
+            <option value="royal">Royal Commerce UK (UK-South)</option>
+            <option value="techstart">TechStart Inc (US-East)</option>
+            <option value="govdata">GovData India (IN-Mumbai)</option>
+          </select>
+        </div>
+        <div class="fld">
+          <label>Justification <span class="req">*</span></label>
+          <textarea rows="3" placeholder="Describe the emergency requiring break-glass access..." id="bgJustification"></textarea>
+          <span class="hint">Required. Must reference an active P1/P2 incident.</span>
+        </div>
+        <div class="formgrid">
+          <div class="fld">
+            <label>Access Scope</label>
+            <select id="bgScope">
+              <option value="ro">Read-only</option>
+              <option value="rw">Read-write</option>
+            </select>
+          </div>
+          <div class="fld">
+            <label>Duration</label>
+            <select id="bgDuration">
+              <option value="30">30 minutes</option>
+              <option value="60" selected>1 hour</option>
+              <option value="120">2 hours (max)</option>
+            </select>
+          </div>
+        </div>
+        <div class="formgrid">
+          <div class="fld">
+            <label>Approver <span class="req">*</span></label>
+            <select id="bgApprover">
+              <option value="">-- Select manager --</option>
+              <option value="sanjay">Sanjay Kumar (VP Engineering)</option>
+              <option value="claire">Claire Dupont (Head of Security)</option>
+              <option value="mike">Mike Reynolds (Director SRE)</option>
+            </select>
+          </div>
+          <div class="fld">
+            <label>Incident Reference <span class="req">*</span></label>
+            <input type="text" placeholder="e.g., INC-2026-0315" id="bgIncident">
+          </div>
+        </div>
+        <div style="margin-top:6px">
+          <button class="btn" style="background:var(--danger);border-color:var(--danger);color:#fff" id="btnRequestBG" onclick="handleBGRequest()">&#9888; Request Break-Glass Access</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Approval workflow visualization -->
+    <div class="card">
+      <div class="hd"><span class="t">Approval Workflow</span></div>
+      <div class="bd">
+        <div style="margin-bottom:18px">
+          <div style="font-size:12.5px;color:var(--muted);margin-bottom:14px">Break-glass access follows a strict multi-stage approval pipeline. Each stage is logged and immutable.</div>
+
+          <!-- Workflow steps -->
+          <div id="bgWorkflow">
+            <div style="display:flex;flex-direction:column;gap:0">
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 0">
+                <span style="width:32px;height:32px;border-radius:50%;background:var(--green);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">1</span>
+                <div>
+                  <div style="font-weight:700;font-size:13px">Requested</div>
+                  <div style="font-size:11.5px;color:var(--muted)">Operator submits break-glass request with justification and incident ref</div>
+                </div>
+              </div>
+              <div style="width:2px;height:16px;background:var(--line);margin-left:15px"></div>
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 0">
+                <span style="width:32px;height:32px;border-radius:50%;background:var(--amber);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">2</span>
+                <div>
+                  <div style="font-weight:700;font-size:13px">Manager Approval</div>
+                  <div style="font-size:11.5px;color:var(--muted)">Designated manager reviews and approves/rejects within 15 min SLA</div>
+                </div>
+              </div>
+              <div style="width:2px;height:16px;background:var(--line);margin-left:15px"></div>
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 0">
+                <span style="width:32px;height:32px;border-radius:50%;background:var(--info);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">3</span>
+                <div>
+                  <div style="font-weight:700;font-size:13px">Security Review</div>
+                  <div style="font-size:11.5px;color:var(--muted)">Automated scope check + security team notified. Grants least-privilege access.</div>
+                </div>
+              </div>
+              <div style="width:2px;height:16px;background:var(--line);margin-left:15px"></div>
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 0">
+                <span style="width:32px;height:32px;border-radius:50%;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0">4</span>
+                <div>
+                  <div style="font-weight:700;font-size:13px">Active Session</div>
+                  <div style="font-size:11.5px;color:var(--muted)">Full session recording. All queries and mutations logged with hash chain.</div>
+                </div>
+              </div>
+              <div style="width:2px;height:16px;background:var(--line);margin-left:15px"></div>
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 0">
+                <span style="width:32px;height:32px;border-radius:50%;background:var(--surface-2);color:var(--muted);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;border:1.5px solid var(--line)">5</span>
+                <div>
+                  <div style="font-weight:700;font-size:13px">Auto-Expired</div>
+                  <div style="font-size:11.5px;color:var(--muted)">Session auto-terminates at duration limit. Post-incident review required within 48h.</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Active break-glass sessions -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Active Break-Glass Sessions</span><span class="s">1 active</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Requester</th>
+            <th>Tenant</th>
+            <th>Scope</th>
+            <th>Approver</th>
+            <th>Started</th>
+            <th>Expires</th>
+            <th class="num">Actions</th>
+            <th>Incident</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Akash Patel</b><br><small class="muted">akash.p@toovix.io</small></td>
+            <td>Royal Commerce UK</td>
+            <td><span class="badge red">Read-write</span></td>
+            <td><small class="muted">Claire Dupont</small></td>
+            <td><small class="muted">23 Jun 10:12</small></td>
+            <td><small class="muted">23 Jun 12:12</small></td>
+            <td class="num">156</td>
+            <td><small class="mono muted">INC-2026-0312</small></td>
+            <td><span class="badge green dot">Active</span></td>
+            <td><button class="btn" style="padding:5px 10px;font-size:12px;background:var(--danger-soft);color:var(--danger);border-color:var(--danger)" onclick="pf.toast('Break-glass session terminated','ok')">Revoke</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Historical log -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Break-Glass History</span><span class="s">Last 90 days</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Requester</th>
+            <th>Tenant</th>
+            <th>Scope</th>
+            <th>Duration</th>
+            <th class="num">Actions</th>
+            <th>Incident</th>
+            <th>Justification</th>
+            <th>Post-Review</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Akash Patel</b></td>
+            <td>Royal Commerce UK</td>
+            <td><span class="badge red">Read-write</span></td>
+            <td>1h 48min</td>
+            <td class="num">156</td>
+            <td><small class="mono muted">INC-2026-0312</small></td>
+            <td><small class="muted">Data pipeline stall &middot; Kafka consumer group stuck</small></td>
+            <td><span class="badge green dot">Active</span></td>
+          </tr>
+          <tr>
+            <td><b>Ravi Mehta</b></td>
+            <td>Bharat National Bank</td>
+            <td><span class="badge blue">Read-only</span></td>
+            <td>42 min</td>
+            <td class="num">28</td>
+            <td><small class="mono muted">INC-2026-0298</small></td>
+            <td><small class="muted">Suspected data exfiltration &middot; forensic review needed</small></td>
+            <td><span class="badge green">Reviewed</span></td>
+          </tr>
+          <tr>
+            <td><b>James Wilson</b></td>
+            <td>Meridian Financial</td>
+            <td><span class="badge red">Read-write</span></td>
+            <td>1h 15min</td>
+            <td class="num">94</td>
+            <td><small class="mono muted">INC-2026-0285</small></td>
+            <td><small class="muted">ClickHouse cluster split-brain recovery</small></td>
+            <td><span class="badge green">Reviewed</span></td>
+          </tr>
+          <tr>
+            <td><b>Priya Sharma</b></td>
+            <td>Pacific Health Partners</td>
+            <td><span class="badge blue">Read-only</span></td>
+            <td>30 min</td>
+            <td class="num">12</td>
+            <td><small class="mono muted">INC-2026-0271</small></td>
+            <td><small class="muted">HIPAA compliance emergency audit &middot; HHS request</small></td>
+            <td><span class="badge green">Reviewed</span></td>
+          </tr>
+          <tr>
+            <td><b>Akash Patel</b></td>
+            <td>GovData India</td>
+            <td><span class="badge red">Read-write</span></td>
+            <td>2h (maxed)</td>
+            <td class="num">247</td>
+            <td><small class="mono muted">INC-2026-0264</small></td>
+            <td><small class="muted">Air-gap sync failure &middot; manual data reconciliation</small></td>
+            <td><span class="badge amber">Pending review</span></td>
+          </tr>
+          <tr>
+            <td><b>Ravi Mehta</b></td>
+            <td>Nordic Insurance Group</td>
+            <td><span class="badge blue">Read-only</span></td>
+            <td>18 min</td>
+            <td class="num">7</td>
+            <td><small class="mono muted">INC-2026-0251</small></td>
+            <td><small class="muted">GDPR Subject Access Request &middot; urgent court order</small></td>
+            <td><span class="badge green">Reviewed</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doBreakGlass, 100);
+})();
+function doBreakGlass(){
+  /* page is static -- no dynamic rendering needed */
+}
+function handleBGRequest(){
+  var tenant = document.getElementById("bgTenant").value;
+  var justification = document.getElementById("bgJustification").value;
+  var approver = document.getElementById("bgApprover").value;
+  var incident = document.getElementById("bgIncident").value;
+  if(!tenant){ pf.toast("Please select a tenant","err"); return; }
+  if(!justification.trim()){ pf.toast("Justification is required","err"); return; }
+  if(!approver){ pf.toast("Please select an approver","err"); return; }
+  if(!incident.trim()){ pf.toast("Incident reference is required","err"); return; }
+  pf.toast("Break-glass request submitted to " + document.getElementById("bgApprover").options[document.getElementById("bgApprover").selectedIndex].text, "ok");
+  setTimeout(function(){ pf.toast("Awaiting manager approval...", "ok"); }, 2000);
+  setTimeout(function(){ pf.toast("Manager approved -- security review in progress", "ok"); }, 4000);
+  setTimeout(function(){ pf.toast("Break-glass session activated", "ok"); }, 6000);
+}
+</script>
+</body></html>

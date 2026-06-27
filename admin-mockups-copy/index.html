@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Platform Dashboard</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="dashboard">
+
+  <div class="phead">
+    <div>
+      <h1>Platform Dashboard</h1>
+      <div class="meta"><span>TooVix DAM &middot; Super Admin</span><span>&middot;</span><span>all regions &middot; all tenants</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Active tenants</div><div class="kv">42</div><div class="kd up">&#9650; 3 this month</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#9637;</span> Total databases</div><div class="kv">1,847</div><div class="kd">across all tenants</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Agents online</div><div class="kv">4,210</div><div class="kd up">99.2% healthy</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#8776;</span> Events today</div><div class="kv">2.8B</div><div class="kd up">&#9650; 12% vs yesterday</div></div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--danger-soft);color:var(--danger)">&#9888;</span> Platform alerts</div><div class="kv">3</div><div class="kd down">1 infra &middot; 2 capacity</div></div>
+    <div class="kpi"><div class="kl"><span class="ki">&#9737;</span> Regions</div><div class="kv">5</div><div class="kd">US &middot; EU &middot; IN &middot; UK &middot; CA</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9939;</span> Data integrity</div><div class="kv" style="color:var(--green)">Intact</div><div class="kd up">all chains verified</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#9655;</span> Platform version</div><div class="kv">v2.4.1</div><div class="kd">deployed 19 Jun</div></div>
+  </div>
+
+  <div id="dashContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(function(){
+    var c = document.getElementById("dashContent");
+    if(!c) return;
+
+    c.innerHTML =
+      '<div class="grid" style="grid-template-columns:1.5fr 1fr;margin-bottom:14px">' +
+        '<div class="card"><div class="hd"><span class="t">Events ingested &middot; last 24h (all tenants)</span></div><div class="bd"><div id="chEvents"></div></div></div>' +
+        '<div class="card"><div class="hd"><span class="t">Tenants by region</span></div><div class="bd"><div id="chRegions"></div></div></div>' +
+      '</div>' +
+
+      '<div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">' +
+        '<div class="card"><div class="hd"><span class="t">Top tenants by volume</span></div><div class="bd" style="padding:0 4px">' +
+          '<table class="tbl"><thead><tr><th>Tenant</th><th>Plan</th><th>DBs</th><th class="num">Events/day</th><th>Region</th></tr></thead><tbody>' +
+            '<tr><td><b>Meridian Financial</b></td><td><span class="badge ind">Enterprise</span></td><td>186</td><td class="num">142.6M</td><td>US-East</td></tr>' +
+            '<tr><td><b>Bharat National Bank</b></td><td><span class="badge ind">Enterprise</span></td><td>240</td><td class="num">198.4M</td><td>IN-Mumbai</td></tr>' +
+            '<tr><td><b>Nordic Insurance Group</b></td><td><span class="badge">Business</span></td><td>89</td><td class="num">67.2M</td><td>EU-West</td></tr>' +
+            '<tr><td><b>Pacific Health Partners</b></td><td><span class="badge">Business</span></td><td>112</td><td class="num">84.1M</td><td>US-West</td></tr>' +
+            '<tr><td><b>Royal Commerce UK</b></td><td><span class="badge">Business</span></td><td>64</td><td class="num">41.8M</td><td>UK-South</td></tr>' +
+          '</tbody></table>' +
+        '</div></div>' +
+
+        '<div class="card"><div class="hd"><span class="t">Platform alerts</span></div><div class="bd" style="padding:0 4px">' +
+          '<table class="tbl"><thead><tr><th>Alert</th><th>Region</th><th>Severity</th><th>Age</th></tr></thead><tbody>' +
+            '<tr><td><b>ClickHouse disk 87%</b><br><small class="muted">IN-Mumbai cluster ch-in-01</small></td><td>IN-Mumbai</td><td><span class="badge amber">high</span></td><td class="muted">2h</td></tr>' +
+            '<tr><td><b>Kafka consumer lag spike</b><br><small class="muted">EU-West ingest partition 4</small></td><td>EU-West</td><td><span class="badge amber">high</span></td><td class="muted">45m</td></tr>' +
+            '<tr><td><b>Certificate expiry in 7d</b><br><small class="muted">Agent mTLS CA for CA-Central</small></td><td>CA-Central</td><td><span class="badge blue">medium</span></td><td class="muted">1d</td></tr>' +
+          '</tbody></table>' +
+        '</div></div>' +
+      '</div>';
+
+    if(window.pf){
+      pf.line("#chEvents",{labels:["00:00","04:00","08:00","12:00","16:00","20:00","Now"],lines:[
+        {name:"Total (B/h)",color:"var(--primary)",points:[0.08,0.06,0.11,0.14,0.16,0.13,0.12]},
+        {name:"IN tenants",color:"var(--amber)",points:[0.03,0.02,0.04,0.05,0.06,0.05,0.04]},
+        {name:"US tenants",color:"var(--info)",points:[0.03,0.02,0.04,0.05,0.06,0.05,0.05]}
+      ]},{area:true,height:200});
+      pf.donut("#chRegions",[
+        {label:"US-East (14)",value:14,color:"var(--primary)"},
+        {label:"IN-Mumbai (10)",value:10,color:"var(--amber)"},
+        {label:"EU-West (9)",value:9,color:"var(--info)"},
+        {label:"UK-South (5)",value:5,color:"var(--green)"},
+        {label:"CA-Central (4)",value:4,color:"var(--danger)"}
+      ],{center:"42",centerSub:"tenants",legend:true});
+    }
+  }, 100);
+})();
+</script>
+</body></html>

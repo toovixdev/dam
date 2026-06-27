@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Tenant Data Export</title>
+<link rel="stylesheet" href="assets/app.css">
+<style>
+.exp-cat{background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:12px}
+.exp-cat .ec-icon{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;flex:none}
+.exp-cat .ec-body b{font-size:13.5px;display:block}
+.exp-cat .ec-body small{font-size:12px;color:var(--muted);line-height:1.45}
+.exp-cat .ec-size{margin-left:auto;font-size:12px;font-weight:700;color:var(--muted);white-space:nowrap}
+.exp-cat label{display:flex;align-items:center;gap:8px;cursor:pointer}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.dep-steps{display:flex;flex-direction:column;gap:2px;margin:16px 0}
+.dep-step{display:flex;align-items:center;gap:14px;padding:12px 14px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line)}
+.dep-step.active{border-color:var(--primary);background:var(--primary-soft)}
+.dep-step.done{border-color:var(--green);background:var(--green-soft)}
+.dep-step.fail{border-color:var(--danger);background:var(--danger-soft)}
+.dep-dot{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none;background:var(--surface);border:1.5px solid var(--line);color:var(--muted)}
+.dep-step.active .dep-dot{border-color:var(--primary);background:var(--primary);color:#fff;animation:spin 1s linear infinite}
+.dep-step.done .dep-dot{border-color:var(--green);background:var(--green);color:#fff}
+.dep-step.fail .dep-dot{border-color:var(--danger);background:var(--danger);color:#fff}
+@keyframes spin{to{transform:rotate(360deg)}}
+.dep-info{flex:1}.dep-info b{font-size:13.5px;display:block}.dep-info small{font-size:12px;color:var(--muted)}
+.dep-step.done .dep-info small{color:var(--green)}
+.dep-step.fail .dep-info small{color:var(--danger)}
+.dep-time{font-size:11px;color:var(--subtle);font-variant-numeric:tabular-nums}
+.dl-card{text-align:center;padding:28px;background:var(--green-soft);border:1px solid rgba(22,163,74,.2);border-radius:14px;margin:16px 0}
+.dl-card .dl-icon{width:64px;height:64px;border-radius:50%;background:var(--green);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:14px}
+.dl-card h3{margin:0 0 6px;font-size:18px}
+.dl-card p{color:var(--muted);font-size:13.5px;margin:0 0 6px}
+.dl-file{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px auto;max-width:480px;text-align:left}
+.dl-file .fi{width:40px;height:40px;border-radius:9px;background:var(--primary-soft);color:var(--primary);display:flex;align-items:center;justify-content:center;font-size:18px;flex:none}
+.dl-file .fd{flex:1}
+.dl-file .fd b{font-size:13px;display:block;font-family:ui-monospace,Menlo,Consolas,monospace}
+.dl-file .fd small{font-size:11.5px;color:var(--muted)}
+.fail-card{text-align:center;padding:28px;background:var(--danger-soft);border:1px solid rgba(225,29,72,.15);border-radius:14px;margin:16px 0}
+.fail-card .fl-icon{width:64px;height:64px;border-radius:50%;background:var(--danger);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:14px}
+.fail-detail{text-align:left;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:14px auto;max-width:480px;font-size:12.5px;line-height:1.5}
+</style>
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1 id="pageTitle">Tenant Data Export</h1>
+      <div class="meta" id="pageMeta"><span>select data categories &middot; configure &middot; export</span></div>
+    </div>
+    <div class="acts"><a class="btn" href="tenants.html">&larr; Back to tenants</a></div>
+  </div>
+
+  <div id="exportContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doExport, 100);
+})();
+
+function doExport(){
+  var params = new URLSearchParams(window.location.search);
+  var tenantSlug = params.get("tenant") || "meridian-fin";
+  var tenantName = params.get("name") || "Meridian Financial";
+
+  var titleEl = document.getElementById("pageTitle");
+  var metaEl = document.getElementById("pageMeta");
+  if(titleEl) titleEl.textContent = "Export — " + tenantName;
+  if(metaEl) metaEl.innerHTML = '<span>' + tenantSlug + '</span><span>&middot;</span><span>select categories &middot; date range &middot; export</span>';
+
+  var container = document.getElementById("exportContent");
+  if(!container) return;
+
+  var CATS = [
+    {id:"events", name:"Audit events", desc:"All captured SQL/commands with principal, object, rows, timestamps, anomaly scores, session context", icon:"&#9939;", iconBg:"var(--primary-soft)", iconColor:"var(--primary)", size:"~48 GB", rows:"142.6M events", checked:true},
+    {id:"hashchain", name:"Hash-chain &amp; checkpoints", desc:"BLAKE3 event hashes, chain sequences, hourly signed Merkle checkpoints — integrity proof", icon:"&#9939;", iconBg:"var(--green-soft)", iconColor:"var(--green)", size:"~1.2 GB", rows:"17,544 checkpoints", checked:true},
+    {id:"alerts", name:"Alerts &amp; incidents", desc:"All alerts generated with severity, status, resolution notes, linked events, SLA timers", icon:"&#9888;", iconBg:"var(--danger-soft)", iconColor:"var(--danger)", size:"~120 MB", rows:"4,218 alerts", checked:true},
+    {id:"policies", name:"Policies &amp; rules", desc:"Every policy version, rule definitions, conditions (JSON DSL), exceptions, change history", icon:"&#9873;", iconBg:"var(--amber-soft)", iconColor:"var(--amber)", size:"~8 MB", rows:"74 rules, 18 policies", checked:true},
+    {id:"classification", name:"Classification rules &amp; results", desc:"Classifier definitions, object/column tags, sensitivity scores, scan history", icon:"&#9639;", iconBg:"var(--info-soft)", iconColor:"var(--info)", size:"~45 MB", rows:"1,180 classified objects", checked:true},
+    {id:"config", name:"Configuration", desc:"DB inventory, agent configs, integration settings, notification channels, RBAC roles/permissions", icon:"&#9881;", iconBg:"var(--surface-2)", iconColor:"var(--muted)", size:"~12 MB", rows:"186 DBs, 341 agents", checked:true},
+    {id:"compliance", name:"Compliance reports", desc:"Generated reports (PCI-DSS, GDPR, HIPAA, SOX, DPDPA, RBI) with control status snapshots", icon:"&#9878;", iconBg:"var(--green-soft)", iconColor:"var(--green)", size:"~220 MB", rows:"42 reports", checked:true},
+    {id:"va", name:"VA scan results", desc:"Vulnerability assessment findings, remediation status, compliance mapping, scan history", icon:"&#9888;", iconBg:"var(--amber-soft)", iconColor:"var(--amber)", size:"~85 MB", rows:"6,247 test results", checked:false},
+    {id:"ueba", name:"Behavioral profiles", desc:"Entity profiles, risk scores, peer groups, baseline statistics — UEBA analytics data", icon:"&#9733;", iconBg:"var(--primary-soft)", iconColor:"var(--primary)", size:"~340 MB", rows:"2,841 profiles", checked:false}
+  ];
+
+  // Step 1: Configure export
+  function renderConfig(){
+    var catHtml = "";
+    for(var i = 0; i < CATS.length; i++){
+      var c = CATS[i];
+      catHtml +=
+        '<div class="exp-cat">' +
+          '<label><input type="checkbox" class="exp-check" data-id="' + c.id + '"' + (c.checked ? " checked" : "") + '></label>' +
+          '<span class="ec-icon" style="background:' + c.iconBg + ';color:' + c.iconColor + '">' + c.icon + '</span>' +
+          '<div class="ec-body"><b>' + c.name + '</b><small>' + c.desc + '</small></div>' +
+          '<span class="ec-size">' + c.size + '<br><small>' + c.rows + '</small></span>' +
+        '</div>';
+    }
+
+    container.innerHTML =
+      // Export scope info
+      '<div style="display:flex;align-items:center;gap:12px;padding:14px 18px;background:var(--info-soft);border:1px solid rgba(8,145,178,.15);border-radius:12px;margin-bottom:18px">' +
+        '<span style="font-size:20px;flex:none">&#9432;</span>' +
+        '<div style="font-size:13.5px;line-height:1.5"><b>Export scope:</b> Only data belonging to <b>' + tenantName + '</b> (' + tenantSlug + ') will be exported. No other tenant data is included. The archive is signed with the tenant KMS key for integrity verification.</div>' +
+      '</div>' +
+
+      // Date range + format
+      '<div class="card" style="margin-bottom:16px"><div class="hd"><span class="t">Export settings</span></div><div class="bd">' +
+        '<div class="row2" style="margin-bottom:12px">' +
+          '<div class="fld"><label>Date range — from</label><input class="input" type="date" value="2026-01-01"></div>' +
+          '<div class="fld"><label>Date range — to</label><input class="input" type="date" value="2026-06-22"></div>' +
+        '</div>' +
+        '<div class="row2">' +
+          '<div class="fld"><label>Export format</label><select class="input"><option>Signed Parquet + JSON config (recommended)</option><option>CSV + JSON config</option><option>JSON lines (JSONL)</option></select></div>' +
+          '<div class="fld"><label>Destination</label><select class="input" id="destSel"><option value="platform">Platform blob storage (download link)</option><option value="tenant">Tenant blob storage (their account)</option><option value="s3">Customer S3 bucket</option></select></div>' +
+        '</div>' +
+        '<div class="fld"><label>Reason / reference <span class="req">*</span></label><input class="input" id="exportReason" placeholder="e.g. Legal discovery request REF-2026-114, offboarding, compliance audit"></div>' +
+      '</div></div>' +
+
+      // Data categories
+      '<div class="card" style="margin-bottom:16px"><div class="hd"><span class="t">Data categories</span><span class="s">select what to include</span>' +
+        '<label style="margin-left:auto;font-size:12px;font-weight:500;display:flex;align-items:center;gap:6px;color:var(--muted)"><input type="checkbox" id="selectAll" checked> Select all</label>' +
+      '</div><div class="bd">' +
+        '<div style="display:flex;flex-direction:column;gap:8px">' + catHtml + '</div>' +
+        '<div style="margin-top:14px;display:flex;align-items:center;gap:14px">' +
+          '<span style="font-size:13px;color:var(--muted)">Estimated total size:</span>' +
+          '<b id="totalSize" style="font-size:14px">~50.0 GB</b>' +
+          '<span style="font-size:13px;color:var(--muted)">&middot; Estimated time: ~8 minutes</span>' +
+        '</div>' +
+      '</div></div>' +
+
+      // Actions
+      '<div style="display:flex;gap:10px;justify-content:flex-end">' +
+        '<a class="btn" href="tenants.html">Cancel</a>' +
+        '<button class="btn primary" id="startExport">Start export</button>' +
+      '</div>';
+
+    // Select all toggle
+    document.addEventListener("click", function(e){
+      if(e.target.id === "selectAll"){
+        var checks = document.querySelectorAll(".exp-check");
+        for(var j = 0; j < checks.length; j++) checks[j].checked = e.target.checked;
+      }
+      if(e.target.id === "startExport"){
+        var reason = document.getElementById("exportReason");
+        if(reason && !reason.value.trim()){
+          if(window.pf) pf.toast("Reason / reference is required", "err");
+          reason.focus();
+          return;
+        }
+        var selected = [];
+        var checks2 = document.querySelectorAll(".exp-check:checked");
+        for(var k = 0; k < checks2.length; k++){
+          var catId = checks2[k].getAttribute("data-id");
+          for(var m = 0; m < CATS.length; m++){
+            if(CATS[m].id === catId) selected.push(CATS[m]);
+          }
+        }
+        if(selected.length === 0){
+          if(window.pf) pf.toast("Select at least one data category", "err");
+          return;
+        }
+        runExport(selected);
+      }
+    });
+  }
+
+  // Step 2: Export progress
+  function runExport(selectedCats){
+    var steps = [
+      {id:"ex1", label:"Validating permissions", desc:"Checking operator access + tenant KMS key availability", dur:600},
+      {id:"ex2", label:"Querying audit events", desc:"Scanning ClickHouse for " + tenantSlug + " — date range filter applied", dur:2500},
+      {id:"ex3", label:"Packaging hash-chain proof", desc:"Collecting BLAKE3 hashes + signed Merkle checkpoints", dur:1200},
+      {id:"ex4", label:"Exporting alerts &amp; policies", desc:"Alerts, rules, exceptions, policy versions", dur:800},
+      {id:"ex5", label:"Exporting classification &amp; config", desc:"Classifier results, DB inventory, agent configs, RBAC", dur:900},
+      {id:"ex6", label:"Compressing archive", desc:"ZSTD compression — estimated ~50 GB to ~12 GB compressed", dur:1800},
+      {id:"ex7", label:"Signing with tenant KMS key", desc:"Cryptographic signature for integrity verification", dur:700},
+      {id:"ex8", label:"Uploading to destination", desc:"Generating secure download link (72h expiry)", dur:1200}
+    ];
+
+    var failAt = Math.random() < 0.12 ? 5 : -1;
+    var archiveName = tenantSlug + "-export-20260622-" + Math.random().toString(36).substr(2, 6) + ".tar.zst";
+    var archiveSize = "11.8 GB";
+    var archiveHash = "blake3:" + Math.random().toString(16).substr(2, 16) + "..." + Math.random().toString(16).substr(2, 8);
+
+    var h = '<div class="card"><div class="hd"><span class="t">Exporting ' + tenantName + '</span><span class="s">' + selectedCats.length + ' categories selected</span></div><div class="bd">';
+    h += '<div class="dep-steps">';
+    for(var i = 0; i < steps.length; i++){
+      h += '<div class="dep-step" id="' + steps[i].id + '"><span class="dep-dot">' + (i+1) + '</span>' +
+        '<div class="dep-info"><b>' + steps[i].label + '</b><small>' + steps[i].desc + '</small></div>' +
+        '<span class="dep-time" id="' + steps[i].id + '_t"></span></div>';
+    }
+    h += '</div><div id="expResult"></div></div></div>';
+    container.innerHTML = h;
+
+    var current = 0;
+    function nextStep(){
+      if(current >= steps.length) return showSuccess();
+      if(current === failAt) return showFailure(steps[current]);
+
+      var el = document.getElementById(steps[current].id);
+      var tEl = document.getElementById(steps[current].id + "_t");
+      if(el) el.classList.add("active");
+      if(tEl) tEl.textContent = "working...";
+      var dur = steps[current].dur;
+      var idx = current;
+      setTimeout(function(){
+        var el2 = document.getElementById(steps[idx].id);
+        var tEl2 = document.getElementById(steps[idx].id + "_t");
+        if(el2){ el2.classList.remove("active"); el2.classList.add("done"); }
+        if(tEl2) tEl2.textContent = (dur/1000).toFixed(1) + "s";
+        var dot = el2 && el2.querySelector(".dep-dot");
+        if(dot) dot.textContent = "✓";
+        current++;
+        nextStep();
+      }, dur);
+    }
+    nextStep();
+
+    function showSuccess(){
+      var r = document.getElementById("expResult");
+      if(!r) return;
+      r.innerHTML =
+        '<div class="dl-card">' +
+          '<div class="dl-icon">&#10003;</div>' +
+          '<h3>Export complete</h3>' +
+          '<p>' + selectedCats.length + ' data categories exported for <b>' + tenantName + '</b></p>' +
+
+          '<div class="dl-file">' +
+            '<span class="fi">&#128230;</span>' +
+            '<div class="fd"><b>' + archiveName + '</b><small>' + archiveSize + ' compressed &middot; Signed &middot; ZSTD</small></div>' +
+          '</div>' +
+
+          '<div style="display:flex;flex-direction:column;gap:6px;max-width:400px;margin:0 auto;text-align:left;font-size:12.5px;color:var(--muted)">' +
+            '<div style="display:flex;justify-content:space-between"><span>Format</span><b style="color:var(--ink)">Signed Parquet + JSON</b></div>' +
+            '<div style="display:flex;justify-content:space-between"><span>Categories</span><b style="color:var(--ink)">' + selectedCats.length + ' of ' + CATS.length + '</b></div>' +
+            '<div style="display:flex;justify-content:space-between"><span>Date range</span><b style="color:var(--ink)">01 Jan 2026 — 22 Jun 2026</b></div>' +
+            '<div style="display:flex;justify-content:space-between"><span>Integrity</span><b style="color:var(--green)">&#10003; KMS-signed + hash-chain verified</b></div>' +
+            '<div style="display:flex;justify-content:space-between"><span>Hash</span><b style="color:var(--ink);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px">' + archiveHash + '</b></div>' +
+            '<div style="display:flex;justify-content:space-between"><span>Download link expires</span><b style="color:var(--amber)">72 hours</b></div>' +
+          '</div>' +
+
+          '<div style="display:flex;gap:10px;justify-content:center;margin-top:18px">' +
+            '<button class="btn primary" id="dlBtn">&#11123; Download archive</button>' +
+            '<button class="btn" id="copyLinkBtn">&#128279; Copy download link</button>' +
+            '<a class="btn" href="tenants.html">Back to tenants</a>' +
+          '</div>' +
+        '</div>';
+
+      // Wire download/copy buttons
+      setTimeout(function(){
+        var dlBtn = document.getElementById("dlBtn");
+        if(dlBtn) dlBtn.onclick = function(){ if(window.pf) pf.toast("Downloading " + archiveName + " (" + archiveSize + ")", "ok"); };
+        var copyBtn = document.getElementById("copyLinkBtn");
+        if(copyBtn) copyBtn.onclick = function(){ if(window.pf) pf.toast("Download link copied to clipboard — expires in 72h", "ok"); };
+      }, 50);
+
+      if(window.pf) pf.toast("Export complete — " + archiveSize + " archive ready for download", "ok");
+    }
+
+    function showFailure(step){
+      var el = document.getElementById(step.id);
+      if(el) el.classList.add("fail");
+      var dot = el && el.querySelector(".dep-dot");
+      if(dot) dot.textContent = "✗";
+      var tEl = document.getElementById(step.id + "_t");
+      if(tEl) tEl.textContent = "failed";
+
+      var r = document.getElementById("expResult");
+      if(!r) return;
+      r.innerHTML =
+        '<div class="fail-card">' +
+          '<div class="fl-icon">&#10007;</div>' +
+          '<h3>Export failed</h3>' +
+          '<p style="color:var(--muted);font-size:13.5px;margin:0 0 12px">Step <b>"' + step.label + '"</b> did not complete.</p>' +
+
+          '<div class="fail-detail">' +
+            '<b style="color:var(--danger)">Error details</b><br>' +
+            'ZSTD compression failed on partition 2026-04 — possible ClickHouse read timeout on large month.<br>' +
+            'The partial archive has been discarded. No data was exposed or corrupted.<br><br>' +
+            '<b>Recommended:</b> Retry with a narrower date range, or contact engineering if the issue persists.' +
+          '</div>' +
+
+          '<div style="display:flex;gap:10px;justify-content:center;margin-top:16px">' +
+            '<button class="btn primary" id="retryExport">&#8635; Retry export</button>' +
+            '<button class="btn" id="narrowRetry">Retry with narrower date range</button>' +
+            '<a class="btn" href="tenants.html">Back to tenants</a>' +
+          '</div>' +
+        '</div>';
+
+      setTimeout(function(){
+        var retryBtn = document.getElementById("retryExport");
+        if(retryBtn) retryBtn.onclick = function(){ failAt = -1; current = 0; runExport(selectedCats); };
+        var narrowBtn = document.getElementById("narrowRetry");
+        if(narrowBtn) narrowBtn.onclick = function(){ renderConfig(); };
+      }, 50);
+
+      if(window.pf) pf.toast("Export failed at: " + step.label, "err");
+    }
+  }
+
+  // Start with config screen
+  renderConfig();
+}
+</script>
+</body></html>

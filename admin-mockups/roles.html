@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Roles & Permissions</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="roles">
+
+  <div class="phead">
+    <div>
+      <h1>Roles & Permissions</h1>
+      <div class="meta"><span>platform admin roles &middot; separation of duties &middot; approval chains</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9679;</span> Roles</div><div class="kv">5</div><div class="kd">defined</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Users</div><div class="kv">12</div><div class="kd">across all roles</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9650;</span> Pending approvals</div><div class="kv">2</div><div class="kd down">awaiting sign-off</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#9673;</span> SoD enforced</div><div class="kv">Yes</div><div class="kd up">initiator cannot approve</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Platform Roles</span><span class="s">separation of duties for tenant lifecycle operations</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Role</th>
+            <th>Description</th>
+            <th class="num">Users</th>
+            <th style="text-align:center">Create Tenant</th>
+            <th style="text-align:center">Edit Quotas</th>
+            <th style="text-align:center">Upgrade Plan</th>
+            <th style="text-align:center">Approve Upgrades</th>
+            <th style="text-align:center">Suspend / Offboard</th>
+            <th style="text-align:center">Break-Glass</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Platform Ops</b><br><small class="muted">Day-to-day operations</small></td>
+            <td>Create tenants, edit Enterprise/Trial quotas, troubleshoot, impersonate</td>
+            <td class="num">4</td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">initiate</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">initiate</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td><b>Sales / Account Manager</b><br><small class="muted">Commercial relationship</small></td>
+            <td>View tenant details, approve upgrades (contract verification), trial extensions</td>
+            <td class="num">3</td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">contract</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td><b>Finance</b><br><small class="muted">Billing verification</small></td>
+            <td>View billing, approve upgrades (PO / billing confirmation), export invoices</td>
+            <td class="num">2</td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">billing</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td><b>Platform Lead</b><br><small class="muted">Senior ops / manager</small></td>
+            <td>All Ops permissions + approve upgrades (capacity), approve suspensions, final sign-off</td>
+            <td class="num">2</td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">initiate</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">capacity</small></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span><br><small class="muted">approve</small></td>
+            <td style="text-align:center"><span style="color:var(--subtle)">&#10007;</span></td>
+          </tr>
+          <tr>
+            <td><b>Super Admin</b><br><small class="muted">Break-glass only</small></td>
+            <td>Full access including break-glass, data sovereignty overrides, platform config. Requires MFA + justification.</td>
+            <td class="num">1</td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+            <td style="text-align:center"><span style="color:var(--green);font-weight:700">&#10003;</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Role Assignments</span><span class="s">12 users</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead><tr><th>User</th><th>Email</th><th>Role</th><th>Last active</th><th>MFA</th></tr></thead>
+        <tbody>
+          <tr><td><b>David Kim</b></td><td class="muted">d.kim@toovix.security</td><td><span class="badge ind">Platform Ops</span></td><td class="muted">2m ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Maria Santos</b></td><td class="muted">m.santos@toovix.security</td><td><span class="badge ind">Platform Ops</span></td><td class="muted">1h ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Raj Patel</b></td><td class="muted">r.patel@toovix.security</td><td><span class="badge ind">Platform Ops</span></td><td class="muted">3h ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Yuki Tanaka</b></td><td class="muted">y.tanaka@toovix.security</td><td><span class="badge ind">Platform Ops</span></td><td class="muted">1d ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>James Rivera</b></td><td class="muted">j.rivera@toovix.security</td><td><span class="badge">Sales</span></td><td class="muted">4h ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Priya Nair</b></td><td class="muted">p.nair@toovix.security</td><td><span class="badge">Sales</span></td><td class="muted">2d ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Sophie Laurent</b></td><td class="muted">s.laurent@toovix.security</td><td><span class="badge">Sales</span></td><td class="muted">1d ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Lisa Wong</b></td><td class="muted">l.wong@toovix.security</td><td><span class="badge amber">Finance</span></td><td class="muted">6h ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Mark Chen</b></td><td class="muted">m.chen@toovix.security</td><td><span class="badge amber">Finance</span></td><td class="muted">1d ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Alex Torres</b></td><td class="muted">a.torres@toovix.security</td><td><span class="badge blue">Platform Lead</span></td><td class="muted">30m ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Nina Volkov</b></td><td class="muted">n.volkov@toovix.security</td><td><span class="badge blue">Platform Lead</span></td><td class="muted">5h ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+          <tr><td><b>Chris Morgan</b></td><td class="muted">c.morgan@toovix.security</td><td><span class="badge red">Super Admin</span></td><td class="muted">14d ago</td><td><span class="badge green" style="font-size:10px">Enabled</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Separation of Duties Rules</span></div>
+    <div class="bd" style="padding:12px 16px">
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+          <span class="badge green" style="font-size:10px;flex:none;margin-top:3px">Enforced</span>
+          <div style="font-size:12.5px;line-height:1.5"><b>Initiator cannot approve</b> &mdash; The person who submits an upgrade, suspension, or offboarding request cannot be an approver on the same request.</div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+          <span class="badge green" style="font-size:10px;flex:none;margin-top:3px">Enforced</span>
+          <div style="font-size:12.5px;line-height:1.5"><b>Multi-party approval</b> &mdash; Plan upgrades require approval from Sales (contract), Finance (billing), and Platform Lead (capacity). All three must approve.</div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+          <span class="badge green" style="font-size:10px;flex:none;margin-top:3px">Enforced</span>
+          <div style="font-size:12.5px;line-height:1.5"><b>Break-glass audit</b> &mdash; Super Admin actions require MFA re-verification, written justification, and are auto-escalated to Platform Lead via PagerDuty.</div>
+        </div>
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+          <span class="badge green" style="font-size:10px;flex:none;margin-top:3px">Enforced</span>
+          <div style="font-size:12.5px;line-height:1.5"><b>Quota edits for Business tier blocked</b> &mdash; Business plan quotas are fixed. Changing limits requires a plan upgrade through the approval chain.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+</body></html>

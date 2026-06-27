@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Content Packs</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="content-packs">
+
+  <div class="phead">
+    <div>
+      <h1>Content Packs</h1>
+      <div class="meta"><span>classifiers &middot; VA tests &middot; policies &middot; threat intel</span></div>
+    </div>
+    <div class="acts">
+      <button class="btn primary" onclick="pf.toast('Push update wizard would open','ok')">&#9650; Push Update</button>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Classifier rules</div><div class="kv">48</div><div class="kd up">&#9650; 3 new in v2.14</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#9637;</span> VA tests</div><div class="kv">6,247</div><div class="kd up">&#9650; 124 this quarter</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Default policies</div><div class="kv">18</div><div class="kd">shipped to new tenants</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#8776;</span> Threat feeds</div><div class="kv">3</div><div class="kd up">all synced &lt; 1h ago</div></div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="subnav" id="cpTabs">
+    <button class="active" data-tab="classifiers">Classifiers</button>
+    <button data-tab="va-tests">VA Tests</button>
+    <button data-tab="policies">Default Policies</button>
+    <button data-tab="threat-intel">Threat Intel</button>
+  </div>
+
+  <!-- Classifiers tab -->
+  <div class="tabpane active" id="tab-classifiers">
+    <div class="card" style="margin-bottom:14px">
+      <div class="hd">
+        <span class="t">Data Classifiers</span><span class="s">48 rules across 8 regions</span>
+        <div class="acts">
+          <button class="btn" onclick="pf.toast('Add classifier form would open','ok')">+ Add Classifier</button>
+          <button class="btn primary" onclick="pf.toast('Push update wizard would open','ok')">Push Update</button>
+        </div>
+      </div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Region Scope</th>
+              <th>Validator</th>
+              <th>Tags</th>
+              <th>Status</th>
+              <th>Version</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>SSN</b><br><small class="muted">Social Security Number</small></td>
+              <td><span class="badge ind">US</span></td>
+              <td><small class="mono muted">Luhn + format 3-2-4</small></td>
+              <td><span class="badge">PII</span> <span class="badge red">Critical</span></td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><small class="muted">v2.14</small></td>
+            </tr>
+            <tr>
+              <td><b>Aadhaar</b><br><small class="muted">12-digit unique identity</small></td>
+              <td><span class="badge" style="background:var(--amber-soft);color:var(--amber)">India</span></td>
+              <td><small class="mono muted">Verhoeff checksum</small></td>
+              <td><span class="badge">PII</span> <span class="badge red">Critical</span></td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><small class="muted">v2.14</small></td>
+            </tr>
+            <tr>
+              <td><b>PAN</b><br><small class="muted">Permanent Account Number</small></td>
+              <td><span class="badge" style="background:var(--amber-soft);color:var(--amber)">India</span></td>
+              <td><small class="mono muted">Regex AAAAA0000A</small></td>
+              <td><span class="badge">PII</span> <span class="badge amber">Financial</span></td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><small class="muted">v2.14</small></td>
+            </tr>
+            <tr>
+              <td><b>NHS Number</b><br><small class="muted">National Health Service ID</small></td>
+              <td><span class="badge blue">UK</span></td>
+              <td><small class="mono muted">Modulus 11 checksum</small></td>
+              <td><span class="badge">PII</span> <span class="badge blue">Health</span></td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><small class="muted">v2.12</small></td>
+            </tr>
+            <tr>
+              <td><b>SIN</b><br><small class="muted">Social Insurance Number</small></td>
+              <td><span class="badge" style="background:var(--danger-soft);color:var(--danger)">Canada</span></td>
+              <td><small class="mono muted">Luhn checksum</small></td>
+              <td><span class="badge">PII</span> <span class="badge red">Critical</span></td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><small class="muted">v2.12</small></td>
+            </tr>
+            <tr>
+              <td><b>Credit Card</b><br><small class="muted">Visa, MC, Amex, Discover</small></td>
+              <td><span class="badge">Global</span></td>
+              <td><small class="mono muted">Luhn + BIN prefix match</small></td>
+              <td><span class="badge">PCI</span> <span class="badge red">Critical</span></td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><small class="muted">v2.14</small></td>
+            </tr>
+            <tr>
+              <td><b>Email Address</b><br><small class="muted">RFC 5322 compliant</small></td>
+              <td><span class="badge">Global</span></td>
+              <td><small class="mono muted">RFC regex + TLD check</small></td>
+              <td><span class="badge">PII</span></td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><small class="muted">v2.10</small></td>
+            </tr>
+            <tr>
+              <td><b>GSTIN</b><br><small class="muted">Goods &amp; Services Tax ID</small></td>
+              <td><span class="badge" style="background:var(--amber-soft);color:var(--amber)">India</span></td>
+              <td><small class="mono muted">State code + PAN + checksum</small></td>
+              <td><span class="badge amber">Financial</span> <span class="badge">Tax</span></td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><small class="muted">v2.14</small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- VA Tests tab -->
+  <div class="tabpane" id="tab-va-tests">
+    <div class="card" style="margin-bottom:14px">
+      <div class="hd"><span class="t">Vulnerability Assessment Tests</span><span class="s">6,247 tests across 6 frameworks</span></div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Framework</th>
+              <th class="num">Tests</th>
+              <th>Latest Version</th>
+              <th>Last Pushed</th>
+              <th>Coverage</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>CIS Benchmarks</b><br><small class="muted">Center for Internet Security</small></td>
+              <td class="num">2,100</td>
+              <td><small class="mono muted">v8.0.2</small></td>
+              <td class="muted">21 Jun 2026</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="pf-prog" style="width:100px"><span style="width:94%;background:var(--green)"></span></span>
+                  <small class="muted">94%</small>
+                </div>
+              </td>
+              <td><span class="badge green dot">Current</span></td>
+            </tr>
+            <tr>
+              <td><b>PCI-DSS</b><br><small class="muted">Payment Card Industry v4.0</small></td>
+              <td class="num">840</td>
+              <td><small class="mono muted">v4.0.1</small></td>
+              <td class="muted">19 Jun 2026</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="pf-prog" style="width:100px"><span style="width:100%;background:var(--green)"></span></span>
+                  <small class="muted">100%</small>
+                </div>
+              </td>
+              <td><span class="badge green dot">Current</span></td>
+            </tr>
+            <tr>
+              <td><b>DISA-STIG</b><br><small class="muted">Dept of Defense standards</small></td>
+              <td class="num">1,200</td>
+              <td><small class="mono muted">v3r12</small></td>
+              <td class="muted">15 Jun 2026</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="pf-prog" style="width:100px"><span style="width:87%;background:var(--amber)"></span></span>
+                  <small class="muted">87%</small>
+                </div>
+              </td>
+              <td><span class="badge green dot">Current</span></td>
+            </tr>
+            <tr>
+              <td><b>HIPAA</b><br><small class="muted">Health Insurance Portability</small></td>
+              <td class="num">420</td>
+              <td><small class="mono muted">v2.1</small></td>
+              <td class="muted">18 Jun 2026</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="pf-prog" style="width:100px"><span style="width:100%;background:var(--green)"></span></span>
+                  <small class="muted">100%</small>
+                </div>
+              </td>
+              <td><span class="badge green dot">Current</span></td>
+            </tr>
+            <tr>
+              <td><b>RBI-CSF</b><br><small class="muted">Reserve Bank of India Cyber Security</small></td>
+              <td class="num">890</td>
+              <td><small class="mono muted">v1.4</small></td>
+              <td class="muted">20 Jun 2026</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="pf-prog" style="width:100px"><span style="width:96%;background:var(--green)"></span></span>
+                  <small class="muted">96%</small>
+                </div>
+              </td>
+              <td><span class="badge green dot">Current</span></td>
+            </tr>
+            <tr>
+              <td><b>SOX / ITGC</b><br><small class="muted">Sarbanes-Oxley IT General Controls</small></td>
+              <td class="num">797</td>
+              <td><small class="mono muted">v3.2</small></td>
+              <td class="muted">17 Jun 2026</td>
+              <td>
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="pf-prog" style="width:100px"><span style="width:91%;background:var(--green)"></span></span>
+                  <small class="muted">91%</small>
+                </div>
+              </td>
+              <td><span class="badge green dot">Current</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Default Policies tab -->
+  <div class="tabpane" id="tab-policies">
+    <div class="card" style="margin-bottom:14px">
+      <div class="hd"><span class="t">Default Policies</span><span class="s">18 rules shipped to new tenants</span></div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Policy Name</th>
+              <th>Category</th>
+              <th>Severity</th>
+              <th>Default Action</th>
+              <th>Description</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>Bulk PII Read</b></td>
+              <td><span class="badge red">Data Exfil</span></td>
+              <td><span class="badge red">Critical</span></td>
+              <td>Block + Alert</td>
+              <td><small class="muted">SELECT on PII columns returning &gt; 1000 rows without WHERE clause</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>Block DELETE without WHERE</b></td>
+              <td><span class="badge red">Destructive</span></td>
+              <td><span class="badge red">Critical</span></td>
+              <td>Block</td>
+              <td><small class="muted">Prevents mass deletion without WHERE predicate</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>Privileged Off-Hours</b></td>
+              <td><span class="badge amber">Anomaly</span></td>
+              <td><span class="badge amber">High</span></td>
+              <td>Alert</td>
+              <td><small class="muted">Admin/DBA queries outside business hours (tenant TZ)</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>Brute Force Detection</b></td>
+              <td><span class="badge red">Security</span></td>
+              <td><span class="badge red">Critical</span></td>
+              <td>Block + Alert</td>
+              <td><small class="muted">&gt; 5 failed auth attempts in 60 seconds from same source</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>DDL Change Control</b></td>
+              <td><span class="badge ind">Compliance</span></td>
+              <td><span class="badge amber">High</span></td>
+              <td>Alert</td>
+              <td><small class="muted">CREATE/ALTER/DROP TABLE, VIEW, PROCEDURE without change ticket</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>Privilege Escalation</b></td>
+              <td><span class="badge red">Security</span></td>
+              <td><span class="badge red">Critical</span></td>
+              <td>Block + Alert</td>
+              <td><small class="muted">GRANT, REVOKE, CREATE USER, ALTER ROLE by non-admin</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>Data Masking Bypass</b></td>
+              <td><span class="badge red">Data Exfil</span></td>
+              <td><span class="badge red">Critical</span></td>
+              <td>Block + Alert</td>
+              <td><small class="muted">Attempts to access raw PII bypassing masking layer</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>Cross-Schema Access</b></td>
+              <td><span class="badge amber">Anomaly</span></td>
+              <td><span class="badge amber">High</span></td>
+              <td>Alert</td>
+              <td><small class="muted">Query accessing schemas outside user baseline profile</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>Large Export / COPY</b></td>
+              <td><span class="badge red">Data Exfil</span></td>
+              <td><span class="badge amber">High</span></td>
+              <td>Alert + Log</td>
+              <td><small class="muted">SELECT INTO OUTFILE, COPY TO, bulk export exceeding threshold</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+            <tr>
+              <td><b>Dormant Account Activity</b></td>
+              <td><span class="badge amber">Anomaly</span></td>
+              <td><span class="badge blue">Medium</span></td>
+              <td>Alert</td>
+              <td><small class="muted">Activity from accounts inactive for &gt; 30 days</small></td>
+              <td><span class="badge green dot">Active</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Threat Intel tab -->
+  <div class="tabpane" id="tab-threat-intel">
+    <div class="card" style="margin-bottom:14px">
+      <div class="hd"><span class="t">Threat Intelligence Feeds</span><span class="s">3 active sources</span></div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Source</th>
+              <th>Type</th>
+              <th>Last Sync</th>
+              <th class="num">IOC Count</th>
+              <th>Auto-Enrich</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>MISP</b><br><small class="muted">Malware Information Sharing Platform</small></td>
+              <td><span class="badge ind">Open Source</span></td>
+              <td><small class="muted">23 Jun 14:00 UTC</small></td>
+              <td class="num">12,480</td>
+              <td><span class="badge green">Enabled</span></td>
+              <td><span class="badge green dot">Connected</span></td>
+            </tr>
+            <tr>
+              <td><b>CERT-In</b><br><small class="muted">Indian Computer Emergency Response Team</small></td>
+              <td><span class="badge blue">Government</span></td>
+              <td><small class="muted">23 Jun 12:30 UTC</small></td>
+              <td class="num">3,841</td>
+              <td><span class="badge green">Enabled</span></td>
+              <td><span class="badge green dot">Connected</span></td>
+            </tr>
+            <tr>
+              <td><b>CrowdStrike Falcon X</b><br><small class="muted">Commercial threat intelligence</small></td>
+              <td><span class="badge amber">Commercial</span></td>
+              <td><small class="muted">23 Jun 14:15 UTC</small></td>
+              <td class="num">48,720</td>
+              <td><span class="badge green">Enabled</span></td>
+              <td><span class="badge green dot">Connected</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+      <div class="hd"><span class="t">IOC Summary</span><span class="s">Last 7 days</span></div>
+      <div class="bd">
+        <div class="grid c4">
+          <div style="text-align:center">
+            <div style="font-size:22px;font-weight:800;color:var(--danger)">247</div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:2px">Malicious IPs</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:22px;font-weight:800;color:var(--amber)">182</div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:2px">Suspicious Domains</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:22px;font-weight:800;color:var(--info)">94</div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:2px">File Hashes</div>
+          </div>
+          <div style="text-align:center">
+            <div style="font-size:22px;font-weight:800;color:var(--primary)">31</div>
+            <div style="font-size:11.5px;color:var(--muted);margin-top:2px">SQL Injection Patterns</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Version history -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Version History</span><span class="s">Content pack releases</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>Date</th>
+            <th>Changes</th>
+            <th class="num">Tenants</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>v2.14</b></td>
+            <td class="muted">23 Jun 2026</td>
+            <td><small class="muted">+3 classifiers (GSTIN, updated SSN, Credit Card BIN refresh), +48 CIS tests, MISP feed v2 integration</small></td>
+            <td class="num">42</td>
+            <td><span class="badge green">Deployed</span></td>
+          </tr>
+          <tr>
+            <td><b>v2.13</b></td>
+            <td class="muted">16 Jun 2026</td>
+            <td><small class="muted">+2 default policies (cross-schema, dormant account), +76 DISA-STIG tests, CrowdStrike feed added</small></td>
+            <td class="num">40</td>
+            <td><span class="badge green">Deployed</span></td>
+          </tr>
+          <tr>
+            <td><b>v2.12</b></td>
+            <td class="muted">02 Jun 2026</td>
+            <td><small class="muted">NHS Number + SIN classifiers, +120 RBI-CSF tests, CERT-In feed integration</small></td>
+            <td class="num">39</td>
+            <td><span class="badge green">Deployed</span></td>
+          </tr>
+          <tr>
+            <td><b>v2.11</b></td>
+            <td class="muted">19 May 2026</td>
+            <td><small class="muted">PCI-DSS v4.0.1 test update, bulk PII read policy refinement, false-positive reduction</small></td>
+            <td class="num">38</td>
+            <td><span class="badge green">Deployed</span></td>
+          </tr>
+          <tr>
+            <td><b>v2.10</b></td>
+            <td class="muted">05 May 2026</td>
+            <td><small class="muted">Email classifier, SOX/ITGC framework added (+797 tests), data masking bypass policy</small></td>
+            <td class="num">37</td>
+            <td><span class="badge green">Deployed</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doContentPacks, 100);
+})();
+function doContentPacks(){
+  /* Tab switching */
+  var tabs = document.querySelectorAll("#cpTabs button");
+  tabs.forEach(function(btn){
+    btn.addEventListener("click", function(){
+      tabs.forEach(function(b){ b.classList.remove("active"); });
+      btn.classList.add("active");
+      document.querySelectorAll(".tabpane").forEach(function(p){ p.classList.remove("active"); });
+      var target = document.getElementById("tab-" + btn.getAttribute("data-tab"));
+      if(target) target.classList.add("active");
+    });
+  });
+}
+</script>
+</body></html>

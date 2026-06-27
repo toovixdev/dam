@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Tenant Overview</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenant-dash">
+
+  <div class="phead">
+    <div>
+      <h1>Tenant Overview &mdash; Meridian Financial</h1>
+      <div class="meta"><span>Enterprise plan &middot; US-East &middot; Active since Jan 2024</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#9637;</span> Databases</div><div class="kv">186</div><div class="kd up">&#9650; 4 added this month</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Agents</div><div class="kv">341 / 347</div><div class="kd up">98.3% online</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9734;</span> Users</div><div class="kv">38</div><div class="kd">4 admins &middot; 34 analysts</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9911;</span> API Keys</div><div class="kv">12</div><div class="kd">3 expiring in 30d</div></div>
+  </div>
+
+  <div id="tenantContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doTenantDash, 100);
+})();
+function doTenantDash(){
+  var c = document.getElementById("tenantContent");
+  if(!c) return;
+
+  c.innerHTML =
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Usage This Month</span><span class=\"s\">Billing period: 1 Jun &ndash; 30 Jun 2026</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Metric</th><th class=\"num\">Used</th><th class=\"num\">Plan Limit</th><th>Utilization</th><th>Status</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>Events processed</b></td><td class=\"num\">3.28B</td><td class=\"num\">5B</td><td style=\"min-width:120px\">" + (window.pf ? pf.progress(65.6, "var(--primary)") : "65.6%") + " <small class=\"muted\">65.6%</small></td><td><span class=\"badge green\">OK</span></td></tr>" +
+            "<tr><td><b>Storage used</b></td><td class=\"num\">4.2 TB</td><td class=\"num\">8 TB</td><td style=\"min-width:120px\">" + (window.pf ? pf.progress(52.5, "var(--primary)") : "52.5%") + " <small class=\"muted\">52.5%</small></td><td><span class=\"badge green\">OK</span></td></tr>" +
+            "<tr><td><b>VA scans run</b></td><td class=\"num\">1,847</td><td class=\"num\">Unlimited</td><td style=\"min-width:120px\">" + (window.pf ? pf.progress(0, "var(--green)") : "N/A") + " <small class=\"muted\">No limit</small></td><td><span class=\"badge green\">OK</span></td></tr>" +
+            "<tr><td><b>Alerts generated</b></td><td class=\"num\">12,463</td><td class=\"num\">50,000</td><td style=\"min-width:120px\">" + (window.pf ? pf.progress(24.9, "var(--green)") : "24.9%") + " <small class=\"muted\">24.9%</small></td><td><span class=\"badge green\">OK</span></td></tr>" +
+            "<tr><td><b>API calls</b></td><td class=\"num\">284K</td><td class=\"num\">1M</td><td style=\"min-width:120px\">" + (window.pf ? pf.progress(28.4, "var(--green)") : "28.4%") + " <small class=\"muted\">28.4%</small></td><td><span class=\"badge green\">OK</span></td></tr>" +
+            "<tr><td><b>Export volume</b></td><td class=\"num\">128 GB</td><td class=\"num\">500 GB</td><td style=\"min-width:120px\">" + (window.pf ? pf.progress(25.6, "var(--green)") : "25.6%") + " <small class=\"muted\">25.6%</small></td><td><span class=\"badge green\">OK</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>" +
+
+    "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr;margin-bottom:14px\">" +
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Configuration Summary</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;flex-direction:column;gap:12px\">" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">SSO Provider</span><b>Azure AD (OIDC)</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">KMS Provider</span><b>HashiCorp Vault</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Audit retention</span><b>3 years (custom)</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Log retention</span><b>1 year</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Checkpoint interval</span><b>Every 6 hours</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">MFA enforcement</span><b style=\"color:var(--green)\">Enabled (all users)</b></div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Notification Channels</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+            "<div style=\"display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface-2);border-radius:8px\">" +
+              "<span style=\"font-size:16px\">&#9993;</span>" +
+              "<div><b style=\"font-size:13px\">Email</b><br><small class=\"muted\">security-alerts@meridianfin.com &middot; 4 recipients</small></div>" +
+              "<span class=\"badge green\" style=\"margin-left:auto\">Active</span>" +
+            "</div>" +
+            "<div style=\"display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface-2);border-radius:8px\">" +
+              "<span style=\"font-size:16px\">&#128172;</span>" +
+              "<div><b style=\"font-size:13px\">Slack</b><br><small class=\"muted\">#db-security-alerts &middot; meridianfin.slack.com</small></div>" +
+              "<span class=\"badge green\" style=\"margin-left:auto\">Active</span>" +
+            "</div>" +
+            "<div style=\"display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface-2);border-radius:8px\">" +
+              "<span style=\"font-size:16px\">&#128279;</span>" +
+              "<div><b style=\"font-size:13px\">Webhook</b><br><small class=\"muted\">https://api.meridianfin.com/toovix/alerts</small></div>" +
+              "<span class=\"badge green\" style=\"margin-left:auto\">Active</span>" +
+            "</div>" +
+            "<div style=\"display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface-2);border-radius:8px\">" +
+              "<span style=\"font-size:16px\">&#128196;</span>" +
+              "<div><b style=\"font-size:13px\">PagerDuty</b><br><small class=\"muted\">P1/P2 alerts &middot; service key configured</small></div>" +
+              "<span class=\"badge green\" style=\"margin-left:auto\">Active</span>" +
+            "</div>" +
+            "<div style=\"display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface-2);border-radius:8px\">" +
+              "<span style=\"font-size:16px\">&#128241;</span>" +
+              "<div><b style=\"font-size:13px\">Microsoft Teams</b><br><small class=\"muted\">DBA Operations channel &middot; incoming webhook</small></div>" +
+              "<span class=\"badge\" style=\"margin-left:auto\">Paused</span>" +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>";
+}
+</script>
+</body></html>

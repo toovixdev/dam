@@ -1,0 +1,153 @@
+/* TooVix DAM — shared auth/onboarding styles. Pairs with app.css tokens. */
+html{zoom:1}
+body.auth{margin:0;min-height:100vh;display:grid;grid-template-columns:1.1fr 1fr;background:var(--bg);color:var(--ink);font-family:var(--font)}
+body.auth.solo{grid-template-columns:1fr}
+
+/* ---- Brand pane (left) ---- */
+.brandpane{background:linear-gradient(150deg,var(--primary),#6d28d9);color:#fff;padding:48px;display:flex;flex-direction:column;justify-content:space-between;position:relative;overflow:hidden}
+.brandpane::after{content:'';position:absolute;inset:0;background:radial-gradient(900px 500px at 80% -10%,rgba(255,255,255,.18),transparent)}
+.bp-top{display:flex;align-items:center;gap:12px;font-weight:800;font-size:22px;z-index:1}
+.bp-top .dot{width:42px;height:42px;border-radius:12px;background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center;font-size:22px}
+.bp-mid{z-index:1}.bp-mid h2{font-size:34px;line-height:1.18;margin:0 0 14px;font-weight:800;letter-spacing:-.5px}
+.bp-mid p{font-size:15px;opacity:.9;max-width:440px;line-height:1.6}
+.bp-feats{display:flex;flex-direction:column;gap:12px;margin-top:26px}
+.bp-feat{display:flex;gap:11px;align-items:flex-start;font-size:14px;opacity:.95;line-height:1.45}
+.bp-feat span{width:30px;height:30px;border-radius:9px;background:rgba(255,255,255,.16);display:flex;align-items:center;justify-content:center;flex:none}
+.bp-quote{z-index:1;background:rgba(255,255,255,.1);border-radius:14px;padding:16px 18px;margin-top:26px;font-size:14px;line-height:1.55}
+.bp-quote .who{display:block;margin-top:9px;font-size:12.5px;opacity:.8}
+.bp-bot{z-index:1;font-size:12.5px;opacity:.8;display:flex;gap:18px;flex-wrap:wrap}
+
+/* ---- Form pane (right) ---- */
+.formpane{display:flex;align-items:center;justify-content:center;padding:40px;background:var(--bg);overflow:auto}
+.authbox{width:min(420px,100%)}
+.authbox.wide{width:min(560px,100%)}
+.authbox h1{font-size:24px;margin:0 0 6px}
+.authbox .sub{color:var(--muted);font-size:14px;margin-bottom:24px}
+.authbox .sub a{color:var(--primary);font-weight:600;text-decoration:none}
+.mini-brand{display:none;align-items:center;gap:10px;font-weight:800;font-size:18px;margin-bottom:24px}
+.mini-brand .dot{width:34px;height:34px;border-radius:10px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px}
+
+/* ---- SSO + dividers ---- */
+.sso{display:flex;flex-direction:column;gap:9px;margin-bottom:6px}
+.ssobtn{display:flex;align-items:center;gap:11px;border:1px solid var(--line);background:var(--surface);border-radius:11px;padding:11px 14px;font-family:var(--font);font-size:14px;font-weight:600;color:var(--ink);cursor:pointer;width:100%;text-align:left}
+.ssobtn:hover{border-color:var(--primary-ring);background:var(--surface-2)}
+.ssobtn .lg{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;flex:none}
+.divider{display:flex;align-items:center;gap:12px;color:var(--subtle);font-size:12px;margin:18px 0}
+.divider::before,.divider::after{content:'';flex:1;height:1px;background:var(--line)}
+
+/* ---- Tabs (signup hybrid) ---- */
+.atabs{display:flex;gap:6px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:5px;margin-bottom:22px}
+.atab{flex:1;text-align:center;padding:9px 10px;border-radius:9px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;border:0;background:transparent;font-family:var(--font);line-height:1.25}
+.atab small{display:block;font-weight:500;font-size:11px;opacity:.8;margin-top:1px}
+.atab.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-sm)}
+.atabpane{display:none}.atabpane.on{display:block}
+
+/* ---- Misc helpers ---- */
+.lrow{display:flex;align-items:center;justify-content:space-between;font-size:12.5px;margin:6px 0 16px;flex-wrap:wrap;gap:8px}
+.lrow a{color:var(--primary);text-decoration:none;font-weight:600}
+.checkline{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--muted);font-weight:500;line-height:1.45;margin:4px 0 16px}
+.checkline input{margin-top:2px;flex:none}
+.checkline a{color:var(--primary);font-weight:600;text-decoration:none}
+.btn.block{width:100%;justify-content:center;padding:12px}
+.btn.lg{padding:12px 18px;font-size:14px}
+.note{display:flex;align-items:flex-start;gap:8px;border-radius:9px;padding:9px 12px;font-size:12.5px;font-weight:500;line-height:1.45;margin:14px 0 0}
+.note.good{background:var(--green-soft);color:var(--green)}
+.note.info{background:var(--info-soft);color:var(--info)}
+.note.amber{background:var(--amber-soft);color:var(--amber)}
+.foot-note{color:var(--subtle);font-size:12px;margin-top:22px;text-align:center;line-height:1.5}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.pw-wrap{position:relative}
+.pw-toggle{position:absolute;right:10px;top:32px;background:none;border:0;color:var(--muted);font-size:12px;cursor:pointer;font-weight:600;font-family:var(--font)}
+
+/* ---- Password strength ---- */
+.pwbar{height:5px;border-radius:999px;background:var(--line);overflow:hidden;margin:-6px 0 6px}
+.pwbar i{display:block;height:100%;width:0;background:var(--danger);transition:width .2s,background .2s}
+.pwhint{font-size:11.5px;color:var(--subtle);margin:0 0 12px}
+
+/* ---- OTP boxes ---- */
+.otp{display:flex;gap:10px;justify-content:center;margin:6px 0 18px}
+.otp input{width:48px;height:56px;text-align:center;font-size:24px;font-weight:700;border:1px solid var(--line);border-radius:11px;background:var(--surface);color:var(--ink);font-family:var(--font)}
+.otp input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 3px var(--primary-ring)}
+
+/* ---- MFA method picker / QR ---- */
+.mlist{display:flex;flex-direction:column;gap:10px;margin-bottom:18px}
+.mopt{display:flex;align-items:center;gap:13px;border:1.5px solid var(--line);border-radius:12px;padding:13px 15px;cursor:pointer;background:var(--surface)}
+.mopt:hover{border-color:var(--primary-ring)}
+.mopt.on{border-color:var(--primary);background:var(--primary-soft)}
+.mopt .ic{width:38px;height:38px;border-radius:10px;background:var(--surface-2);display:flex;align-items:center;justify-content:center;font-size:18px;flex:none}
+.mopt b{display:block;font-size:13.5px}.mopt small{color:var(--muted);font-size:12px}
+.mopt .rec{margin-left:auto;font-size:10.5px;font-weight:700;background:var(--green-soft);color:var(--green);border-radius:999px;padding:2px 8px}
+.qrwrap{display:flex;gap:18px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px}
+.qr{width:132px;height:132px;border-radius:10px;flex:none;background:
+  conic-gradient(#000 25%, #fff 0 50%, #000 0 75%, #fff 0) 0 0/16px 16px,
+  linear-gradient(#fff,#fff);background-blend-mode:normal;border:6px solid #fff;box-shadow:0 0 0 1px var(--line);
+  image-rendering:pixelated}
+.codes{display:grid;grid-template-columns:1fr 1fr;gap:8px;background:var(--surface-2);border:1px dashed var(--line);border-radius:12px;padding:14px;margin-bottom:8px}
+.codes code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px;letter-spacing:1px;text-align:center;padding:5px;background:var(--surface);border-radius:7px}
+
+/* ---- Onboarding wizard ---- */
+.wiz{min-height:100vh;display:grid;grid-template-columns:300px 1fr;background:var(--bg)}
+.wizrail{background:var(--surface);border-right:1px solid var(--line);padding:30px 26px;display:flex;flex-direction:column}
+.wizrail .brand{display:flex;align-items:center;gap:11px;font-weight:800;font-size:19px;margin-bottom:34px}
+.wizrail .brand .dot{width:36px;height:36px;border-radius:10px;background:var(--primary);color:#fff;display:flex;align-items:center;justify-content:center;font-size:18px}
+.steps{display:flex;flex-direction:column;gap:2px;flex:1}
+.step{display:flex;gap:13px;align-items:flex-start;padding:11px 10px;border-radius:11px;cursor:default}
+.step .num{width:28px;height:28px;border-radius:50%;border:1.5px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:var(--muted);flex:none;background:var(--surface)}
+.step .lbl b{display:block;font-size:13.5px;color:var(--muted)}
+.step .lbl small{color:var(--subtle);font-size:11.5px}
+.step.on{background:var(--primary-soft)}
+.step.on .num{border-color:var(--primary);background:var(--primary);color:#fff}
+.step.on .lbl b{color:var(--ink)}
+.step.done .num{border-color:var(--green);background:var(--green);color:#fff}
+.step.done .lbl b{color:var(--ink)}
+.wizmain{padding:48px 56px;overflow:auto;max-height:100vh}
+.wizmain .panel{max-width:620px}
+.wizmain h1{font-size:25px;margin:0 0 6px}
+.wizmain .lead{color:var(--muted);font-size:14px;margin-bottom:28px}
+.wizfoot{display:flex;align-items:center;gap:12px;margin-top:30px;max-width:620px}
+.wizfoot .spacer{flex:1}
+.wizpane{display:none}.wizpane.on{display:block;animation:fade .25s ease}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+/* selectable cards (frameworks, engines, plans) */
+.cardgrid{display:grid;gap:11px}
+.cardgrid.c2{grid-template-columns:1fr 1fr}
+.cardgrid.c3{grid-template-columns:repeat(3,1fr)}
+.selcard{border:1.5px solid var(--line);border-radius:13px;padding:14px;cursor:pointer;background:var(--surface);position:relative;transition:border-color .12s,background .12s}
+.selcard:hover{border-color:var(--primary-ring)}
+.selcard.on{border-color:var(--primary);background:var(--primary-soft)}
+.selcard .ic{font-size:20px}
+.selcard b{display:block;font-size:13.5px;margin:7px 0 2px}
+.selcard small{color:var(--muted);font-size:11.5px;line-height:1.4;display:block}
+.selcard .tick{position:absolute;top:10px;right:10px;width:20px;height:20px;border-radius:50%;background:var(--primary);color:#fff;display:none;align-items:center;justify-content:center;font-size:12px}
+.selcard.on .tick{display:flex}
+.selcard .price{font-size:18px;font-weight:800;margin-top:4px}.selcard .price small{font-weight:500;color:var(--muted)}
+
+/* invite rows */
+.invrow{display:grid;grid-template-columns:1fr 150px 34px;gap:9px;margin-bottom:9px;align-items:center}
+.invrow .x{border:1px solid var(--line);background:var(--surface);border-radius:9px;height:36px;cursor:pointer;color:var(--muted);font-size:15px}
+.addrow{background:none;border:0;color:var(--primary);font-weight:600;font-size:13px;cursor:pointer;font-family:var(--font);padding:4px 0}
+
+/* provisioning progress */
+.prov{display:flex;flex-direction:column;gap:2px;margin:8px 0 4px}
+.provrow{display:flex;align-items:center;gap:13px;padding:13px 4px;border-bottom:1px solid var(--line-2)}
+.provrow .pi{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;flex:none;background:var(--surface-2);color:var(--muted)}
+.provrow.done .pi{background:var(--green-soft);color:var(--green)}
+.provrow.run .pi{background:var(--primary-soft);color:var(--primary);animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.provrow b{font-size:13.5px;font-weight:600}.provrow small{color:var(--muted);font-size:12px;display:block}
+.provrow .st{margin-left:auto;font-size:12px;font-weight:600;color:var(--muted)}
+.provrow.done .st{color:var(--green)}
+
+@media(max-width:880px){
+  body.auth{grid-template-columns:1fr}
+  .brandpane{display:none}
+  .mini-brand{display:flex}
+  .wiz{grid-template-columns:1fr}
+  .wizrail{flex-direction:row;align-items:center;overflow-x:auto;padding:16px}
+  .wizrail .brand{margin:0 24px 0 0}
+  .steps{flex-direction:row}
+  .step .lbl{display:none}
+  .wizmain{padding:28px 22px}
+  .row2,.cardgrid.c2,.cardgrid.c3{grid-template-columns:1fr}
+}

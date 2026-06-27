@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Tenant Impersonation</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1>Tenant Impersonation</h1>
+      <div class="meta"><span>restricted access &middot; full session recording &middot; auto-revoke</span></div>
+    </div>
+  </div>
+
+  <!-- Warning banner -->
+  <div style="background:var(--danger-soft);border:1.5px solid var(--danger);border-radius:var(--radius-lg);padding:14px 18px;margin-bottom:14px;display:flex;align-items:flex-start;gap:12px">
+    <span style="font-size:18px;flex-shrink:0;margin-top:1px">&#9888;</span>
+    <div>
+      <div style="font-weight:700;font-size:14px;color:var(--danger);margin-bottom:4px">Restricted Action &mdash; Impersonation Session</div>
+      <div style="font-size:12.5px;color:var(--danger);opacity:.85;line-height:1.55">
+        Tenant impersonation grants full access to a tenant environment under your identity. All actions are <b>recorded and hash-chained</b> in the immutable audit log.
+        Sessions are <b>time-limited</b> and auto-revoke at expiry. Requires valid justification and may require manager approval for Enterprise tenants.
+        Abuse of impersonation privileges is grounds for immediate access revocation.
+      </div>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <!-- Request form -->
+    <div class="card">
+      <div class="hd"><span class="t">Request Impersonation Session</span></div>
+      <div class="bd">
+        <div class="fld">
+          <label>Select Tenant <span class="req">*</span></label>
+          <select id="impTenant">
+            <option value="">-- Select tenant --</option>
+            <option value="meridian">Meridian Financial (US-East)</option>
+            <option value="bnb">Bharat National Bank (IN-Mumbai)</option>
+            <option value="nordic">Nordic Insurance Group (EU-West)</option>
+            <option value="pacific">Pacific Health Partners (US-West)</option>
+            <option value="royal">Royal Commerce UK (UK-South)</option>
+            <option value="techstart">TechStart Inc (US-East)</option>
+            <option value="govdata">GovData India (IN-Mumbai)</option>
+          </select>
+        </div>
+        <div class="fld">
+          <label>Justification <span class="req">*</span></label>
+          <textarea rows="3" placeholder="Describe the reason for impersonation (e.g., support ticket investigation, configuration assistance)..." id="impJustification"></textarea>
+          <span class="hint">Required. This is logged permanently in the audit trail.</span>
+        </div>
+        <div class="formgrid">
+          <div class="fld">
+            <label>Duration</label>
+            <select id="impDuration">
+              <option value="30">30 minutes</option>
+              <option value="60" selected>1 hour</option>
+              <option value="120">2 hours (max)</option>
+            </select>
+          </div>
+          <div class="fld">
+            <label>Support Ticket Reference</label>
+            <input type="text" placeholder="e.g., SUP-2026-4821" id="impTicket">
+          </div>
+        </div>
+        <div style="margin-top:6px">
+          <button class="btn primary" id="btnRequestImp" onclick="handleImpRequest()">&#9655; Request Impersonation</button>
+        </div>
+
+        <!-- Approval status (hidden initially) -->
+        <div id="impStatus" style="display:none;margin-top:14px;padding:13px 15px;border-radius:var(--radius);border:1px solid var(--line);background:var(--surface-2)">
+          <div style="font-weight:700;font-size:13px;margin-bottom:8px">Approval Status</div>
+          <div id="impSteps" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Active sessions -->
+    <div class="card">
+      <div class="hd"><span class="t">Active Sessions</span><span class="s">2 active</span></div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Operator</th>
+              <th>Tenant</th>
+              <th>Started</th>
+              <th>Expires</th>
+              <th class="num">Actions</th>
+              <th>Status</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>Ravi Mehta</b><br><small class="muted">ravi.m@toovix.io</small></td>
+              <td>Bharat National Bank</td>
+              <td><small class="muted">23 Jun 14:22</small></td>
+              <td><small class="muted">23 Jun 15:22</small></td>
+              <td class="num">47</td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><button class="btn" style="padding:5px 10px;font-size:12px" onclick="pf.toast('Session terminated','ok')">End</button></td>
+            </tr>
+            <tr>
+              <td><b>Priya Sharma</b><br><small class="muted">priya.s@toovix.io</small></td>
+              <td>Meridian Financial</td>
+              <td><small class="muted">23 Jun 13:55</small></td>
+              <td><small class="muted">23 Jun 15:55</small></td>
+              <td class="num">23</td>
+              <td><span class="badge green dot">Active</span></td>
+              <td><button class="btn" style="padding:5px 10px;font-size:12px" onclick="pf.toast('Session terminated','ok')">End</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent impersonation log -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Recent Impersonation Log</span><span class="s">Last 30 days</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Operator</th>
+            <th>Tenant</th>
+            <th>Date</th>
+            <th>Duration</th>
+            <th class="num">Actions</th>
+            <th>Justification</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Ravi Mehta</b></td>
+            <td>Bharat National Bank</td>
+            <td class="muted">23 Jun 2026</td>
+            <td>38 min</td>
+            <td class="num">47</td>
+            <td><small class="muted">SUP-2026-4821 &middot; Investigating slow query alert config</small></td>
+            <td><span class="badge green">Active</span></td>
+          </tr>
+          <tr>
+            <td><b>Priya Sharma</b></td>
+            <td>Meridian Financial</td>
+            <td class="muted">23 Jun 2026</td>
+            <td>25 min</td>
+            <td class="num">23</td>
+            <td><small class="muted">SUP-2026-4819 &middot; SSO SAML attribute mapping fix</small></td>
+            <td><span class="badge green">Active</span></td>
+          </tr>
+          <tr>
+            <td><b>Akash Patel</b></td>
+            <td>GovData India</td>
+            <td class="muted">22 Jun 2026</td>
+            <td>1h 12min</td>
+            <td class="num">84</td>
+            <td><small class="muted">SUP-2026-4815 &middot; KMS key rotation assistance</small></td>
+            <td><span class="badge">Completed</span></td>
+          </tr>
+          <tr>
+            <td><b>James Wilson</b></td>
+            <td>Pacific Health Partners</td>
+            <td class="muted">21 Jun 2026</td>
+            <td>45 min</td>
+            <td class="num">31</td>
+            <td><small class="muted">SUP-2026-4808 &middot; HIPAA audit report generation issue</small></td>
+            <td><span class="badge">Completed</span></td>
+          </tr>
+          <tr>
+            <td><b>Ravi Mehta</b></td>
+            <td>Nordic Insurance Group</td>
+            <td class="muted">20 Jun 2026</td>
+            <td>22 min</td>
+            <td class="num">14</td>
+            <td><small class="muted">SUP-2026-4801 &middot; Agent enrollment token regeneration</small></td>
+            <td><span class="badge">Completed</span></td>
+          </tr>
+          <tr>
+            <td><b>Priya Sharma</b></td>
+            <td>Royal Commerce UK</td>
+            <td class="muted">19 Jun 2026</td>
+            <td>1h 58min</td>
+            <td class="num">112</td>
+            <td><small class="muted">SUP-2026-4796 &middot; Data masking policy debugging</small></td>
+            <td><span class="badge amber">Auto-revoked</span></td>
+          </tr>
+          <tr>
+            <td><b>Akash Patel</b></td>
+            <td>TechStart Inc</td>
+            <td class="muted">18 Jun 2026</td>
+            <td>15 min</td>
+            <td class="num">8</td>
+            <td><small class="muted">SUP-2026-4790 &middot; Trial onboarding walkthrough</small></td>
+            <td><span class="badge">Completed</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doImpersonation, 100);
+})();
+function doImpersonation(){
+  /* page is static -- interactive demo only */
+}
+function handleImpRequest(){
+  var tenant = document.getElementById("impTenant").value;
+  var justification = document.getElementById("impJustification").value;
+  if(!tenant){ pf.toast("Please select a tenant","err"); return; }
+  if(!justification.trim()){ pf.toast("Justification is required","err"); return; }
+
+  var status = document.getElementById("impStatus");
+  var steps = document.getElementById("impSteps");
+  status.style.display = "block";
+
+  var stepsData = [
+    { label: "Requested", color: "var(--green)", done: true },
+    { label: "Pending Approval", color: "var(--amber)", done: false },
+    { label: "Approved", color: "var(--muted)", done: false },
+    { label: "Active", color: "var(--muted)", done: false }
+  ];
+
+  function renderSteps(idx){
+    var html = "";
+    for(var i = 0; i < stepsData.length; i++){
+      var bg = i <= idx ? (i === idx ? "var(--amber)" : "var(--green)") : "var(--line)";
+      var fg = i <= idx ? "#fff" : "var(--muted)";
+      html += "<span style=\"display:inline-flex;align-items:center;gap:5px\">" +
+        "<span style=\"width:22px;height:22px;border-radius:50%;background:" + bg + ";color:" + fg + ";display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700\">" + (i <= idx ? "&#10003;" : (i + 1)) + "</span>" +
+        "<span style=\"font-size:12px;font-weight:" + (i === idx ? "700" : "500") + ";color:" + (i <= idx ? "var(--ink)" : "var(--muted)") + "\">" + stepsData[i].label + "</span>" +
+        "</span>";
+      if(i < stepsData.length - 1) html += "<span style=\"flex:0 0 20px;height:2px;background:" + (i < idx ? "var(--green)" : "var(--line)") + ";border-radius:1px\"></span>";
+    }
+    steps.innerHTML = html;
+  }
+
+  renderSteps(0);
+  pf.toast("Impersonation request submitted","ok");
+
+  setTimeout(function(){ renderSteps(1); pf.toast("Awaiting manager approval...","ok"); }, 1500);
+  setTimeout(function(){ renderSteps(2); pf.toast("Approved by manager","ok"); }, 3500);
+  setTimeout(function(){ renderSteps(3); pf.toast("Impersonation session active","ok"); }, 5000);
+}
+</script>
+</body></html>

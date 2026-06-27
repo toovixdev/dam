@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Canary Deployments</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="infra-health">
+
+  <div class="phead">
+    <div>
+      <h1>Canary Deployments</h1>
+      <div class="meta"><span>progressive rollout &middot; automated rollback</span></div>
+    </div>
+    <div class="acts">
+      <button class="btn primary" onclick="pf.toast('New rollout wizard would open','ok')">+ Start new rollout</button>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9655;</span> Active rollout</div><div class="kv">v2.4.2</div><div class="kd">platform</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9201;</span> Phase</div><div class="kv">Canary &mdash; 5%</div><div class="kd">started 42 min ago</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Error rate</div><div class="kv" style="color:var(--green)">0.02%</div><div class="kd up">below 0.1% threshold</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8635;</span> Rollback ready</div><div class="kv" style="color:var(--green)">Yes</div><div class="kd">auto-rollback enabled</div></div>
+  </div>
+
+  <div id="canaryContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doCanary, 100);
+})();
+function doCanary(){
+  var c = document.getElementById("canaryContent");
+  if(!c) return;
+
+  c.innerHTML =
+    "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr;margin-bottom:14px\">" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Current Rollout &mdash; v2.4.1 &rarr; v2.4.2</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:10px\"><span class=\"muted\">Deploying version</span><b>v2.4.2 (platform)</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:10px\"><span class=\"muted\">Current version</span><b>v2.4.1</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:14px\"><span class=\"muted\">Started</span><b>23 Jun 2026, 13:41 UTC</b></div>" +
+
+          "<div style=\"margin-bottom:14px\">" +
+            "<div style=\"font-size:12px;font-weight:600;margin-bottom:8px;color:var(--muted)\">Rollout phases</div>" +
+            "<div style=\"display:flex;gap:6px;align-items:center\">" +
+              "<div style=\"flex:1;padding:8px 10px;border-radius:6px;text-align:center;font-size:12px;font-weight:600;background:var(--primary);color:#fff\">Canary 5%</div>" +
+              "<span style=\"color:var(--muted)\">&#8594;</span>" +
+              "<div style=\"flex:1;padding:8px 10px;border-radius:6px;text-align:center;font-size:12px;background:var(--card);border:1px solid var(--border);color:var(--muted)\">25%</div>" +
+              "<span style=\"color:var(--muted)\">&#8594;</span>" +
+              "<div style=\"flex:1;padding:8px 10px;border-radius:6px;text-align:center;font-size:12px;background:var(--card);border:1px solid var(--border);color:var(--muted)\">50%</div>" +
+              "<span style=\"color:var(--muted)\">&#8594;</span>" +
+              "<div style=\"flex:1;padding:8px 10px;border-radius:6px;text-align:center;font-size:12px;background:var(--card);border:1px solid var(--border);color:var(--muted)\">100%</div>" +
+            "</div>" +
+          "</div>" +
+
+          "<div style=\"display:flex;gap:8px\">" +
+            "<button class=\"btn primary\" onclick=\"pf.toast('Promoting to 25% phase','ok')\">Promote to 25%</button>" +
+            "<button class=\"btn\" onclick=\"pf.toast('Rollout paused','ok')\">Pause</button>" +
+            "<button class=\"btn\" style=\"color:var(--danger);border-color:var(--danger)\" onclick=\"pf.toast('Rolling back to v2.4.1','err')\">Rollback</button>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Canary Metrics</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"margin-bottom:14px\">" +
+            "<div style=\"font-size:12px;font-weight:600;margin-bottom:6px\">Error rate (canary vs baseline)</div>" +
+            "<div id=\"chCanaryErr\"></div>" +
+          "</div>" +
+          "<div style=\"margin-bottom:14px\">" +
+            "<div style=\"font-size:12px;font-weight:600;margin-bottom:6px\">p99 latency (ms)</div>" +
+            "<div id=\"chCanaryLat\"></div>" +
+          "</div>" +
+          "<div>" +
+            "<div style=\"font-size:12px;font-weight:600;margin-bottom:6px\">Affected tenants (canary pool)</div>" +
+            "<div style=\"font-size:12.5px\">" +
+              "<div style=\"display:flex;justify-content:space-between;margin-bottom:4px\"><span>TechStart Inc</span><span class=\"badge green\">healthy</span></div>" +
+              "<div style=\"display:flex;justify-content:space-between;margin-bottom:4px\"><span>Nordic Insurance Group</span><span class=\"badge green\">healthy</span></div>" +
+              "<div style=\"display:flex;justify-content:space-between\"><span>Royal Commerce UK</span><span class=\"badge green\">healthy</span></div>" +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+
+    "</div>" +
+
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Rollout History</span><span class=\"s\">Last 6 rollouts</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Version</th><th>Type</th><th>Phases completed</th><th>Duration</th><th>Date</th><th>Outcome</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>v2.4.2</b></td><td><span class=\"badge\">Platform</span></td><td>1 of 4 (Canary 5%)</td><td class=\"muted\">In progress</td><td class=\"muted\">23 Jun 2026</td><td><span class=\"badge blue dot\">Active</span></td></tr>" +
+            "<tr><td><b>v2.4.1</b></td><td><span class=\"badge\">Platform</span></td><td>4 of 4</td><td>2h 14m</td><td class=\"muted\">19 Jun 2026</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td><b>v2.4.0</b></td><td><span class=\"badge\">Platform</span></td><td>4 of 4</td><td>3h 08m</td><td class=\"muted\">12 Jun 2026</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td><b>v7.1.2</b></td><td><span class=\"badge blue\">Agent</span></td><td>4 of 4</td><td>1h 42m</td><td class=\"muted\">10 Jun 2026</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td><b>v2.3.9</b></td><td><span class=\"badge\">Platform</span></td><td>2 of 4 (50%)</td><td>48m</td><td class=\"muted\">05 Jun 2026</td><td><span class=\"badge amber dot\">Rolled back</span></td></tr>" +
+            "<tr><td><b>CP-2026-06</b></td><td><span class=\"badge ind\">Content</span></td><td>4 of 4</td><td>52m</td><td class=\"muted\">01 Jun 2026</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>";
+
+  if(window.pf){
+    pf.line("#chCanaryErr",{labels:["0m","10m","20m","30m","40m"],lines:[
+      {name:"Canary",color:"var(--amber)",points:[0.01,0.02,0.03,0.02,0.02]},
+      {name:"Baseline",color:"var(--green)",points:[0.01,0.01,0.01,0.01,0.01]}
+    ]},{height:120});
+    pf.line("#chCanaryLat",{labels:["0m","10m","20m","30m","40m"],lines:[
+      {name:"Canary p99",color:"var(--amber)",points:[42,48,51,47,45]},
+      {name:"Baseline p99",color:"var(--green)",points:[40,41,40,42,41]}
+    ]},{height:120});
+  }
+}
+</script>
+</body></html>

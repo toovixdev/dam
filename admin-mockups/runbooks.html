@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Runbook Automation</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="infra-health">
+
+  <div class="phead">
+    <div>
+      <h1>Runbooks</h1>
+      <div class="meta"><span>pre-built incident playbooks &middot; one-click execution</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9776;</span> Runbooks available</div><div class="kv">12</div><div class="kd">across 4 categories</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#9655;</span> Executed this month</div><div class="kv">8</div><div class="kd up">&#9650; 2 vs last month</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9201;</span> Avg resolution</div><div class="kv">4.2 min</div><div class="kd up">down from 6.8 min</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Success rate</div><div class="kv" style="color:var(--green)">94%</div><div class="kd up">15 of 16 last runs</div></div>
+  </div>
+
+  <div id="runbookContent"></div>
+
+  <div id="runModal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center">
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:24px;max-width:480px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.3)">
+      <h3 style="margin:0 0 4px;font-size:16px" id="modalTitle">Run Runbook</h3>
+      <div style="font-size:12.5px;color:var(--muted);margin-bottom:16px" id="modalDesc">Description</div>
+      <div style="margin-bottom:12px">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Target region</label>
+        <select style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--fg);font-size:13px">
+          <option>All regions</option>
+          <option>US-East</option>
+          <option>EU-West</option>
+          <option selected>IN-Mumbai</option>
+          <option>UK-South</option>
+          <option>CA-Central</option>
+        </select>
+      </div>
+      <div style="margin-bottom:16px">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Target tenant (optional)</label>
+        <select style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--fg);font-size:13px">
+          <option selected>All tenants in region</option>
+          <option>Meridian Financial</option>
+          <option>Bharat National Bank</option>
+          <option>Nordic Insurance Group</option>
+        </select>
+      </div>
+      <div style="padding:10px 12px;border-radius:6px;background:var(--amber-soft);font-size:12px;color:var(--amber);margin-bottom:16px">&#9888; This runbook will execute automated steps. Ensure you have reviewed the target scope before proceeding.</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end">
+        <button class="btn" onclick="document.getElementById('runModal').style.display='none'">Cancel</button>
+        <button class="btn primary" onclick="document.getElementById('runModal').style.display='none';pf.toast('Runbook execution started','ok')">Execute</button>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doRunbooks, 100);
+})();
+function doRunbooks(){
+  var c = document.getElementById("runbookContent");
+  if(!c) return;
+
+  var runbooks = [
+    { name:"Agent offline recovery",       cat:"Agent",      last:"23 Jun",  dur:"2.1 min", rate:"100%", desc:"Restarts unresponsive agents and re-establishes heartbeat connections." },
+    { name:"ClickHouse partition cleanup",  cat:"Infra",      last:"21 Jun",  dur:"8.4 min", rate:"92%",  desc:"Removes expired partitions and reclaims disk space on ClickHouse nodes." },
+    { name:"Kafka consumer lag fix",        cat:"Infra",      last:"22 Jun",  dur:"3.6 min", rate:"88%",  desc:"Rebalances consumer groups and clears stuck offsets." },
+    { name:"Outbox stuck recovery",         cat:"Infra",      last:"18 Jun",  dur:"1.8 min", rate:"100%", desc:"Retries stuck outbox messages and clears poison-pill entries." },
+    { name:"Ingest pipeline restart",       cat:"Infra",      last:"20 Jun",  dur:"4.2 min", rate:"100%", desc:"Gracefully restarts the ingest pipeline with zero event loss." },
+    { name:"Certificate renewal",           cat:"Security",   last:"15 Jun",  dur:"6.1 min", rate:"100%", desc:"Renews mTLS certificates for agent gateways and rotates CA if needed." },
+    { name:"Tenant provisioning retry",     cat:"Tenant",     last:"19 Jun",  dur:"3.8 min", rate:"88%",  desc:"Retries failed provisioning steps for a tenant setup." },
+    { name:"Classification scan re-run",    cat:"Tenant",     last:"22 Jun",  dur:"5.4 min", rate:"100%", desc:"Re-runs data classification scans for specified tenant databases." },
+    { name:"VA scan re-run",               cat:"Security",   last:"17 Jun",  dur:"7.2 min", rate:"92%",  desc:"Re-runs vulnerability assessment scans on target databases." },
+    { name:"Hash-chain repair",             cat:"Security",   last:"14 Jun",  dur:"4.8 min", rate:"86%",  desc:"Detects and repairs broken hash-chain links in the tamper-proof audit log." },
+    { name:"Data plane re-sync",            cat:"Infra",      last:"16 Jun",  dur:"9.2 min", rate:"92%",  desc:"Forces re-synchronization of data plane state across cluster replicas." },
+    { name:"Alert dispatcher restart",      cat:"Tenant",     last:"21 Jun",  dur:"1.4 min", rate:"100%", desc:"Restarts the alert dispatcher service and flushes pending alert queue." }
+  ];
+
+  var catColors = { "Agent":"var(--primary)", "Infra":"var(--info)", "Security":"var(--amber)", "Tenant":"var(--green)" };
+
+  var rows = "";
+  for(var i=0; i<runbooks.length; i++){
+    var rb = runbooks[i];
+    var catColor = catColors[rb.cat] || "var(--muted)";
+    rows +=
+      "<tr>" +
+        "<td><b>" + rb.name + "</b></td>" +
+        "<td><span class=\"badge\" style=\"background:color-mix(in srgb, " + catColor + " 15%, transparent);color:" + catColor + "\">" + rb.cat + "</span></td>" +
+        "<td class=\"muted\">" + rb.last + "</td>" +
+        "<td class=\"num\">" + rb.dur + "</td>" +
+        "<td class=\"num\">" + rb.rate + "</td>" +
+        "<td><button class=\"btn primary\" style=\"font-size:11px;padding:3px 10px\" data-rb=\"" + i + "\">Run</button></td>" +
+      "</tr>";
+  }
+
+  c.innerHTML =
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Runbook Library</span><span class=\"s\">12 playbooks</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\" id=\"rbTable\">" +
+          "<thead><tr><th>Runbook</th><th>Category</th><th>Last run</th><th class=\"num\">Avg duration</th><th class=\"num\">Success rate</th><th>Action</th></tr></thead>" +
+          "<tbody>" + rows + "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>" +
+
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Execution Log</span><span class=\"s\">Recent executions</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Timestamp</th><th>Runbook</th><th>Operator</th><th>Target</th><th class=\"num\">Duration</th><th>Outcome</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td class=\"muted\">23 Jun 14:35</td><td><b>Agent offline recovery</b></td><td>Platform Ops</td><td>US-East &middot; Meridian Financial</td><td class=\"num\">2.1 min</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td class=\"muted\">22 Jun 11:20</td><td><b>Kafka consumer lag fix</b></td><td>Platform Ops</td><td>EU-West &middot; All tenants</td><td class=\"num\">3.6 min</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td class=\"muted\">22 Jun 09:14</td><td><b>Classification scan re-run</b></td><td>Platform Ops</td><td>IN-Mumbai &middot; Bharat National Bank</td><td class=\"num\">5.4 min</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td class=\"muted\">21 Jun 16:42</td><td><b>ClickHouse partition cleanup</b></td><td>Platform Ops</td><td>IN-Mumbai &middot; All tenants</td><td class=\"num\">8.4 min</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td class=\"muted\">21 Jun 10:05</td><td><b>Alert dispatcher restart</b></td><td>Platform Ops</td><td>US-East &middot; All tenants</td><td class=\"num\">1.4 min</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td class=\"muted\">20 Jun 14:18</td><td><b>Ingest pipeline restart</b></td><td>Platform Ops</td><td>EU-West &middot; Nordic Insurance</td><td class=\"num\">4.2 min</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+            "<tr><td class=\"muted\">19 Jun 08:30</td><td><b>Tenant provisioning retry</b></td><td>Platform Ops</td><td>US-East &middot; TechStart Inc</td><td class=\"num\">3.8 min</td><td><span class=\"badge amber dot\">Failed</span></td></tr>" +
+            "<tr><td class=\"muted\">18 Jun 22:10</td><td><b>Outbox stuck recovery</b></td><td>Platform Ops</td><td>All regions</td><td class=\"num\">1.8 min</td><td><span class=\"badge green dot\">Success</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>";
+
+  var modal = document.getElementById("runModal");
+  var mTitle = document.getElementById("modalTitle");
+  var mDesc = document.getElementById("modalDesc");
+
+  document.querySelectorAll("[data-rb]").forEach(function(btn){
+    btn.onclick = function(){
+      var idx = parseInt(btn.dataset.rb);
+      mTitle.textContent = "Run: " + runbooks[idx].name;
+      mDesc.textContent = runbooks[idx].desc;
+      modal.style.display = "flex";
+    };
+  });
+}
+</script>
+</body></html>

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — SSO &amp; SCIM</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenant-sso">
+
+  <div class="phead">
+    <div>
+      <h1>SSO &amp; SCIM Configuration</h1>
+      <div class="meta"><span>Meridian Financial &middot; Identity &amp; access provisioning</span></div>
+    </div>
+  </div>
+
+  <div id="ssoContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doSso, 100);
+})();
+function doSso(){
+  var c = document.getElementById("ssoContent");
+  if(!c) return;
+
+  c.innerHTML =
+    /* --- SSO Connections --- */
+    "<div style=\"margin-bottom:10px\"><h2 style=\"font-size:14px;font-weight:700;margin:0\">Active SSO Connections</h2></div>" +
+
+    "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr;margin-bottom:14px\">" +
+      /* Azure AD */
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Azure AD</span><span class=\"badge ind\" style=\"margin-left:8px\">Primary</span><span class=\"s\">OIDC</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Protocol</span><b>OpenID Connect (OIDC)</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Tenant ID</span><span class=\"mono\" style=\"font-size:12px\">a3f8c291-4e7b-4d12-9a56-8e3f1c2d4b67</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Domain</span><b>meridianfin.onmicrosoft.com</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Client ID</span><span class=\"mono\" style=\"font-size:12px\">7c4e9f21-b8a3-4612-af9e-2d1c5b8f3a47</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Redirect URI</span><span class=\"mono\" style=\"font-size:11px\">https://meridian.toovix.io/auth/callback</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Status</span><span class=\"badge green dot\">Connected</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Last sync</span><b>23 Jun 2026, 08:42 UTC</b></div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+
+      /* Okta */
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Okta</span><span class=\"badge\" style=\"margin-left:8px\">Secondary</span><span class=\"s\">SAML 2.0</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Protocol</span><b>SAML 2.0</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Okta domain</span><b>meridianfin.okta.com</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Entity ID</span><span class=\"mono\" style=\"font-size:11px\">https://meridianfin.okta.com/app/exk9a8b7c6d5e4f3</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">ACS URL</span><span class=\"mono\" style=\"font-size:11px\">https://meridian.toovix.io/auth/saml/acs</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Status</span><span class=\"badge green dot\">Connected</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Last sync</span><b>23 Jun 2026, 06:15 UTC</b></div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>" +
+
+    /* --- SCIM Provisioning --- */
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">SCIM Provisioning</span><span class=\"badge green\" style=\"margin-left:8px\">Active</span></div>" +
+      "<div class=\"bd\">" +
+        "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr;gap:20px\">" +
+          "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">SCIM endpoint</span><span class=\"mono\" style=\"font-size:11px\">https://api.toovix.io/scim/v2/meridian</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Status</span><span class=\"badge green dot\">Active</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px;align-items:center\"><span class=\"muted\">Auto-deprovision</span><span style=\"display:inline-flex;align-items:center;gap:6px\"><span class=\"badge green\">Enabled</span> <small class=\"muted\">revoke on IdP removal</small></span></div>" +
+          "</div>" +
+          "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Last sync</span><b>23 Jun 2026, 08:42 UTC</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Users synced</span><b>38</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Groups mapped</span><b>6</b></div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>" +
+
+    /* --- Group-to-role mapping --- */
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Group-to-Role Mapping</span><span class=\"s\">Azure AD groups &rarr; TooVix roles</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Azure AD Group</th><th>TooVix Role</th><th class=\"num\">Members</th><th>Permissions</th><th>Status</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>MF-DBA-Admins</b><br><small class=\"muted\">SG-meridian-dba-admins</small></td><td><span class=\"badge ind\">Tenant Admin</span></td><td class=\"num\">4</td><td><small class=\"muted\">Full tenant config, user mgmt, KMS, SSO</small></td><td><span class=\"badge green dot\">Synced</span></td></tr>" +
+            "<tr><td><b>MF-Security-Ops</b><br><small class=\"muted\">SG-meridian-secops</small></td><td><span class=\"badge blue\">Security Analyst</span></td><td class=\"num\">8</td><td><small class=\"muted\">View audit logs, alerts, VA reports, exports</small></td><td><span class=\"badge green dot\">Synced</span></td></tr>" +
+            "<tr><td><b>MF-DBA-Team</b><br><small class=\"muted\">SG-meridian-dba-team</small></td><td><span class=\"badge\">DBA Operator</span></td><td class=\"num\">12</td><td><small class=\"muted\">Agent management, monitoring, basic config</small></td><td><span class=\"badge green dot\">Synced</span></td></tr>" +
+            "<tr><td><b>MF-Compliance</b><br><small class=\"muted\">SG-meridian-compliance</small></td><td><span class=\"badge\">Compliance Auditor</span></td><td class=\"num\">6</td><td><small class=\"muted\">Read-only audit, chain verification, exports</small></td><td><span class=\"badge green dot\">Synced</span></td></tr>" +
+            "<tr><td><b>MF-DevOps</b><br><small class=\"muted\">SG-meridian-devops</small></td><td><span class=\"badge\">API Integrator</span></td><td class=\"num\">5</td><td><small class=\"muted\">API keys, webhooks, Terraform provider</small></td><td><span class=\"badge green dot\">Synced</span></td></tr>" +
+            "<tr><td><b>MF-Analysts</b><br><small class=\"muted\">SG-meridian-analysts</small></td><td><span class=\"badge\">Read-only Viewer</span></td><td class=\"num\">3</td><td><small class=\"muted\">Dashboard view, scheduled reports</small></td><td><span class=\"badge green dot\">Synced</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>" +
+
+    /* --- MFA Enforcement --- */
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">MFA Enforcement</span><span class=\"badge green\" style=\"margin-left:8px\">Enforced</span></div>" +
+      "<div class=\"bd\">" +
+        "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr 1fr;gap:20px\">" +
+          "<div>" +
+            "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Policy</span><b style=\"color:var(--green)\">Mandatory for all users</b></div>" +
+              "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Grace period</span><b>None (immediate)</b></div>" +
+            "</div>" +
+          "</div>" +
+          "<div>" +
+            "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Allowed methods</span><b>TOTP, WebAuthn, Push</b></div>" +
+              "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Enrolled users</span><b>38 / 38 (100%)</b></div>" +
+            "</div>" +
+          "</div>" +
+          "<div>" +
+            "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Session timeout</span><b>8 hours</b></div>" +
+              "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Re-auth for admin</span><b style=\"color:var(--green)\">Yes (step-up)</b></div>" +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>";
+}
+</script>
+</body></html>

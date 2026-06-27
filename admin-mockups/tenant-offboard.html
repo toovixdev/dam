@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Tenant Offboarding</title>
+<link rel="stylesheet" href="assets/app.css">
+<style>
+.ob-phase{display:flex;gap:0;margin:20px 0}
+.ob-ph{flex:1;text-align:center;padding:12px 8px;position:relative;font-size:12px;font-weight:600;color:var(--subtle);background:var(--surface-2);border:1px solid var(--line)}
+.ob-ph:first-child{border-radius:10px 0 0 10px}
+.ob-ph:last-child{border-radius:0 10px 10px 0}
+.ob-ph.done{background:var(--green-soft);border-color:rgba(22,163,74,.3);color:var(--green)}
+.ob-ph.active{background:var(--primary-soft);border-color:var(--primary);color:var(--primary)}
+.ob-ph.pending{background:var(--surface-2);color:var(--subtle)}
+.ob-ph b{display:block;font-size:13px;margin-bottom:2px}
+.ob-ph small{font-weight:400}
+.chk-list{display:flex;flex-direction:column;gap:6px}
+.chk-item{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;font-size:13px}
+.chk-item.done{border-color:rgba(22,163,74,.3);background:var(--green-soft)}
+.chk-item.blocked{border-color:rgba(225,29,72,.2);background:var(--danger-soft)}
+.chk-dot{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none;border:1.5px solid var(--line);color:var(--muted);background:var(--surface)}
+.chk-item.done .chk-dot{border-color:var(--green);background:var(--green);color:#fff}
+.chk-item.blocked .chk-dot{border-color:var(--danger);background:var(--danger);color:#fff}
+.chk-body{flex:1}
+.chk-body b{display:block;font-size:13px}
+.chk-body small{font-size:11.5px;color:var(--muted)}
+.chk-item.done .chk-body small{color:var(--green)}
+.chk-item.blocked .chk-body small{color:var(--danger)}
+.chk-action{font-size:11.5px;color:var(--muted);flex:none}
+.countdown{display:flex;align-items:center;gap:16px;padding:18px 22px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;margin-bottom:18px}
+.countdown .cd-num{font-size:36px;font-weight:900;color:var(--amber);line-height:1}
+.countdown .cd-label{font-size:13px;color:var(--muted)}
+.countdown .cd-label b{color:var(--ink);display:block;font-size:14px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.dep-steps{display:flex;flex-direction:column;gap:2px;margin:16px 0}
+.dep-step{display:flex;align-items:center;gap:14px;padding:12px 14px;border-radius:10px;background:var(--surface-2);border:1px solid var(--line)}
+.dep-step.active{border-color:var(--primary);background:var(--primary-soft)}
+.dep-step.done{border-color:var(--green);background:var(--green-soft)}
+.dep-dot{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex:none;background:var(--surface);border:1.5px solid var(--line);color:var(--muted)}
+.dep-step.active .dep-dot{border-color:var(--primary);background:var(--primary);color:#fff;animation:spin 1s linear infinite}
+.dep-step.done .dep-dot{border-color:var(--green);background:var(--green);color:#fff}
+@keyframes spin{to{transform:rotate(360deg)}}
+.dep-info{flex:1}.dep-info b{font-size:13.5px;display:block}.dep-info small{font-size:12px;color:var(--muted)}
+.dep-step.done .dep-info small{color:var(--green)}
+.dep-time{font-size:11px;color:var(--subtle)}
+.cert-card{text-align:center;padding:28px;background:var(--green-soft);border:1px solid rgba(22,163,74,.2);border-radius:14px;margin-top:16px}
+.cert-card .ci{width:64px;height:64px;border-radius:50%;background:var(--green);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:28px;margin-bottom:14px}
+</style>
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1 id="pageTitle">Tenant Offboarding</h1>
+      <div class="meta" id="pageMeta"><span>lifecycle management &middot; grace period &middot; data destruction</span></div>
+    </div>
+    <div class="acts"><a class="btn" href="tenants.html">&larr; Back to tenants</a></div>
+  </div>
+
+  <div id="obContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doOffboard, 100);
+})();
+
+function doOffboard(){
+  var params = new URLSearchParams(window.location.search);
+  var tenantSlug = params.get("tenant") || "royal-comm";
+  var tenantName = params.get("name") || "Royal Commerce UK";
+
+  var titleEl = document.getElementById("pageTitle");
+  if(titleEl) titleEl.textContent = "Offboard — " + tenantName;
+
+  var container = document.getElementById("obContent");
+  if(!container) return;
+
+  // Simulate offboarding state — in grace period
+  var graceDays = 26;
+  var totalGrace = 30;
+  var reason = "Contract non-renewal — customer migrating to competitor";
+  var initiatedBy = "Platform Ops (ops@toovix.security)";
+  var initiatedDate = "18 Jun 2026";
+
+  container.innerHTML =
+    // Warning banner
+    '<div style="display:flex;align-items:flex-start;gap:12px;padding:16px 18px;background:var(--danger-soft);border:1px solid rgba(225,29,72,.2);border-radius:12px;margin-bottom:18px">' +
+      '<span style="font-size:20px;flex:none">&#9888;</span>' +
+      '<div style="font-size:13.5px;line-height:1.5"><b style="color:var(--danger)">Offboarding in progress</b><br>' +
+      tenantName + ' (' + tenantSlug + ') is being offboarded. The tenant admin has been notified and can see a countdown banner. ' +
+      'All data will be permanently destroyed after the grace period unless a legal hold is active.</div>' +
+    '</div>' +
+
+    // Phase visualization
+    '<div class="ob-phase">' +
+      '<div class="ob-ph done"><b>1. Initiated</b><small>' + initiatedDate + '</small></div>' +
+      '<div class="ob-ph done"><b>2. Tenant notified</b><small>Email + in-app banner</small></div>' +
+      '<div class="ob-ph active"><b>3. Grace period</b><small>' + graceDays + ' of ' + totalGrace + ' days left</small></div>' +
+      '<div class="ob-ph pending"><b>4. Pre-destruction</b><small>Checklist review</small></div>' +
+      '<div class="ob-ph pending"><b>5. Data destruction</b><small>Irreversible</small></div>' +
+      '<div class="ob-ph pending"><b>6. Certificate</b><small>Proof of destruction</small></div>' +
+    '</div>' +
+
+    // Countdown + details
+    '<div class="row2" style="margin-bottom:18px">' +
+      '<div class="countdown">' +
+        '<div class="cd-num">' + graceDays + '</div>' +
+        '<div class="cd-label"><b>Days remaining in grace period</b>Grace ends 18 Jul 2026 &middot; Destruction begins automatically</div>' +
+      '</div>' +
+      '<div class="card"><div class="bd" style="font-size:13px">' +
+        '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Reason</span><b>' + reason + '</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Initiated by</span><b>' + initiatedBy + '</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Initiated</span><b>' + initiatedDate + '</b></div>' +
+        '<div style="display:flex;justify-content:space-between;padding:4px 0"><span class="muted">Grace period</span><b>' + totalGrace + ' days (ends 18 Jul 2026)</b></div>' +
+      '</div></div>' +
+    '</div>' +
+
+    // Pre-destruction checklist
+    '<div class="card" style="margin-bottom:18px"><div class="hd"><span class="t">Pre-Destruction Checklist</span><span class="s">all items must be completed before data destruction</span></div><div class="bd">' +
+      '<div class="chk-list">' +
+
+        '<div class="chk-item done">' +
+          '<span class="chk-dot">&#10003;</span>' +
+          '<div class="chk-body"><b>Tenant admin notified</b><small>Email sent to j.whitfield@royalcomm.co.uk on 18 Jun 2026 &middot; In-app banner active</small></div>' +
+          '<span class="chk-action">Completed 18 Jun</span>' +
+        '</div>' +
+
+        '<div class="chk-item done">' +
+          '<span class="chk-dot">&#10003;</span>' +
+          '<div class="chk-body"><b>Data export offered</b><small>Export link sent to tenant admin &middot; Download available until grace period ends</small></div>' +
+          '<span class="chk-action">Completed 18 Jun</span>' +
+        '</div>' +
+
+        '<div class="chk-item">' +
+          '<span class="chk-dot">3</span>' +
+          '<div class="chk-body"><b>Data export completed or declined</b><small>Tenant admin has not yet downloaded the export or confirmed they do not need it</small></div>' +
+          '<span class="chk-action"><button class="btn tm-act" data-act="check-export" style="padding:3px 10px;font-size:11px">Check status</button></span>' +
+        '</div>' +
+
+        '<div class="chk-item done">' +
+          '<span class="chk-dot">&#10003;</span>' +
+          '<div class="chk-body"><b>Legal hold check</b><small>No active legal holds on this tenant &middot; Safe to proceed</small></div>' +
+          '<span class="chk-action">Verified 19 Jun</span>' +
+        '</div>' +
+
+        '<div class="chk-item done">' +
+          '<span class="chk-dot">&#10003;</span>' +
+          '<div class="chk-body"><b>Contract obligations met</b><small>Minimum retention period satisfied &middot; Final invoice generated</small></div>' +
+          '<span class="chk-action">Verified 19 Jun</span>' +
+        '</div>' +
+
+        '<div class="chk-item">' +
+          '<span class="chk-dot">6</span>' +
+          '<div class="chk-body"><b>SIEM / ITSM integrations disconnected</b><small>Splunk forwarder still active &middot; Must be stopped before destruction</small></div>' +
+          '<span class="chk-action"><button class="btn tm-act" data-act="disconnect-int" style="padding:3px 10px;font-size:11px">Disconnect now</button></span>' +
+        '</div>' +
+
+        '<div class="chk-item">' +
+          '<span class="chk-dot">7</span>' +
+          '<div class="chk-body"><b>SSO / SCIM deprovisioned</b><small>Azure AD SSO connection must be removed</small></div>' +
+          '<span class="chk-action"><button class="btn tm-act" data-act="deprovision-sso" style="padding:3px 10px;font-size:11px">Deprovision</button></span>' +
+        '</div>' +
+
+        '<div class="chk-item">' +
+          '<span class="chk-dot">8</span>' +
+          '<div class="chk-body"><b>API keys revoked</b><small>2 active API keys must be revoked</small></div>' +
+          '<span class="chk-action"><button class="btn tm-act" data-act="revoke-keys" style="padding:3px 10px;font-size:11px">Revoke all</button></span>' +
+        '</div>' +
+
+        '<div class="chk-item">' +
+          '<span class="chk-dot">9</span>' +
+          '<div class="chk-body"><b>Agent enrollment tokens revoked</b><small>128 agents must have tokens invalidated</small></div>' +
+          '<span class="chk-action"><button class="btn tm-act" data-act="revoke-agents" style="padding:3px 10px;font-size:11px">Revoke all</button></span>' +
+        '</div>' +
+
+        '<div class="chk-item">' +
+          '<span class="chk-dot">10</span>' +
+          '<div class="chk-body"><b>Final billing reconciliation</b><small>Final invoice $28,000 &middot; Credit balance $0 &middot; No disputes</small></div>' +
+          '<span class="chk-action"><button class="btn tm-act" data-act="finalize-billing" style="padding:3px 10px;font-size:11px">Finalize</button></span>' +
+        '</div>' +
+
+      '</div>' +
+    '</div></div>' +
+
+    // What will be destroyed
+    '<div class="card" style="margin-bottom:18px"><div class="hd"><span class="t">Data to be destroyed</span><span class="s">after grace period ends on 18 Jul 2026</span></div><div class="bd">' +
+      '<div class="row2">' +
+        '<div>' +
+          '<div style="font-size:12px;font-weight:600;color:var(--danger);margin-bottom:8px">PERMANENTLY DESTROYED</div>' +
+          '<div style="font-size:12.5px;line-height:1.8">' +
+            '&#9679; ClickHouse database <b>royal-comm</b> (41.8M events/day &times; ~90 days)<br>' +
+            '&#9679; Kafka topics (4 partitions &middot; event ingress + config sync)<br>' +
+            '&#9679; Blob storage (checkpoints, exports, backups) — ~180 GB<br>' +
+            '&#9679; KMS encryption keys (scheduled for HSM destruction after 30-day hold)<br>' +
+            '&#9679; Agent enrollment certificates (128 agents)<br>' +
+            '&#9679; Classification scan results + VA findings<br>' +
+          '</div>' +
+        '</div>' +
+        '<div>' +
+          '<div style="font-size:12px;font-weight:600;color:var(--amber);margin-bottom:8px">SOFT-DELETED (RETAINED 90 DAYS)</div>' +
+          '<div style="font-size:12.5px;line-height:1.8">' +
+            '&#9679; Control-plane Postgres records (tenant, users, policies, rules)<br>' +
+            '&#9679; Platform audit log entries (vendor actions on this tenant)<br>' +
+            '&#9679; Billing history + invoice records<br>' +
+            '&#9679; Support ticket references<br>' +
+          '</div>' +
+          '<div style="font-size:12px;font-weight:600;color:var(--green);margin-top:14px;margin-bottom:8px">GENERATED POST-DESTRUCTION</div>' +
+          '<div style="font-size:12.5px;line-height:1.8">' +
+            '&#9679; Destruction certificate (hash-signed proof)<br>' +
+            '&#9679; Final audit report of all vendor actions on this tenant<br>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div></div>' +
+
+    // Actions
+    '<div class="card"><div class="bd" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">' +
+      '<button class="btn primary" id="runDestruction" disabled style="opacity:.5">&#9940; Run destruction now</button>' +
+      '<span class="muted" style="font-size:12px">(available after grace period ends or all checklist items complete)</span>' +
+      '<span style="flex:1"></span>' +
+      '<button class="btn" id="cancelOffboard" style="border-color:var(--green);color:var(--green)">&#10003; Cancel offboarding</button>' +
+      '<a class="btn" href="tenant-export.html?tenant=' + tenantSlug + '&name=' + encodeURIComponent(tenantName) + '">&#11123; Export data</a>' +
+    '</div></div>';
+
+  // Handle checklist action buttons
+  document.addEventListener("click", function(e){
+    var actBtn = e.target.closest && e.target.closest(".tm-act");
+    if(actBtn){
+      var act = actBtn.getAttribute("data-act");
+      var item = actBtn.closest(".chk-item");
+      var msgs = {
+        "check-export": "Tenant admin has not downloaded the export yet — reminder email sent",
+        "disconnect-int": "Splunk integration disconnected for " + tenantSlug,
+        "deprovision-sso": "Azure AD SSO connection removed for " + tenantSlug,
+        "revoke-keys": "2 API keys revoked for " + tenantSlug,
+        "revoke-agents": "128 agent enrollment tokens revoked for " + tenantSlug,
+        "finalize-billing": "Final invoice $28,000 finalized — no outstanding balance"
+      };
+
+      if(act !== "check-export" && item){
+        item.classList.add("done");
+        var dot = item.querySelector(".chk-dot");
+        if(dot) dot.textContent = "✓";
+        var actionSpan = item.querySelector(".chk-action");
+        if(actionSpan) actionSpan.textContent = "Completed just now";
+        var bodySmall = item.querySelector(".chk-body small");
+        if(bodySmall) bodySmall.textContent = "Done";
+      }
+
+      if(window.pf) pf.toast(msgs[act] || act, "ok");
+
+      // Check if all items are done → enable destruction button
+      var allDone = document.querySelectorAll(".chk-item:not(.done)").length === 0;
+      var destroyBtn = document.getElementById("runDestruction");
+      if(allDone && destroyBtn){
+        destroyBtn.disabled = false;
+        destroyBtn.style.opacity = "1";
+        destroyBtn.style.borderColor = "var(--danger)";
+        destroyBtn.style.background = "var(--danger)";
+        destroyBtn.style.color = "#fff";
+      }
+      return;
+    }
+
+    // Cancel offboarding
+    if(e.target.id === "cancelOffboard"){
+      if(confirm("Cancel offboarding for " + tenantName + "? The tenant will be restored to active status.")){
+        if(window.pf) pf.toast(tenantName + " offboarding cancelled — restored to active", "ok");
+        setTimeout(function(){ window.location.href = "tenants.html"; }, 800);
+      }
+      return;
+    }
+
+    // Run destruction
+    if(e.target.id === "runDestruction" && !e.target.disabled){
+      if(confirm("PERMANENTLY DESTROY all data for " + tenantName + "? This action cannot be undone.")){
+        runDestruction();
+      }
+      return;
+    }
+  });
+
+  function runDestruction(){
+    var steps = [
+      {id:"d1", label:"Stopping all agents", desc:"Revoking enrollment tokens, killing active sessions", dur:800},
+      {id:"d2", label:"Disconnecting integrations", desc:"SIEM, ITSM, notification channels, webhooks", dur:600},
+      {id:"d3", label:"Dropping ClickHouse database", desc:"royal-comm — all audit events, materialized views, profiles", dur:2000},
+      {id:"d4", label:"Deleting Kafka topics", desc:"4 partitions — event ingress + config sync channels", dur:800},
+      {id:"d5", label:"Purging blob storage", desc:"Checkpoints, Parquet archives, exports, backups — ~180 GB", dur:1500},
+      {id:"d6", label:"Scheduling KMS key destruction", desc:"HSM destruction after 30-day cryptographic hold period", dur:600},
+      {id:"d7", label:"Soft-deleting Postgres records", desc:"Tenant, users, policies, rules — retained 90 days then purged", dur:500},
+      {id:"d8", label:"Removing DNS + routing entries", desc:"Tenant slug and API routing cleared", dur:400},
+      {id:"d9", label:"Generating destruction certificate", desc:"Hash-signed proof of destruction with timestamps", dur:700}
+    ];
+
+    var h = '<div class="card"><div class="hd"><span class="t" style="color:var(--danger)">&#9940; Destroying data — ' + tenantName + '</span></div><div class="bd">';
+    h += '<div class="dep-steps">';
+    for(var i = 0; i < steps.length; i++){
+      h += '<div class="dep-step" id="' + steps[i].id + '"><span class="dep-dot">' + (i+1) + '</span>' +
+        '<div class="dep-info"><b>' + steps[i].label + '</b><small>' + steps[i].desc + '</small></div>' +
+        '<span class="dep-time" id="' + steps[i].id + '_t"></span></div>';
+    }
+    h += '</div><div id="destroyResult"></div></div></div>';
+    container.innerHTML = h;
+
+    var current = 0;
+    function nextStep(){
+      if(current >= steps.length) return showCertificate();
+      var el = document.getElementById(steps[current].id);
+      var tEl = document.getElementById(steps[current].id + "_t");
+      if(el) el.classList.add("active");
+      if(tEl) tEl.textContent = "working...";
+      var dur = steps[current].dur;
+      var idx = current;
+      setTimeout(function(){
+        var el2 = document.getElementById(steps[idx].id);
+        var tEl2 = document.getElementById(steps[idx].id + "_t");
+        if(el2){ el2.classList.remove("active"); el2.classList.add("done"); }
+        if(tEl2) tEl2.textContent = (dur/1000).toFixed(1) + "s";
+        var dot = el2 && el2.querySelector(".dep-dot");
+        if(dot) dot.textContent = "✓";
+        current++;
+        nextStep();
+      }, dur);
+    }
+    nextStep();
+
+    function showCertificate(){
+      var certHash = "blake3:" + Math.random().toString(16).substr(2,16) + Math.random().toString(16).substr(2,16);
+      var r = document.getElementById("destroyResult");
+      if(!r) return;
+      r.innerHTML =
+        '<div class="cert-card">' +
+          '<div class="ci">&#10003;</div>' +
+          '<h3>Tenant offboarding complete</h3>' +
+          '<p style="color:var(--muted);font-size:14px;margin:0 0 16px">All data for <b>' + tenantName + '</b> (' + tenantSlug + ') has been permanently destroyed.</p>' +
+
+          '<div style="background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;max-width:480px;margin:0 auto;text-align:left;font-size:13px">' +
+            '<div style="font-weight:700;font-size:14px;margin-bottom:10px">&#128196; Destruction Certificate</div>' +
+            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Tenant</span><b>' + tenantName + ' (' + tenantSlug + ')</b></div>' +
+            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Destruction date</span><b>22 Jun 2026 14:38 UTC</b></div>' +
+            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Initiated by</span><b>' + initiatedBy + '</b></div>' +
+            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Reason</span><b>' + reason + '</b></div>' +
+            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Data destroyed</span><b>ClickHouse, Kafka, Blob, agents, routing</b></div>' +
+            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">KMS key destruction</span><b style="color:var(--amber)">Scheduled (HSM 30-day hold)</b></div>' +
+            '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line-2)"><span class="muted">Postgres retention</span><b>Soft-deleted — purge in 90 days</b></div>' +
+            '<div style="display:flex;justify-content:space-between;padding:4px 0"><span class="muted">Certificate hash</span><b style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px">' + certHash + '</b></div>' +
+          '</div>' +
+
+          '<div style="display:flex;gap:10px;justify-content:center;margin-top:18px">' +
+            '<button class="btn primary" id="dlCert">&#11123; Download certificate (PDF)</button>' +
+            '<a class="btn" href="tenants.html">Back to tenants</a>' +
+          '</div>' +
+        '</div>';
+
+      setTimeout(function(){
+        var dlBtn = document.getElementById("dlCert");
+        if(dlBtn) dlBtn.onclick = function(){ if(window.pf) pf.toast("Destruction certificate downloaded", "ok"); };
+      }, 50);
+
+      if(window.pf) pf.toast("Offboarding complete — destruction certificate generated", "ok");
+    }
+  }
+}
+</script>
+</body></html>

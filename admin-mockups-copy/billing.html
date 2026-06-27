@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Billing &amp; Plans</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="billing">
+
+  <div class="phead">
+    <div>
+      <h1>Billing &amp; Plans</h1>
+      <div class="meta"><span>TooVix DAM &middot; Super Admin &middot; Revenue &amp; subscription management</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">$</span> MRR</div><div class="kv">$284K</div><div class="kd up">&#9650; 8% vs last month</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Active subscriptions</div><div class="kv">42</div><div class="kd up">&#9650; 3 new this month</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Avg revenue/tenant</div><div class="kv">$6.8K</div><div class="kd up">&#9650; from $6.4K</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9888;</span> Overages this month</div><div class="kv">3</div><div class="kd down">overage invoices pending</div></div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card">
+      <div class="hd"><span class="t">Plan Tiers</span></div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Plan</th>
+              <th>Price</th>
+              <th>Databases</th>
+              <th>Retention</th>
+              <th>Key Features</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge">Starter</span></td>
+              <td><b>Free</b><br><small class="muted">14-day trial</small></td>
+              <td>Up to 5</td>
+              <td>30 days</td>
+              <td><small class="muted">Basic monitoring, community support, shared infra</small></td>
+            </tr>
+            <tr>
+              <td><span class="badge blue">Business</span></td>
+              <td><b>Per-DB/mo</b><br><small class="muted">volume discounts</small></td>
+              <td>Unlimited</td>
+              <td>1 year</td>
+              <td><small class="muted">SSO, custom alerts, priority support, dedicated cluster</small></td>
+            </tr>
+            <tr>
+              <td><span class="badge ind">Enterprise</span></td>
+              <td><b>Custom</b><br><small class="muted">annual contract</small></td>
+              <td>Unlimited</td>
+              <td>Custom</td>
+              <td><small class="muted">BYOK, on-prem, air-gap, SLA 99.99%, dedicated CSM</small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd"><span class="t">Revenue by Region</span></div>
+      <div class="bd"><div id="chRevRegion"></div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Recent Billing Events</span><span class="s">Last 30 days</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Tenant</th>
+            <th>Event</th>
+            <th>Details</th>
+            <th class="num">Amount</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="muted">23 Jun 2026</td>
+            <td><b>Meridian Financial</b></td>
+            <td>Invoice generated</td>
+            <td><small class="muted">Monthly invoice #INV-2026-1847</small></td>
+            <td class="num"><b>$42,600</b></td>
+            <td><span class="badge green">Paid</span></td>
+          </tr>
+          <tr>
+            <td class="muted">22 Jun 2026</td>
+            <td><b>Bharat National Bank</b></td>
+            <td>Invoice generated</td>
+            <td><small class="muted">Monthly invoice #INV-2026-1846 &middot; INR billing</small></td>
+            <td class="num"><b>$58,200</b></td>
+            <td><span class="badge green">Paid</span></td>
+          </tr>
+          <tr>
+            <td class="muted">21 Jun 2026</td>
+            <td><b>Pacific Health Partners</b></td>
+            <td><span class="badge amber">Overage</span></td>
+            <td><small class="muted">Exceeded 80M events/day limit &middot; 84.1M recorded</small></td>
+            <td class="num"><b>$1,230</b></td>
+            <td><span class="badge amber">Pending</span></td>
+          </tr>
+          <tr>
+            <td class="muted">20 Jun 2026</td>
+            <td><b>Nordic Insurance Group</b></td>
+            <td>Plan upgrade</td>
+            <td><small class="muted">Business &rarr; Business Plus (added SSO)</small></td>
+            <td class="num"><b>$18,400</b></td>
+            <td><span class="badge green">Active</span></td>
+          </tr>
+          <tr>
+            <td class="muted">19 Jun 2026</td>
+            <td><b>GovData India</b></td>
+            <td>Invoice generated</td>
+            <td><small class="muted">Quarterly invoice #INV-2026-1840 &middot; on-prem license</small></td>
+            <td class="num"><b>$86,400</b></td>
+            <td><span class="badge blue">Processing</span></td>
+          </tr>
+          <tr>
+            <td class="muted">18 Jun 2026</td>
+            <td><b>Royal Commerce UK</b></td>
+            <td><span class="badge amber">Overage</span></td>
+            <td><small class="muted">Storage exceeded 2TB tier &middot; 2.4TB used</small></td>
+            <td class="num"><b>$680</b></td>
+            <td><span class="badge amber">Pending</span></td>
+          </tr>
+          <tr>
+            <td class="muted">15 Jun 2026</td>
+            <td><b>TechStart Inc</b></td>
+            <td>Trial started</td>
+            <td><small class="muted">14-day Starter trial &middot; expires 29 Jun</small></td>
+            <td class="num">&mdash;</td>
+            <td><span class="badge">Trial</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doBilling, 100);
+})();
+function doBilling(){
+  if(window.pf){
+    pf.donut("#chRevRegion",[
+      {label:"US-East ($98K)",value:98,color:"var(--primary)"},
+      {label:"IN-Mumbai ($72K)",value:72,color:"var(--amber)"},
+      {label:"EU-West ($48K)",value:48,color:"var(--info)"},
+      {label:"UK-South ($38K)",value:38,color:"var(--green)"},
+      {label:"CA-Central ($28K)",value:28,color:"var(--danger)"}
+    ],{center:"$284K",centerSub:"MRR",legend:true});
+  }
+}
+</script>
+</body></html>

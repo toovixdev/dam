@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Tenant Resource Quotas</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1>Tenant Resource Quotas</h1>
+      <div class="meta"><span>per-tenant limits &middot; noisy-neighbor prevention</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--danger-soft);color:var(--danger)">&#9888;</span> Tenants at limit</div><div class="kv" style="color:var(--danger)">3</div><div class="kd down">approaching or at quota</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9650;</span> Soft warnings</div><div class="kv" style="color:var(--amber)">5</div><div class="kd down">above 70% utilization</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9673;</span> Hard blocks</div><div class="kv" style="color:var(--green)">0</div><div class="kd up">no tenants blocked</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Avg utilization</div><div class="kv">62%</div><div class="kd">across all quotas</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;border-left:3px solid var(--amber)">
+    <div class="bd" style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;color:var(--amber)">&#9888;</span>
+      <div>
+        <b style="color:var(--amber)">Quota Warning</b><br>
+        <span>TechStart Inc (Starter trial) hit 80% of event quota &mdash; notify account team</span>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn" onclick="pf.toast('Notification sent to account team','ok')">Notify team</button>
+        <button class="btn" onclick="pf.toast('Alert acknowledged','ok')">Acknowledge</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Quota Usage by Tenant</span><span class="s">7 tenants</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="quotaTbl">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Plan</th>
+            <th class="num">Events/day Limit</th>
+            <th class="num">Events/day Actual</th>
+            <th class="num">DBs Limit</th>
+            <th class="num">DBs Actual</th>
+            <th class="num">Storage Limit</th>
+            <th class="num">Storage Actual</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Meridian Financial</b><br><small class="muted">meridian-fin</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">Custom</td>
+            <td class="num">142.6M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">186</td>
+            <td class="num">5 TB</td>
+            <td class="num">3.2 TB</td>
+            <td><span class="badge green dot">OK</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Meridian quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>Bharat National Bank</b><br><small class="muted">bnb-india</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">Custom</td>
+            <td class="num">198.4M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">240</td>
+            <td class="num">8 TB</td>
+            <td class="num"><b style="color:var(--amber)">6.8 TB</b></td>
+            <td><span class="badge amber dot">Warning</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening BNB quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>Nordic Insurance Group</b><br><small class="muted">nordic-ins</small></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">500M</td>
+            <td class="num">67.2M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">89</td>
+            <td class="num">1 TB</td>
+            <td class="num">620 GB</td>
+            <td><span class="badge green dot">OK</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Nordic quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>Pacific Health Partners</b><br><small class="muted">pacific-hp</small></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">500M</td>
+            <td class="num">84.1M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">112</td>
+            <td class="num">1 TB</td>
+            <td class="num"><b style="color:var(--amber)">840 GB</b></td>
+            <td><span class="badge amber dot">Warning</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Pacific Health quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>Royal Commerce UK</b><br><small class="muted">royal-comm</small></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">500M</td>
+            <td class="num">41.8M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">64</td>
+            <td class="num">1 TB</td>
+            <td class="num">480 GB</td>
+            <td><span class="badge green dot">OK</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Royal Commerce quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr style="background:var(--danger-soft)">
+            <td><b>TechStart Inc</b><br><small class="muted">techstart &middot; trial</small></td>
+            <td><span class="badge amber">Starter / Trial</span></td>
+            <td class="num">1M</td>
+            <td class="num"><b style="color:var(--danger)">0.8M</b></td>
+            <td class="num">5</td>
+            <td class="num"><b style="color:var(--danger)">3</b></td>
+            <td class="num">10 GB</td>
+            <td class="num"><b style="color:var(--amber)">7.2 GB</b></td>
+            <td><span class="badge amber dot">At limit</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening TechStart quota editor','ok')">Edit</button></td>
+          </tr>
+          <tr>
+            <td><b>GovData India</b><br><small class="muted">govdata-in</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">Custom</td>
+            <td class="num">124.8M</td>
+            <td class="num">Unlimited</td>
+            <td class="num">156</td>
+            <td class="num">10 TB</td>
+            <td class="num">4.6 TB</td>
+            <td><span class="badge green dot">OK</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening GovData quota editor','ok')">Edit</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card">
+      <div class="hd"><span class="t">Default Quotas by Plan Tier</span></div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Plan</th>
+              <th class="num">Events/day</th>
+              <th class="num">Databases</th>
+              <th class="num">Storage</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge amber">Starter</span></td>
+              <td class="num">1M</td>
+              <td class="num">5</td>
+              <td class="num">10 GB</td>
+              <td><small class="muted">14-day trial, shared infrastructure</small></td>
+            </tr>
+            <tr>
+              <td><span class="badge blue">Business</span></td>
+              <td class="num">500M</td>
+              <td class="num">Unlimited</td>
+              <td class="num">1 TB</td>
+              <td><small class="muted">Dedicated cluster, expandable on request</small></td>
+            </tr>
+            <tr>
+              <td><span class="badge ind">Enterprise</span></td>
+              <td class="num">Custom</td>
+              <td class="num">Unlimited</td>
+              <td class="num">Custom</td>
+              <td><small class="muted">Per-contract negotiation, SLA-backed</small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd"><span class="t">Edit Quota Override</span><span class="s">select a tenant to customize</span></div>
+      <div class="bd">
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="fld">
+            <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Tenant</label>
+            <select style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px">
+              <option>Select tenant...</option>
+              <option>Meridian Financial</option>
+              <option>Bharat National Bank</option>
+              <option>Nordic Insurance Group</option>
+              <option>Pacific Health Partners</option>
+              <option>Royal Commerce UK</option>
+              <option selected>TechStart Inc</option>
+              <option>GovData India</option>
+            </select>
+          </div>
+          <div class="fld">
+            <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Events/day override</label>
+            <input type="text" value="2,000,000" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px">
+            <small class="muted">Default for Starter: 1,000,000</small>
+          </div>
+          <div class="fld">
+            <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Database limit override</label>
+            <input type="text" value="10" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px">
+            <small class="muted">Default for Starter: 5</small>
+          </div>
+          <div class="fld">
+            <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Storage limit override</label>
+            <input type="text" value="25 GB" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px">
+            <small class="muted">Default for Starter: 10 GB</small>
+          </div>
+          <div class="fld">
+            <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Justification</label>
+            <textarea rows="2" placeholder="Reason for override (required for audit trail)" style="width:100%;padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:13px;resize:vertical">POC extension approved by sales — converting to Business plan next month</textarea>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn primary" onclick="pf.toast('Quota override saved for TechStart Inc','ok')">Save override</button>
+            <button class="btn" onclick="pf.toast('Override cancelled','ok')">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Quota Utilization</span><span class="s">visual breakdown</span></div>
+    <div class="bd">
+      <div id="quotaBars"></div>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doTenantQuotas, 100);
+})();
+function doTenantQuotas(){
+  if(window.pf){
+    var container = document.getElementById("quotaBars");
+    if(!container) return;
+
+    var tenants = [
+      {name:"TechStart Inc", pct:80, color:"var(--danger)"},
+      {name:"Bharat National Bank", pct:85, color:"var(--amber)"},
+      {name:"Pacific Health Partners", pct:84, color:"var(--amber)"},
+      {name:"Nordic Insurance Group", pct:62, color:"var(--green)"},
+      {name:"Meridian Financial", pct:64, color:"var(--green)"},
+      {name:"Royal Commerce UK", pct:48, color:"var(--green)"},
+      {name:"GovData India", pct:46, color:"var(--green)"}
+    ];
+
+    var html = "";
+    for(var i = 0; i < tenants.length; i++){
+      var t = tenants[i];
+      html += "<div style=\"display:flex;align-items:center;gap:12px;margin-bottom:8px\">" +
+        "<span style=\"min-width:180px;font-size:13px;font-weight:600\">" + t.name + "</span>" +
+        "<div style=\"flex:1\">" + pf.progress(t.pct, t.color) + "</div>" +
+        "<span style=\"min-width:40px;text-align:right;font-size:13px;font-weight:600;color:" + t.color + "\">" + t.pct + "%</span>" +
+      "</div>";
+    }
+    container.innerHTML = html;
+  }
+}
+</script>
+</body></html>

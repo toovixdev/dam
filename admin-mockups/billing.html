@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Billing &amp; Plans</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="billing">
+
+  <div class="phead">
+    <div>
+      <h1>Billing &amp; Plans</h1>
+      <div class="meta"><span>TooVix DAM &middot; Super Admin &middot; Revenue &amp; subscription management</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">$</span> MRR</div><div class="kv">$284K</div><div class="kd up">&#9650; 8% vs last month</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Active subscriptions</div><div class="kv">42</div><div class="kd up">&#9650; 3 new this month</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Avg revenue/tenant</div><div class="kv">$6.8K</div><div class="kd up">&#9650; from $6.4K</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9888;</span> Overages this month</div><div class="kv">3</div><div class="kd down">overage invoices pending</div></div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card">
+      <div class="hd"><span class="t">Plan Tiers</span></div>
+      <div class="bd" style="padding:0;overflow-x:auto">
+        <table class="tbl">
+          <thead>
+            <tr>
+              <th>Plan</th>
+              <th>Price</th>
+              <th>Databases</th>
+              <th>Retention</th>
+              <th>Key Features</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge">Starter</span></td>
+              <td><b>Free</b><br><small class="muted">14-day trial</small></td>
+              <td>Up to 5</td>
+              <td>30 days</td>
+              <td><small class="muted">Basic monitoring, community support, shared infra</small></td>
+            </tr>
+            <tr>
+              <td><span class="badge blue">Business</span></td>
+              <td><b>Per-DB/mo</b><br><small class="muted">volume discounts</small></td>
+              <td>Unlimited</td>
+              <td>1 year</td>
+              <td><small class="muted">SSO, custom alerts, priority support, dedicated cluster</small></td>
+            </tr>
+            <tr>
+              <td><span class="badge ind">Enterprise</span></td>
+              <td><b>Custom</b><br><small class="muted">annual contract</small></td>
+              <td>Unlimited</td>
+              <td>Custom</td>
+              <td><small class="muted">BYOK, on-prem, air-gap, SLA 99.99%, dedicated CSM</small></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd"><span class="t">Revenue by Region</span></div>
+      <div class="bd"><div id="chRevRegion"></div></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">How Billing Works</span><span class="s">metering &rarr; rating &rarr; invoice</span></div>
+    <div class="bd" style="padding:16px">
+      <div style="display:flex;gap:0;align-items:stretch;margin-bottom:18px">
+        <div style="flex:1;padding:14px 16px;background:var(--primary-soft);border:1px solid var(--primary-ring);border-radius:10px 0 0 10px;text-align:center">
+          <div style="font-size:18px;margin-bottom:4px">&#9673;</div>
+          <div style="font-size:13px;font-weight:700;color:var(--primary)">1. Metering</div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:4px">Data plane continuously tracks databases, events/day, storage, agents per tenant</div>
+        </div>
+        <div style="display:flex;align-items:center;font-size:18px;color:var(--muted);padding:0 2px">&#8594;</div>
+        <div style="flex:1;padding:14px 16px;background:var(--info-soft);border:1px solid rgba(8,145,178,.15);text-align:center">
+          <div style="font-size:18px;margin-bottom:4px">&#9881;</div>
+          <div style="font-size:13px;font-weight:700;color:var(--info)">2. Rating</div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:4px">End of billing cycle: usage compared against plan limits. Base fee + overages calculated</div>
+        </div>
+        <div style="display:flex;align-items:center;font-size:18px;color:var(--muted);padding:0 2px">&#8594;</div>
+        <div style="flex:1;padding:14px 16px;background:var(--green-soft);border:1px solid rgba(22,163,74,.15);border-radius:0 10px 10px 0;text-align:center">
+          <div style="font-size:18px;margin-bottom:4px">&#9993;</div>
+          <div style="font-size:13px;font-weight:700;color:var(--green)">3. Invoice</div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:4px">Invoice auto-generated, sent to tenant admin. Paid via wire / ACH / card depending on plan</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Pricing Model</span><span class="s">per-database + event volume tiers</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Starter</th>
+            <th>Business</th>
+            <th>Enterprise</th>
+            <th>Overage rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Base platform fee</b><br><small class="muted">Monthly access to TooVix DAM</small></td>
+            <td>Free (trial)</td>
+            <td><b>$2,500/mo</b></td>
+            <td><b>Custom</b><br><small class="muted">Annual contract</small></td>
+            <td><span class="muted">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td><b>Per database</b><br><small class="muted">Each monitored database instance</small></td>
+            <td>Included (up to 5)</td>
+            <td><b>$150/db/mo</b></td>
+            <td><b>$80&ndash;$120/db/mo</b><br><small class="muted">Volume committed</small></td>
+            <td><span class="muted">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td><b>Event volume</b><br><small class="muted">Audit events ingested per day</small></td>
+            <td>Up to 1M/day</td>
+            <td><b>Included up to 500M</b></td>
+            <td><b>Per contract</b></td>
+            <td><b>$0.12 / 1M events</b></td>
+          </tr>
+          <tr>
+            <td><b>Storage (hot tier)</b><br><small class="muted">ClickHouse queryable storage</small></td>
+            <td>10 GB</td>
+            <td><b>1 TB included</b></td>
+            <td><b>Per contract</b></td>
+            <td><b>$0.08 / GB / mo</b></td>
+          </tr>
+          <tr>
+            <td><b>Storage (cold tier)</b><br><small class="muted">Blob archive for compliance retention</small></td>
+            <td>&mdash;</td>
+            <td><b>$0.02 / GB / mo</b></td>
+            <td><b>$0.01 / GB / mo</b></td>
+            <td><span class="muted">&mdash;</span></td>
+          </tr>
+          <tr>
+            <td><b>Add-ons</b><br><small class="muted">Optional features</small></td>
+            <td>&mdash;</td>
+            <td colspan="2"><small class="muted">BYOK KMS (+$500/mo) &middot; Inline Blocking (+$200/db/mo) &middot; Static Masking (+$100/db/mo)</small></td>
+            <td><span class="muted">&mdash;</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd">
+      <span class="t">Tenant Usage &amp; Invoice Breakdown</span>
+      <span class="s">current billing cycle (Jun 2026)</span>
+    </div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Plan</th>
+            <th class="num">Databases</th>
+            <th class="num">Avg Events/day</th>
+            <th class="num">Hot Storage</th>
+            <th class="num">Cold Storage</th>
+            <th class="num">Base + DB fee</th>
+            <th class="num">Overages</th>
+            <th class="num">Total</th>
+            <th>Billing</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Meridian Financial</b></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">186</td>
+            <td class="num">142.6M</td>
+            <td class="num">3.2 TB</td>
+            <td class="num">8.4 TB</td>
+            <td class="num">$38,800</td>
+            <td class="num"><span class="muted">$0</span></td>
+            <td class="num"><b>$42,600</b></td>
+            <td><span class="badge green">Paid</span></td>
+          </tr>
+          <tr>
+            <td><b>Bharat National Bank</b></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">240</td>
+            <td class="num">198.4M</td>
+            <td class="num">6.8 TB</td>
+            <td class="num">14.2 TB</td>
+            <td class="num">$52,400</td>
+            <td class="num"><span class="muted">$0</span></td>
+            <td class="num"><b>$58,200</b></td>
+            <td><span class="badge green">Paid</span></td>
+          </tr>
+          <tr>
+            <td><b>Nordic Insurance Group</b></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">89</td>
+            <td class="num">67.2M</td>
+            <td class="num">620 GB</td>
+            <td class="num">1.1 TB</td>
+            <td class="num"><small>$2,500 + 89 &times; $150</small><br>$15,850</td>
+            <td class="num"><span class="muted">$0</span></td>
+            <td class="num"><b>$15,850</b></td>
+            <td><span class="badge green">Paid</span></td>
+          </tr>
+          <tr>
+            <td><b>Pacific Health Partners</b></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">112</td>
+            <td class="num">84.1M</td>
+            <td class="num">840 GB</td>
+            <td class="num">2.2 TB</td>
+            <td class="num"><small>$2,500 + 112 &times; $150</small><br>$19,300</td>
+            <td class="num"><b style="color:var(--amber)">$1,230</b><br><small class="muted">event overage</small></td>
+            <td class="num"><b>$20,530</b></td>
+            <td><span class="badge amber">Overage pending</span></td>
+          </tr>
+          <tr>
+            <td><b>Royal Commerce UK</b></td>
+            <td><span class="badge">Business</span></td>
+            <td class="num">64</td>
+            <td class="num">41.8M</td>
+            <td class="num">480 GB</td>
+            <td class="num">860 GB</td>
+            <td class="num"><small>$2,500 + 64 &times; $150</small><br>$12,100</td>
+            <td class="num"><b style="color:var(--amber)">$680</b><br><small class="muted">storage overage</small></td>
+            <td class="num"><b>$12,780</b></td>
+            <td><span class="badge amber">Overage pending</span></td>
+          </tr>
+          <tr>
+            <td><b>GovData India</b></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td class="num">156</td>
+            <td class="num">124.8M</td>
+            <td class="num">4.6 TB</td>
+            <td class="num">22.8 TB</td>
+            <td class="num">$78,200</td>
+            <td class="num"><span class="muted">$0</span></td>
+            <td class="num"><b>$86,400</b><br><small class="muted">quarterly</small></td>
+            <td><span class="badge blue">Processing</span></td>
+          </tr>
+          <tr style="background:var(--surface-2)">
+            <td><b>TechStart Inc</b></td>
+            <td><span class="badge amber">Trial</span></td>
+            <td class="num">3</td>
+            <td class="num">0.4M</td>
+            <td class="num">7.2 GB</td>
+            <td class="num">&mdash;</td>
+            <td class="num"><span class="muted">$0</span></td>
+            <td class="num"><span class="muted">$0</span></td>
+            <td class="num"><span class="muted">$0</span></td>
+            <td><span class="badge">Trial (4d left)</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Metering Sources</span><span class="s">what feeds the billing calculation</span></div>
+    <div class="bd" style="padding:12px 16px">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div style="padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+          <div style="font-size:13px;font-weight:700;margin-bottom:4px">&#9673; Database count</div>
+          <div style="font-size:11.5px;color:var(--muted);line-height:1.5">Source: Control plane Postgres<br>Frequency: Real-time<br>Metric: Active databases per tenant with status != offboarded</div>
+        </div>
+        <div style="padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+          <div style="font-size:13px;font-weight:700;margin-bottom:4px">&#9881; Event volume</div>
+          <div style="font-size:11.5px;color:var(--muted);line-height:1.5">Source: Event Hub / Kinesis / OCI Streaming<br>Frequency: Aggregated hourly<br>Metric: Events ingested per tenant per day (rolling avg)</div>
+        </div>
+        <div style="padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+          <div style="font-size:13px;font-weight:700;margin-bottom:4px">&#9637; Storage</div>
+          <div style="font-size:11.5px;color:var(--muted);line-height:1.5">Source: ClickHouse (hot) + Blob Storage (cold)<br>Frequency: Daily snapshot<br>Metric: Bytes consumed per tenant, separated by tier</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Recent Billing Events</span><span class="s">Last 30 days</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Tenant</th>
+            <th>Event</th>
+            <th>Details</th>
+            <th class="num">Amount</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="muted">23 Jun 2026</td>
+            <td><b>Meridian Financial</b></td>
+            <td>Invoice generated</td>
+            <td><small class="muted">Monthly invoice #INV-2026-1847</small></td>
+            <td class="num"><b>$42,600</b></td>
+            <td><span class="badge green">Paid</span></td>
+          </tr>
+          <tr>
+            <td class="muted">22 Jun 2026</td>
+            <td><b>Bharat National Bank</b></td>
+            <td>Invoice generated</td>
+            <td><small class="muted">Monthly invoice #INV-2026-1846 &middot; INR billing</small></td>
+            <td class="num"><b>$58,200</b></td>
+            <td><span class="badge green">Paid</span></td>
+          </tr>
+          <tr>
+            <td class="muted">21 Jun 2026</td>
+            <td><b>Pacific Health Partners</b></td>
+            <td><span class="badge amber">Overage</span></td>
+            <td><small class="muted">Exceeded 80M events/day limit &middot; 84.1M recorded</small></td>
+            <td class="num"><b>$1,230</b></td>
+            <td><span class="badge amber">Pending</span></td>
+          </tr>
+          <tr>
+            <td class="muted">20 Jun 2026</td>
+            <td><b>Nordic Insurance Group</b></td>
+            <td>Plan upgrade</td>
+            <td><small class="muted">Business &rarr; Business Plus (added SSO)</small></td>
+            <td class="num"><b>$18,400</b></td>
+            <td><span class="badge green">Active</span></td>
+          </tr>
+          <tr>
+            <td class="muted">19 Jun 2026</td>
+            <td><b>GovData India</b></td>
+            <td>Invoice generated</td>
+            <td><small class="muted">Quarterly invoice #INV-2026-1840 &middot; on-prem license</small></td>
+            <td class="num"><b>$86,400</b></td>
+            <td><span class="badge blue">Processing</span></td>
+          </tr>
+          <tr>
+            <td class="muted">18 Jun 2026</td>
+            <td><b>Royal Commerce UK</b></td>
+            <td><span class="badge amber">Overage</span></td>
+            <td><small class="muted">Storage exceeded 2TB tier &middot; 2.4TB used</small></td>
+            <td class="num"><b>$680</b></td>
+            <td><span class="badge amber">Pending</span></td>
+          </tr>
+          <tr>
+            <td class="muted">15 Jun 2026</td>
+            <td><b>TechStart Inc</b></td>
+            <td>Trial started</td>
+            <td><small class="muted">14-day Starter trial &middot; expires 29 Jun</small></td>
+            <td class="num">&mdash;</td>
+            <td><span class="badge">Trial</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doBilling, 100);
+})();
+function doBilling(){
+  if(window.pf){
+    pf.donut("#chRevRegion",[
+      {label:"US-East ($98K)",value:98,color:"var(--primary)"},
+      {label:"IN-Mumbai ($72K)",value:72,color:"var(--amber)"},
+      {label:"EU-West ($48K)",value:48,color:"var(--info)"},
+      {label:"UK-South ($38K)",value:38,color:"var(--green)"},
+      {label:"CA-Central ($28K)",value:28,color:"var(--danger)"}
+    ],{center:"$284K",centerSub:"MRR",legend:true});
+  }
+}
+</script>
+</body></html>

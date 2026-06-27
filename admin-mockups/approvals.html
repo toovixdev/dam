@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Approval Requests</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="approvals">
+
+  <div class="phead">
+    <div>
+      <h1>Approval Requests</h1>
+      <div class="meta"><span>tenant lifecycle approvals &middot; upgrade &middot; suspension &middot; offboarding</span></div>
+    </div>
+    <div class="acts">
+      <span style="font-size:12px;color:var(--muted);margin-right:4px">Viewing as:</span>
+      <select class="input" id="roleSwitcher" style="padding:6px 12px;font-size:12.5px;font-weight:600;min-width:200px">
+        <option value="david">David Kim (Platform Ops)</option>
+        <option value="lisa">Lisa Wong (Finance)</option>
+        <option value="priya">Priya Nair (Sales)</option>
+        <option value="alex">Alex Torres (Platform Lead)</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9201;</span> Pending</div><div class="kv" style="color:var(--amber)">2</div><div class="kd down">awaiting approval</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#10003;</span> Approved (30d)</div><div class="kv">8</div><div class="kd up">all applied</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--danger-soft);color:var(--danger)">&#10007;</span> Rejected (30d)</div><div class="kv">1</div><div class="kd">missing contract</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8644;</span> Avg approval time</div><div class="kv">4.2h</div><div class="kd">across all types</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Pending Approvals</span><span class="s">requires action</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="pendingTbl">
+        <thead><tr><th>Request</th><th>Type</th><th>Tenant</th><th>Initiated by</th><th>Approval chain</th><th>Submitted</th><th>Actions</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Recent History</span><span class="s">last 30 days</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead><tr><th>Request</th><th>Type</th><th>Tenant</th><th>Result</th><th>Approval chain</th><th>Duration</th><th>Applied</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>UPG-3840</b></td>
+            <td><span class="badge ind">Plan upgrade</span></td>
+            <td>Pacific Health Partners<br><small class="muted">Business &#8594; Enterprise</small></td>
+            <td><span class="badge green dot">Approved</span></td>
+            <td>
+              <span class="badge green dot" style="font-size:10px">Sales &#10003;</span>
+              <span class="badge green dot" style="font-size:10px">Finance &#10003;</span>
+              <span class="badge green dot" style="font-size:10px">Platform Lead &#10003;</span>
+            </td>
+            <td class="muted">3.5h</td>
+            <td class="muted">5d ago</td>
+          </tr>
+          <tr>
+            <td><b>SUS-0022</b></td>
+            <td><span class="badge amber">Suspension</span></td>
+            <td>TechStart Inc<br><small class="muted">Billing dispute</small></td>
+            <td><span class="badge green dot">Approved</span></td>
+            <td>
+              <span class="badge green dot" style="font-size:10px">Platform Lead &#10003;</span>
+            </td>
+            <td class="muted">45m</td>
+            <td class="muted">8d ago</td>
+          </tr>
+          <tr>
+            <td><b>UPG-3832</b></td>
+            <td><span class="badge ind">Plan upgrade</span></td>
+            <td>Meridian Financial<br><small class="muted">Business &#8594; Enterprise</small></td>
+            <td><span class="badge green dot">Approved</span></td>
+            <td>
+              <span class="badge green dot" style="font-size:10px">Sales &#10003;</span>
+              <span class="badge green dot" style="font-size:10px">Finance &#10003;</span>
+              <span class="badge green dot" style="font-size:10px">Platform Lead &#10003;</span>
+            </td>
+            <td class="muted">6.2h</td>
+            <td class="muted">12d ago</td>
+          </tr>
+          <tr>
+            <td><b>UPG-3828</b></td>
+            <td><span class="badge ind">Plan upgrade</span></td>
+            <td>Some Corp<br><small class="muted">Business &#8594; Enterprise</small></td>
+            <td><span class="badge red dot">Rejected</span></td>
+            <td>
+              <span class="badge red dot" style="font-size:10px">Sales &#10007;</span>
+              <span class="badge dot" style="font-size:10px">Finance --</span>
+              <span class="badge dot" style="font-size:10px">Platform Lead --</span>
+            </td>
+            <td class="muted">2.1h</td>
+            <td class="muted">18d ago</td>
+          </tr>
+          <tr>
+            <td><b>OFF-0018</b></td>
+            <td><span class="badge red">Offboarding</span></td>
+            <td>Legacy Systems Ltd<br><small class="muted">Contract ended</small></td>
+            <td><span class="badge green dot">Approved</span></td>
+            <td>
+              <span class="badge green dot" style="font-size:10px">Sales &#10003;</span>
+              <span class="badge green dot" style="font-size:10px">Platform Lead &#10003;</span>
+            </td>
+            <td class="muted">1.8h</td>
+            <td class="muted">22d ago</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card">
+      <div class="hd"><span class="t">Approval Chains by Type</span></div>
+      <div class="bd" style="padding:12px 16px">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span class="badge ind" style="font-size:10px;flex:none;margin-top:3px">Upgrade</span>
+            <div style="font-size:12.5px;line-height:1.5"><b>Plan upgrade</b> &mdash; Sales (contract) &#8594; Finance (billing) &#8594; Platform Lead (capacity). All three required.</div>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span class="badge amber" style="font-size:10px;flex:none;margin-top:3px">Suspend</span>
+            <div style="font-size:12.5px;line-height:1.5"><b>Tenant suspension</b> &mdash; Platform Lead only. Single approver, immediate effect.</div>
+          </div>
+          <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span class="badge red" style="font-size:10px;flex:none;margin-top:3px">Offboard</span>
+            <div style="font-size:12.5px;line-height:1.5"><b>Tenant offboarding</b> &mdash; Sales (confirms contract ended) &#8594; Platform Lead (initiates grace period). Both required.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="hd"><span class="t">Notification Channels</span></div>
+      <div class="bd" style="padding:12px 16px">
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span style="font-size:16px;flex:none">&#9993;</span>
+            <div style="flex:1"><b style="font-size:13px">Email</b><br><small class="muted">Approvers receive email with approve/reject links (one-click, no login required)</small></div>
+            <span class="badge green dot" style="font-size:10px">Active</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span style="font-size:16px;flex:none">&#128172;</span>
+            <div style="flex:1"><b style="font-size:13px">Slack</b><br><small class="muted">#approvals channel with interactive approve/reject buttons</small></div>
+            <span class="badge green dot" style="font-size:10px">Active</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px">
+            <span style="font-size:16px;flex:none">&#9881;</span>
+            <div style="flex:1"><b style="font-size:13px">Jira</b><br><small class="muted">Optional -- create CS-UPGRADE tickets for tracking</small></div>
+            <span class="badge dot" style="font-size:10px">Optional</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Review modal -->
+  <style>
+  .rv-overlay{position:fixed;inset:0;background:rgba(15,23,42,.4);z-index:200;display:none}
+  .rv-overlay.open{display:block}
+  .rv-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);width:min(680px,calc(100vw - 32px));max-height:88vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:18px;box-shadow:0 24px 64px rgba(0,0,0,.22);z-index:201;display:none}
+  .rv-modal.open{display:block}
+  .rv-modal .rvh{display:flex;align-items:center;gap:12px;padding:18px 24px;border-bottom:1px solid var(--line);font-size:16px;font-weight:700}
+  .rv-modal .rvh .xbtn{margin-left:auto;background:var(--surface-2);border:1px solid var(--line);color:var(--muted);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center}
+  .rv-modal .rvb{padding:24px}
+  .rv-step{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px;margin-bottom:6px}
+  .rv-dot{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex:none}
+  </style>
+
+  <div class="rv-overlay" id="rvOv"></div>
+  <div class="rv-modal" id="rvMod">
+    <div class="rvh"><b id="rvTitle">Review Request</b><button class="xbtn" id="rvX">&times;</button></div>
+    <div class="rvb" id="rvBody"></div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doApprovals, 100);
+})();
+
+function doApprovals(){
+  var USERS = {
+    david: {name:"David Kim", role:"Platform Ops"},
+    lisa:  {name:"Lisa Wong", role:"Finance"},
+    priya: {name:"Priya Nair", role:"Sales"},
+    alex:  {name:"Alex Torres", role:"Platform Lead"}
+  };
+  var CURRENT_USER = USERS.david;
+
+  var roleSwitcher = document.getElementById("roleSwitcher");
+  if(roleSwitcher) roleSwitcher.onchange = function(){
+    CURRENT_USER = USERS[roleSwitcher.value] || USERS.david;
+    renderPendingTable();
+    if(window.pf) pf.toast("Viewing as " + CURRENT_USER.name + " (" + CURRENT_USER.role + ")", "ok");
+  };
+
+  var PENDING = [
+    {id:"UPG-3847", type:"Plan upgrade", tenant:"Nordic Insurance Group", detail:"Business -> Enterprise",
+     initiator:"David Kim", role:"Platform Ops", submitted:"6h ago",
+     changes:{evLimit:"250M", dbLimit:"500", stLimit:"5 TB", retention:"90d hot / 7y cold", features:["UEBA","Inline Blocking","BYOK KMS","Custom Compliance Packs"], contract:"MSA-2026-0198"},
+     chain:[
+       {role:"Sales / Account Manager", approver:"James Rivera", status:"approved", time:"4h ago", note:"Contract MSA-2026-0198 signed and verified"},
+       {role:"Finance", approver:"Lisa Wong", status:"pending", time:"", note:""},
+       {role:"Platform Lead", approver:"Alex Torres", status:"waiting", time:"", note:""}
+     ]},
+    {id:"UPG-3851", type:"Plan upgrade", tenant:"Royal Commerce UK", detail:"Business -> Enterprise",
+     initiator:"Maria Santos", role:"Platform Ops", submitted:"2h ago",
+     changes:{evLimit:"200M", dbLimit:"400", stLimit:"3 TB", retention:"90d hot / 7y cold", features:["UEBA","BYOK KMS"], contract:"MSA-2026-0204"},
+     chain:[
+       {role:"Sales / Account Manager", approver:"Priya Nair", status:"pending", time:"", note:""},
+       {role:"Finance", approver:"Lisa Wong", status:"waiting", time:"", note:""},
+       {role:"Platform Lead", approver:"Alex Torres", status:"waiting", time:"", note:""}
+     ]}
+  ];
+
+  // Wire review buttons
+  document.addEventListener("click", function(e){
+    var reviewBtn = e.target.closest && e.target.closest(".reviewBtn");
+    if(reviewBtn){
+      var idx = parseInt(reviewBtn.getAttribute("data-idx"));
+      openReview(PENDING[idx]);
+      return;
+    }
+    if(e.target.id === "rvOv" || (e.target.closest && e.target.closest("#rvX"))){ hideRvModal(); return; }
+  });
+
+  renderPendingTable();
+
+  function getPendingApprover(req){
+    for(var i = 0; i < req.chain.length; i++){
+      if(req.chain[i].status === "pending") return req.chain[i];
+    }
+    return null;
+  }
+
+  function isInitiator(req){
+    return req.initiator === CURRENT_USER.name;
+  }
+
+  function openReview(req){
+    var title = document.getElementById("rvTitle");
+    var body = document.getElementById("rvBody");
+    if(!title || !body) return;
+    var pendingStep = getPendingApprover(req);
+    var isMyApproval = pendingStep && pendingStep.approver === CURRENT_USER.name;
+    var iAmInitiator = isInitiator(req);
+    var canAct = isMyApproval && !iAmInitiator;
+
+    if(canAct){
+      title.textContent = "Review & Approve -- " + req.id;
+    } else {
+      title.textContent = "Request Status -- " + req.id;
+    }
+
+    var h = "";
+
+    // Role banner
+    if(iAmInitiator){
+      h += '<div style="background:var(--info-soft);border:1px solid rgba(8,145,178,.15);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12.5px;color:var(--ink)">' +
+        '<b style="color:var(--info)">You initiated this request.</b> You cannot approve your own request (separation of duties).' +
+      '</div>';
+    } else if(canAct){
+      h += '<div style="background:var(--green-soft);border:1px solid rgba(22,163,74,.15);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12.5px;color:var(--ink)">' +
+        '<b style="color:var(--green)">Your approval is required.</b> You are the pending approver for the <b>' + pendingStep.role + '</b> step.' +
+      '</div>';
+    } else if(pendingStep){
+      h += '<div style="background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12.5px;color:var(--muted)">' +
+        'Waiting for <b style="color:var(--ink)">' + pendingStep.approver + '</b> (' + pendingStep.role + ') to approve. You are viewing as <b style="color:var(--ink)">' + CURRENT_USER.name + '</b> (' + CURRENT_USER.role + ').' +
+      '</div>';
+    }
+
+    // Request summary
+    h += '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">' +
+      '<span class="badge ind">' + req.type + '</span>' +
+      '<span style="font-size:13px;font-weight:600">' + req.tenant + '</span>' +
+      '<span class="muted" style="font-size:13px">(' + req.detail + ')</span>' +
+      '<span class="muted" style="font-size:12px;margin-left:auto">Submitted ' + req.submitted + ' by ' + req.initiator + '</span>' +
+    '</div>';
+
+    // What changes
+    h += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Proposed Changes</div>';
+    h += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">' +
+      '<div style="padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px"><span style="font-size:11px;color:var(--muted)">Events/day</span><br><b style="font-size:15px">' + req.changes.evLimit + '</b></div>' +
+      '<div style="padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px"><span style="font-size:11px;color:var(--muted)">Databases</span><br><b style="font-size:15px">' + req.changes.dbLimit + '</b></div>' +
+      '<div style="padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:8px"><span style="font-size:11px;color:var(--muted)">Storage</span><br><b style="font-size:15px">' + req.changes.stLimit + '</b></div>' +
+    '</div>';
+
+    h += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">';
+    for(var fi = 0; fi < req.changes.features.length; fi++){
+      h += '<span class="badge green" style="font-size:10px">+ ' + req.changes.features[fi] + '</span>';
+    }
+    h += '</div>';
+
+    h += '<div style="display:flex;gap:16px;margin-bottom:16px;font-size:13px">' +
+      '<span>Contract: <b style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px">' + req.changes.contract + '</b></span>' +
+      '<span>Retention: <b>' + req.changes.retention + '</b></span>' +
+    '</div>';
+
+    // Approval chain with status
+    h += '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--subtle);margin-bottom:8px">Approval Chain</div>';
+    for(var ci = 0; ci < req.chain.length; ci++){
+      var c = req.chain[ci];
+      var dotStyle, dotContent, statusBadge;
+      if(c.status === "approved"){
+        dotStyle = "background:var(--green);color:#fff";
+        dotContent = "&#10003;";
+        statusBadge = '<span class="badge green dot" style="font-size:10px">Approved ' + c.time + '</span>';
+      } else if(c.status === "pending"){
+        dotStyle = "background:var(--amber);color:#fff";
+        dotContent = "&#9201;";
+        statusBadge = '<span class="badge amber dot" style="font-size:10px">Awaiting approval</span>';
+      } else {
+        dotStyle = "background:var(--line);color:var(--muted)";
+        dotContent = (ci+1);
+        statusBadge = '<span class="badge dot" style="font-size:10px">Waiting for previous</span>';
+      }
+      h += '<div class="rv-step">' +
+        '<span class="rv-dot" style="' + dotStyle + '">' + dotContent + '</span>' +
+        '<div style="flex:1"><b style="font-size:13px">' + c.role + '</b><br><small class="muted">' + c.approver + '</small>' +
+          (c.note ? '<br><small style="color:var(--green);font-style:italic">"' + c.note + '"</small>' : '') +
+        '</div>' +
+        statusBadge +
+      '</div>';
+    }
+
+    // Actions
+    h += '<div style="display:flex;gap:10px;margin-top:20px;padding-top:14px;border-top:1px solid var(--line);justify-content:flex-end">';
+    if(canAct){
+      h += '<div style="flex:1"><textarea class="input" id="rvNote" rows="2" placeholder="Add a note (optional)..." style="width:100%;resize:vertical;font-family:var(--font);font-size:12.5px"></textarea></div>';
+      h += '<button class="btn" id="rvReject" style="border-color:var(--danger);color:var(--danger)">&#10007; Reject</button>';
+      h += '<button class="btn primary" id="rvApprove" style="background:var(--green);border-color:var(--green)">&#10003; Approve</button>';
+    }
+    h += '<button class="btn" id="rvClose">Close</button>';
+    h += '</div>';
+
+    body.innerHTML = h;
+
+    var closeBtn = body.querySelector("#rvClose");
+    if(closeBtn) closeBtn.onclick = function(){ hideRvModal(); };
+
+    var approveBtn = body.querySelector("#rvApprove");
+    if(approveBtn) approveBtn.onclick = function(){
+      var note = (body.querySelector("#rvNote") || {}).value || "";
+      for(var ai = 0; ai < req.chain.length; ai++){
+        if(req.chain[ai].status === "pending"){
+          req.chain[ai].status = "approved";
+          req.chain[ai].time = "just now";
+          req.chain[ai].note = note || "Approved";
+          if(ai + 1 < req.chain.length && req.chain[ai+1].status === "waiting") req.chain[ai+1].status = "pending";
+          break;
+        }
+      }
+      var allApproved = req.chain.every(function(c){ return c.status === "approved"; });
+      hideRvModal();
+      if(allApproved){
+        if(window.pf) pf.toast(req.id + " fully approved -- upgrade applied to " + req.tenant, "ok");
+      } else {
+        if(window.pf) pf.toast(req.id + " -- your approval recorded. Waiting for remaining approvers.", "ok");
+      }
+      // Re-render pending table
+      renderPendingTable();
+    };
+
+    var rejectBtn = body.querySelector("#rvReject");
+    if(rejectBtn) rejectBtn.onclick = function(){
+      var note = (body.querySelector("#rvNote") || {}).value || "";
+      if(!note){ if(window.pf) pf.toast("Please add a rejection reason", "err"); return; }
+      hideRvModal();
+      if(window.pf) pf.toast(req.id + " rejected -- " + note, "ok");
+    };
+
+    showRvModal();
+  }
+
+  function renderPendingTable(){
+    var pendingBody2 = document.querySelector("#pendingTbl tbody");
+    if(!pendingBody2) return;
+    var html = "";
+    for(var i = 0; i < PENDING.length; i++){
+      var p = PENDING[i];
+      var chainHtml = p.chain.map(function(c){
+        if(c.status === "approved") return '<span class="badge green dot" style="font-size:10px">' + c.role.split("/")[0].trim() + ' &#10003;</span>';
+        if(c.status === "pending") return '<span class="badge amber dot" style="font-size:10px">' + c.role.split("/")[0].trim() + ' &#9201;</span>';
+        return '<span class="badge dot" style="font-size:10px">' + c.role.split("/")[0].trim() + '</span>';
+      }).join(" ");
+      var allDone = p.chain.every(function(c){ return c.status === "approved"; });
+      var ps = getPendingApprover(p);
+      var myApproval = ps && ps.approver === CURRENT_USER.name && !isInitiator(p);
+      var btnHtml;
+      if(allDone){
+        btnHtml = '<span class="badge green dot" style="font-size:10px">Applied</span>';
+      } else if(myApproval){
+        btnHtml = '<button class="btn primary reviewBtn" style="padding:5px 12px" data-idx="' + i + '">Review & Approve</button>';
+      } else {
+        btnHtml = '<button class="btn reviewBtn" style="padding:5px 12px" data-idx="' + i + '">View status</button>';
+      }
+      html += '<tr style="background:' + (allDone ? "var(--green-soft)" : "var(--amber-soft)") + '">' +
+        "<td><b>" + p.id + "</b></td>" +
+        '<td><span class="badge ind">' + p.type + "</span></td>" +
+        "<td><b>" + p.tenant + "</b><br><small class='muted'>" + p.detail + "</small></td>" +
+        "<td>" + p.initiator + "<br><small class='muted'>" + p.role + "</small></td>" +
+        "<td>" + chainHtml + "</td>" +
+        '<td class="muted">' + p.submitted + "</td>" +
+        '<td>' + btnHtml + '</td>' +
+      "</tr>";
+    }
+    pendingBody2.innerHTML = html;
+  }
+
+  function showRvModal(){
+    var ov = document.getElementById("rvOv");
+    var mod = document.getElementById("rvMod");
+    if(ov){ document.body.appendChild(ov); ov.classList.add("open"); }
+    if(mod){ document.body.appendChild(mod); mod.classList.add("open"); }
+  }
+  function hideRvModal(){
+    var ov = document.getElementById("rvOv");
+    var mod = document.getElementById("rvMod");
+    if(ov) ov.classList.remove("open");
+    if(mod) mod.classList.remove("open");
+  }
+}
+</script>
+</body></html>

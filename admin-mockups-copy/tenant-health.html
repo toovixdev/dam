@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Tenant Health</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1>Tenant Health</h1>
+      <div class="meta"><span>single-pane support view &middot; per-tenant diagnostics</span></div>
+    </div>
+  </div>
+
+  <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px">
+    <label style="font-size:13px;font-weight:600;color:var(--muted)">Select tenant</label>
+    <select id="tenantSel" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--fg);font-size:13px;min-width:240px">
+      <option value="meridian" selected>Meridian Financial</option>
+      <option value="bnb">Bharat National Bank</option>
+      <option value="nordic">Nordic Insurance Group</option>
+      <option value="pacific">Pacific Health Partners</option>
+      <option value="royal">Royal Commerce UK</option>
+      <option value="govdata">GovData India</option>
+      <option value="techstart">TechStart Inc</option>
+    </select>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Overall health</div><div class="kv" id="kvHealth" style="color:var(--green)">92</div><div class="kd up">composite score 0-100</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Databases</div><div class="kv" id="kvDbs">186</div><div class="kd">monitored</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Events/day</div><div class="kv" id="kvEvents">142.6M</div><div class="kd up">steady</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9888;</span> Open issues</div><div class="kv" id="kvIssues">2</div><div class="kd down">1 high &middot; 1 medium</div></div>
+  </div>
+
+  <div id="healthContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doTenantHealth, 100);
+})();
+function doTenantHealth(){
+  var c = document.getElementById("healthContent");
+  if(!c) return;
+
+  c.innerHTML =
+    "<div style=\"margin-bottom:10px\"><h2 style=\"font-size:14px;font-weight:700;margin:0 0 10px\">Health Cards &mdash; Meridian Financial</h2></div>" +
+
+    "<div class=\"grid\" style=\"grid-template-columns:repeat(3,1fr);margin-bottom:14px\">" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Ingest Health</span><span class=\"s\" style=\"color:var(--green)\">&#9679; Healthy</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Events/s</span><b>1,651</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Ingest lag</span><b>0.8s</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Last event</span><b>2s ago</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px\"><span class=\"muted\">Pipeline status</span><b style=\"color:var(--green)\">Running</b></div>" +
+        "</div>" +
+      "</div>" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Agent Health</span><span class=\"s\" style=\"color:var(--amber)\">&#9679; Warning</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Online / Total</span><b>339 / 341</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Offline agents</span><b style=\"color:var(--amber)\">agent-us-214, agent-us-307</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Coverage</span><b>99.4%</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px\"><span class=\"muted\">Coverage gaps</span><b style=\"color:var(--amber)\">2 DBs uncovered</b></div>" +
+        "</div>" +
+      "</div>" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Alert Health</span><span class=\"s\" style=\"color:var(--green)\">&#9679; Healthy</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Alerts generated (24h)</span><b>47</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Acknowledged rate</span><b>94%</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Avg response time</span><b>3.2 min</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px\"><span class=\"muted\">Unacknowledged</span><b>3</b></div>" +
+        "</div>" +
+      "</div>" +
+
+    "</div>" +
+
+    "<div class=\"grid\" style=\"grid-template-columns:repeat(3,1fr);margin-bottom:14px\">" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Classification Health</span><span class=\"s\" style=\"color:var(--green)\">&#9679; Healthy</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Columns classified</span><b>12,482</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Last scan</span><b>14 min ago</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Coverage</span><b>98.6%</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px\"><span class=\"muted\">Pending review</span><b>18 columns</b></div>" +
+        "</div>" +
+      "</div>" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Compliance Health</span><span class=\"s\" style=\"color:var(--green)\">&#9679; Healthy</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Frameworks active</span><b>3 (SOX, PCI-DSS, SOC2)</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Control pass rate</span><b style=\"color:var(--green)\">96.2%</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Gaps identified</span><b style=\"color:var(--amber)\">4</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px\"><span class=\"muted\">Next audit due</span><b>12 Jul 2026</b></div>" +
+        "</div>" +
+      "</div>" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Integration Health</span><span class=\"s\" style=\"color:var(--green)\">&#9679; Healthy</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">SIEM delivery rate</span><b style=\"color:var(--green)\">99.8%</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">ITSM sync status</span><b style=\"color:var(--green)\">Connected</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px\"><span class=\"muted\">Notification success</span><b>99.2%</b></div>" +
+          "<div style=\"display:flex;justify-content:space-between;font-size:12.5px\"><span class=\"muted\">Last sync failure</span><b class=\"muted\">None (7d)</b></div>" +
+        "</div>" +
+      "</div>" +
+
+    "</div>" +
+
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Recent Issues</span><span class=\"s\">Last 5 problems detected</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Time</th><th>Issue</th><th>Subsystem</th><th>Severity</th><th>Status</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td class=\"muted\">23 Jun 14:22</td><td><b>Agent agent-us-214 offline</b><br><small class=\"muted\">Lost heartbeat &middot; covering 1 Oracle DB</small></td><td>Agent</td><td><span class=\"badge amber\">high</span></td><td><span class=\"badge amber dot\">Open</span></td></tr>" +
+            "<tr><td class=\"muted\">23 Jun 11:08</td><td><b>Agent agent-us-307 offline</b><br><small class=\"muted\">Lost heartbeat &middot; covering 1 PostgreSQL DB</small></td><td>Agent</td><td><span class=\"badge blue\">medium</span></td><td><span class=\"badge amber dot\">Open</span></td></tr>" +
+            "<tr><td class=\"muted\">22 Jun 19:45</td><td><b>Classification scan timeout</b><br><small class=\"muted\">Scan on db-prod-12 took 18 min (threshold 15 min)</small></td><td>Classification</td><td><span class=\"badge blue\">medium</span></td><td><span class=\"badge green dot\">Resolved</span></td></tr>" +
+            "<tr><td class=\"muted\">21 Jun 08:30</td><td><b>Alert notification delay</b><br><small class=\"muted\">Slack webhook responded slowly &middot; 12s delay</small></td><td>Integration</td><td><span class=\"badge\">low</span></td><td><span class=\"badge green dot\">Resolved</span></td></tr>" +
+            "<tr><td class=\"muted\">20 Jun 16:12</td><td><b>Compliance gap detected</b><br><small class=\"muted\">PCI-DSS control CC-7.1 &middot; missing masking on 2 columns</small></td><td>Compliance</td><td><span class=\"badge amber\">high</span></td><td><span class=\"badge blue dot\">In progress</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>";
+
+  var sel = document.getElementById("tenantSel");
+  if(sel){
+    sel.onchange = function(){
+      if(window.pf) pf.toast("Switched to " + sel.options[sel.selectedIndex].text, "ok");
+    };
+  }
+}
+</script>
+</body></html>

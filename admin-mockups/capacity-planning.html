@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Capacity Planning</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="infra-health">
+
+  <div class="phead">
+    <div>
+      <h1>Capacity Planning</h1>
+      <div class="meta"><span>growth forecasting &middot; expansion alerts</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Clusters</div><div class="kv">5</div><div class="kd">across 5 regions</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Avg utilization</div><div class="kv">72%</div><div class="kd">weighted by volume</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9888;</span> Expansion needed</div><div class="kv" style="color:var(--amber)">1</div><div class="kd down">IN-Mumbai by Aug 2026</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9650;</span> Growth rate</div><div class="kv">8%</div><div class="kd">monthly avg</div></div>
+  </div>
+
+  <div id="capacityContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doCapacity, 100);
+})();
+function doCapacity(){
+  var c = document.getElementById("capacityContent");
+  if(!c) return;
+
+  c.innerHTML =
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Per-Region Capacity</span><span class=\"s\">5 regions</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Region</th><th class=\"num\">CH Nodes</th><th class=\"num\">Disk Used / Total</th><th class=\"num\">Kafka Partitions</th><th class=\"num\">Compute Cores</th><th class=\"num\">Utilization</th><th>Forecast Full</th><th>Status</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>US-East</b></td><td class=\"num\">6</td><td class=\"num\">4.8 TB / 8 TB</td><td class=\"num\">24</td><td class=\"num\">64</td><td class=\"num\">72%</td><td class=\"muted\">Dec 2026</td><td><span class=\"badge green dot\">OK</span></td></tr>" +
+            "<tr><td><b>EU-West</b></td><td class=\"num\">4</td><td class=\"num\">2.6 TB / 4 TB</td><td class=\"num\">16</td><td class=\"num\">48</td><td class=\"num\">65%</td><td class=\"muted\">Feb 2027</td><td><span class=\"badge green dot\">OK</span></td></tr>" +
+            "<tr style=\"background:var(--amber-soft)\"><td><b>IN-Mumbai</b> <span class=\"badge amber\">&#9888;</span></td><td class=\"num\">4</td><td class=\"num\">5.2 TB / 6 TB</td><td class=\"num\">18</td><td class=\"num\">48</td><td class=\"num\" style=\"color:var(--amber);font-weight:700\">87%</td><td style=\"color:var(--amber);font-weight:600\">Aug 2026</td><td><span class=\"badge amber dot\">Expansion needed</span></td></tr>" +
+            "<tr><td><b>UK-South</b></td><td class=\"num\">3</td><td class=\"num\">1.6 TB / 3 TB</td><td class=\"num\">12</td><td class=\"num\">32</td><td class=\"num\">54%</td><td class=\"muted\">May 2027</td><td><span class=\"badge green dot\">OK</span></td></tr>" +
+            "<tr><td><b>CA-Central</b></td><td class=\"num\">3</td><td class=\"num\">1.4 TB / 3 TB</td><td class=\"num\">12</td><td class=\"num\">32</td><td class=\"num\">48%</td><td class=\"muted\">Jul 2027</td><td><span class=\"badge green dot\">OK</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>" +
+
+    "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr;margin-bottom:14px\">" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Growth Trend &mdash; Disk Usage by Region</span></div>" +
+        "<div class=\"bd\"><div id=\"chGrowth\"></div></div>" +
+      "</div>" +
+
+      "<div class=\"card\">" +
+        "<div class=\"hd\"><span class=\"t\">Expansion Recommendations</span></div>" +
+        "<div class=\"bd\">" +
+          "<div style=\"margin-bottom:12px;padding:10px 12px;border-radius:6px;border-left:3px solid var(--amber);background:var(--amber-soft)\">" +
+            "<div style=\"font-size:13px;font-weight:600\">Add 2 ClickHouse nodes to IN-Mumbai</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">Current 4 nodes at 87% disk. Adding 2 nodes extends runway to Mar 2027. Estimated cost: $2,400/mo</div>" +
+          "</div>" +
+          "<div style=\"margin-bottom:12px;padding:10px 12px;border-radius:6px;border-left:3px solid var(--info);background:var(--info-soft)\">" +
+            "<div style=\"font-size:13px;font-weight:600\">Increase Kafka partitions in EU-West</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">Current 16 partitions nearing consumer group limit. Recommend 24 partitions. No additional cost.</div>" +
+          "</div>" +
+          "<div style=\"margin-bottom:12px;padding:10px 12px;border-radius:6px;border-left:3px solid var(--info);background:var(--info-soft)\">" +
+            "<div style=\"font-size:13px;font-weight:600\">Plan US-East disk expansion by Q4</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">At 8% growth rate, US-East reaches 85% by Nov 2026. Pre-order 4 TB expansion. Estimated cost: $1,800/mo</div>" +
+          "</div>" +
+          "<div style=\"padding:10px 12px;border-radius:6px;border-left:3px solid var(--green);background:var(--green-soft)\">" +
+            "<div style=\"font-size:13px;font-weight:600\">UK-South and CA-Central are healthy</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">No expansion needed until mid-2027 at current growth rates.</div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+
+    "</div>" +
+
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Cost Projection</span></div>" +
+      "<div class=\"bd\">" +
+        "<div class=\"grid\" style=\"grid-template-columns:repeat(3,1fr)\">" +
+          "<div style=\"text-align:center\">" +
+            "<div style=\"font-size:12px;color:var(--muted);margin-bottom:4px\">Current monthly infra cost</div>" +
+            "<div style=\"font-size:24px;font-weight:700\">$48,200</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">across 5 regions</div>" +
+          "</div>" +
+          "<div style=\"text-align:center\">" +
+            "<div style=\"font-size:12px;color:var(--muted);margin-bottom:4px\">Projected (3 months)</div>" +
+            "<div style=\"font-size:24px;font-weight:700;color:var(--amber)\">$54,800</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">+13.7% (includes IN-Mumbai expansion)</div>" +
+          "</div>" +
+          "<div style=\"text-align:center\">" +
+            "<div style=\"font-size:12px;color:var(--muted);margin-bottom:4px\">Projected (12 months)</div>" +
+            "<div style=\"font-size:24px;font-weight:700;color:var(--amber)\">$72,600</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">+50.6% at 8% monthly growth</div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>";
+
+  if(window.pf){
+    pf.line("#chGrowth",{labels:["Jan","Feb","Mar","Apr","May","Jun"],lines:[
+      {name:"US-East",color:"var(--primary)",points:[58,61,64,67,70,72]},
+      {name:"IN-Mumbai",color:"var(--amber)",points:[68,72,76,80,84,87]},
+      {name:"EU-West",color:"var(--info)",points:[52,54,57,59,62,65]},
+      {name:"UK-South",color:"var(--green)",points:[42,44,46,48,51,54]},
+      {name:"CA-Central",color:"var(--danger)",points:[36,38,40,42,45,48]}
+    ]},{height:200});
+  }
+}
+</script>
+</body></html>

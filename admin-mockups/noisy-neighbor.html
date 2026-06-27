@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Noisy Neighbor Detection</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="infra-health">
+
+  <div class="phead">
+    <div>
+      <h1>Noisy Neighbor Detection</h1>
+      <div class="meta"><span>SaaS shared infrastructure only</span><span>&middot;</span><span>6 tenants on shared clusters</span><span>&middot;</span><span id="lastRefresh" style="color:var(--green)">updated just now</span></div>
+    </div>
+    <div class="acts" style="display:flex;align-items:center;gap:10px">
+      <span id="wsStatus" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--green);background:var(--green-soft);padding:4px 10px;border-radius:6px">&#9679; WebSocket connected</span>
+      <button class="btn" id="manualRefresh">&#8635; Refresh now</button>
+    </div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:repeat(5,1fr);margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--danger-soft);color:var(--danger)">&#9650;</span> Top consumer</div><div class="kv" style="font-size:14px">Bharat National Bank</div><div class="kd down">IN-Mumbai</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9637;</span> ClickHouse</div><div class="kv" style="color:var(--amber)">78%</div><div class="kd down">IN-Mumbai disk 87%</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9655;</span> Event Hub</div><div class="kv" style="color:var(--green)">62%</div><div class="kd up">0 partitions saturated</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9881;</span> Kubernetes</div><div class="kv" style="color:var(--green)">54%</div><div class="kd up">no pod evictions</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9673;</span> Throttled</div><div class="kv" style="color:var(--green)">0</div><div class="kd up">no active throttles</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;border-left:3px solid var(--info)">
+    <div class="bd" style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;color:var(--info)">&#9432;</span>
+      <div>
+        <b style="color:var(--info)">Shared infrastructure view</b><br>
+        <span>Showing only SaaS multi-tenant clusters. On-prem tenants (GovData India) and customer-cloud tenants have dedicated infrastructure and are not shown here.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;border-left:3px solid var(--amber)">
+    <div class="bd" style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;color:var(--amber)">&#9888;</span>
+      <div>
+        <b style="color:var(--amber)">Capacity Warning</b><br>
+        <span>Bharat National Bank is consuming 34% of IN-Mumbai ClickHouse cluster CPU and 87% disk &mdash; consider migration to dedicated cluster</span>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn" onclick="pf.toast('Opening migration planner','ok')">Plan migration</button>
+        <button class="btn" onclick="pf.toast('Alert acknowledged','ok')">Acknowledge</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Per-layer breakdown tabs -->
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd" style="gap:14px">
+      <span class="t">Resource Consumption by Tenant</span>
+      <div class="subnav" style="margin:0;border:0" id="layerTabs">
+        <button class="active" data-layer="all">All Layers</button>
+        <button data-layer="clickhouse">ClickHouse</button>
+        <button data-layer="eventhub">Event Hub</button>
+        <button data-layer="k8s">Kubernetes</button>
+      </div>
+    </div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="noisyTbl">
+        <thead id="noisyHead"></thead>
+        <tbody id="noisyBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="detailPanel" style="margin-bottom:14px;display:none">
+    <div class="hd"><span class="t" id="detailTitle">Tenant Detail</span><span class="s" id="detailSub"></span></div>
+    <div class="bd">
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+        <div>
+          <h3 style="font-size:13px;font-weight:700;margin:0 0 8px">Resource Trend (24h)</h3>
+          <div id="chResourceTrend"></div>
+        </div>
+        <div>
+          <h3 style="font-size:13px;font-weight:700;margin:0 0 8px">Recommended Actions</h3>
+          <div id="detailActions"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Throttle Controls</span><span class="s">per-tenant rate limiting</span></div>
+    <div class="bd">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Auto-throttle</label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12px;color:var(--muted)">When a tenant exceeds 30% of shared cluster capacity</span>
+            <button class="btn" id="autoThrottleBtn" onclick="toggleAutoThrottle()" style="min-width:80px">Enable</button>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;background:var(--surface)">
+          <b style="min-width:180px;font-size:13px">Bharat National Bank</b>
+          <span class="muted" style="font-size:12px;min-width:100px">Current: 2,296/s</span>
+          <input type="range" min="500" max="5000" value="3000" step="100" style="flex:1" oninput="this.nextElementSibling.textContent=this.value+'/s'">
+          <span style="font-size:12px;font-weight:600;min-width:60px">3000/s</span>
+          <button class="btn" onclick="pf.toast('Rate limit applied to Bharat National Bank','ok')">Apply</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;background:var(--surface)">
+          <b style="min-width:180px;font-size:13px">GovData India</b>
+          <span class="muted" style="font-size:12px;min-width:100px">Current: 1,444/s</span>
+          <input type="range" min="500" max="5000" value="2500" step="100" style="flex:1" oninput="this.nextElementSibling.textContent=this.value+'/s'">
+          <span style="font-size:12px;font-weight:600;min-width:60px">2500/s</span>
+          <button class="btn" onclick="pf.toast('Rate limit applied to GovData India','ok')">Apply</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;background:var(--surface)">
+          <b style="min-width:180px;font-size:13px">Meridian Financial</b>
+          <span class="muted" style="font-size:12px;min-width:100px">Current: 1,651/s</span>
+          <input type="range" min="500" max="5000" value="2500" step="100" style="flex:1" oninput="this.nextElementSibling.textContent=this.value+'/s'">
+          <span style="font-size:12px;font-weight:600;min-width:60px">2500/s</span>
+          <button class="btn" onclick="pf.toast('Rate limit applied to Meridian Financial','ok')">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doNoisyNeighbor, 100);
+})();
+function toggleAutoThrottle(){
+  var btn = document.getElementById("autoThrottleBtn");
+  if(!btn) return;
+  if(btn.textContent === "Enable"){
+    btn.textContent = "Disable";
+    btn.classList.add("primary");
+    pf.toast("Auto-throttle enabled at 30% threshold","ok");
+  } else {
+    btn.textContent = "Enable";
+    btn.classList.remove("primary");
+    pf.toast("Auto-throttle disabled","ok");
+  }
+}
+function doNoisyNeighbor(){
+  // Only SaaS (multi-tenant shared infra) tenants -- on-prem and customer-cloud are excluded
+  var TENANTS = [
+    {name:"Bharat National Bank", slug:"bnb-india", region:"IN-Mumbai", dbs:240, deploy:"SaaS",
+      ch:{cpu:34,mem:28,diskIO:31,disk:87,queries:142,slowQ:14,status:"warning"},
+      eh:{tpu:68,partitions:"12/16",lag:"1.8s",backlog:"2.4M",status:"normal"},
+      k8s:{cpu:18,mem:22,pods:"12/14",restarts:0,evictions:0,status:"normal"},
+      overall:"warning"},
+    {name:"Meridian Financial", slug:"meridian-fin", region:"US-East", dbs:186, deploy:"SaaS",
+      ch:{cpu:22,mem:19,diskIO:18,disk:72,queries:98,slowQ:2,status:"normal"},
+      eh:{tpu:42,partitions:"8/16",lag:"0.6s",backlog:"0.8M",status:"normal"},
+      k8s:{cpu:14,mem:16,pods:"8/10",restarts:1,evictions:0,status:"normal"},
+      overall:"normal"},
+    {name:"Pacific Health Partners", slug:"pacific-hp", region:"US-West", dbs:112, deploy:"SaaS",
+      ch:{cpu:16,mem:14,diskIO:12,disk:58,queries:64,slowQ:1,status:"normal"},
+      eh:{tpu:32,partitions:"6/16",lag:"0.4s",backlog:"0.3M",status:"normal"},
+      k8s:{cpu:12,mem:11,pods:"6/8",restarts:0,evictions:0,status:"normal"},
+      overall:"normal"},
+    {name:"Nordic Insurance Group", slug:"nordic-ins", region:"EU-West", dbs:89, deploy:"SaaS",
+      ch:{cpu:12,mem:11,diskIO:9,disk:65,queries:42,slowQ:0,status:"normal"},
+      eh:{tpu:24,partitions:"4/16",lag:"0.3s",backlog:"0.1M",status:"normal"},
+      k8s:{cpu:8,mem:9,pods:"4/6",restarts:2,evictions:0,status:"normal"},
+      overall:"normal"},
+    {name:"Royal Commerce UK", slug:"royal-comm", region:"UK-South", dbs:64, deploy:"SaaS",
+      ch:{cpu:8,mem:7,diskIO:6,disk:54,queries:28,slowQ:0,status:"normal"},
+      eh:{tpu:16,partitions:"3/16",lag:"0.2s",backlog:"0.05M",status:"normal"},
+      k8s:{cpu:6,mem:5,pods:"3/4",restarts:0,evictions:0,status:"normal"},
+      overall:"normal"},
+    {name:"TechStart Inc", slug:"techstart", region:"US-East", dbs:3, deploy:"SaaS",
+      ch:{cpu:1,mem:1,diskIO:1,disk:2,queries:4,slowQ:0,status:"normal"},
+      eh:{tpu:1,partitions:"1/16",lag:"0.1s",backlog:"0",status:"normal"},
+      k8s:{cpu:1,mem:1,pods:"1/2",restarts:0,evictions:0,status:"normal"},
+      overall:"normal"}
+  ];
+
+  var curLayer = "all";
+
+  function clr(val, warn, danger){ return val >= danger ? 'style="color:var(--danger)"' : val >= warn ? 'style="color:var(--amber)"' : ""; }
+  function badge(st){ return st === "warning" ? '<span class="badge amber dot">Warning</span>' : st === "danger" ? '<span class="badge red dot">Critical</span>' : '<span class="badge green dot">Normal</span>'; }
+
+  function renderTable(){
+    var head = document.getElementById("noisyHead");
+    var body = document.getElementById("noisyBody");
+    if(!head || !body) return;
+
+    if(curLayer === "clickhouse"){
+      head.innerHTML = '<tr><th>Tenant</th><th>Region</th><th class="num">CPU %</th><th class="num">Memory %</th><th class="num">Disk I/O %</th><th class="num">Disk Used %</th><th class="num">Queries/h</th><th class="num">Slow Queries</th><th>Status</th><th>Actions</th></tr>';
+      var h = "";
+      for(var i = 0; i < TENANTS.length; i++){
+        var t = TENANTS[i];
+        var rowBg = t.ch.status === "warning" ? ' style="background:var(--danger-soft)"' : "";
+        h += "<tr" + rowBg + ">" +
+          "<td><b>" + t.name + "</b><br><small class='muted'>" + t.slug + " &middot; " + t.dbs + " DBs</small></td>" +
+          "<td>" + t.region + "</td>" +
+          '<td class="num"><b ' + clr(t.ch.cpu,25,30) + '>' + t.ch.cpu + '%</b></td>' +
+          '<td class="num"><b ' + clr(t.ch.mem,25,30) + '>' + t.ch.mem + '%</b></td>' +
+          '<td class="num"><b ' + clr(t.ch.diskIO,25,30) + '>' + t.ch.diskIO + '%</b></td>' +
+          '<td class="num"><b ' + clr(t.ch.disk,70,85) + '>' + t.ch.disk + '%</b></td>' +
+          '<td class="num">' + t.ch.queries + '</td>' +
+          '<td class="num">' + (t.ch.slowQ > 0 ? '<b style="color:var(--amber)">' + t.ch.slowQ + '</b>' : '0') + '</td>' +
+          "<td>" + badge(t.ch.status) + "</td>" +
+          '<td><button class="btn detailBtn" data-idx="' + i + '" style="padding:5px 12px">Detail</button></td></tr>';
+      }
+      body.innerHTML = h;
+
+    } else if(curLayer === "eventhub"){
+      head.innerHTML = '<tr><th>Tenant</th><th>Region</th><th class="num">Throughput %</th><th class="num">Partitions</th><th class="num">Consumer Lag</th><th class="num">Backlog</th><th>Status</th><th>Actions</th></tr>';
+      var h2 = "";
+      for(var j = 0; j < TENANTS.length; j++){
+        var t2 = TENANTS[j];
+        var rowBg2 = t2.eh.status === "warning" ? ' style="background:var(--danger-soft)"' : "";
+        h2 += "<tr" + rowBg2 + ">" +
+          "<td><b>" + t2.name + "</b><br><small class='muted'>" + t2.slug + "</small></td>" +
+          "<td>" + t2.region + "</td>" +
+          '<td class="num"><b ' + clr(t2.eh.tpu,60,80) + '>' + t2.eh.tpu + '%</b></td>' +
+          '<td class="num">' + t2.eh.partitions + '</td>' +
+          '<td class="num"><b ' + clr(parseFloat(t2.eh.lag),1.0,2.0) + '>' + t2.eh.lag + '</b></td>' +
+          '<td class="num">' + t2.eh.backlog + '</td>' +
+          "<td>" + badge(t2.eh.status) + "</td>" +
+          '<td><button class="btn detailBtn" data-idx="' + j + '" style="padding:5px 12px">Detail</button></td></tr>';
+      }
+      body.innerHTML = h2;
+
+    } else if(curLayer === "k8s"){
+      head.innerHTML = '<tr><th>Tenant</th><th>Region</th><th class="num">CPU %</th><th class="num">Memory %</th><th class="num">Pods</th><th class="num">Restarts (24h)</th><th class="num">Evictions</th><th>Status</th><th>Actions</th></tr>';
+      var h3 = "";
+      for(var k = 0; k < TENANTS.length; k++){
+        var t3 = TENANTS[k];
+        var rowBg3 = t3.k8s.status === "warning" ? ' style="background:var(--danger-soft)"' : "";
+        h3 += "<tr" + rowBg3 + ">" +
+          "<td><b>" + t3.name + "</b><br><small class='muted'>" + t3.slug + "</small></td>" +
+          "<td>" + t3.region + "</td>" +
+          '<td class="num"><b ' + clr(t3.k8s.cpu,20,30) + '>' + t3.k8s.cpu + '%</b></td>' +
+          '<td class="num"><b ' + clr(t3.k8s.mem,20,30) + '>' + t3.k8s.mem + '%</b></td>' +
+          '<td class="num">' + t3.k8s.pods + '</td>' +
+          '<td class="num">' + (t3.k8s.restarts > 0 ? '<b style="color:var(--amber)">' + t3.k8s.restarts + '</b>' : '0') + '</td>' +
+          '<td class="num">' + (t3.k8s.evictions > 0 ? '<b style="color:var(--danger)">' + t3.k8s.evictions + '</b>' : '0') + '</td>' +
+          "<td>" + badge(t3.k8s.status) + "</td>" +
+          '<td><button class="btn detailBtn" data-idx="' + k + '" style="padding:5px 12px">Detail</button></td></tr>';
+      }
+      body.innerHTML = h3;
+
+    } else {
+      // All layers combined
+      head.innerHTML = '<tr><th>Tenant</th><th>Region</th><th class="num" style="text-align:center" colspan="3">ClickHouse</th><th class="num" style="text-align:center" colspan="2">Event Hub</th><th class="num" style="text-align:center" colspan="2">Kubernetes</th><th>Status</th><th>Actions</th></tr>';
+      var h4 = "";
+      for(var l = 0; l < TENANTS.length; l++){
+        var t4 = TENANTS[l];
+        var rowBg4 = t4.overall === "warning" ? ' style="background:var(--danger-soft)"' : "";
+        h4 += "<tr" + rowBg4 + ">" +
+          "<td><b>" + t4.name + "</b><br><small class='muted'>" + t4.slug + " &middot; " + t4.region + "</small></td>" +
+          "<td>" + t4.region + "</td>" +
+          // ClickHouse: CPU, Disk I/O, Disk %
+          '<td class="num"><small class="muted">CPU</small><br><b ' + clr(t4.ch.cpu,25,30) + '>' + t4.ch.cpu + '%</b></td>' +
+          '<td class="num"><small class="muted">I/O</small><br><b ' + clr(t4.ch.diskIO,25,30) + '>' + t4.ch.diskIO + '%</b></td>' +
+          '<td class="num"><small class="muted">Disk</small><br><b ' + clr(t4.ch.disk,70,85) + '>' + t4.ch.disk + '%</b></td>' +
+          // Event Hub: TPU, Lag
+          '<td class="num"><small class="muted">TPU</small><br><b ' + clr(t4.eh.tpu,60,80) + '>' + t4.eh.tpu + '%</b></td>' +
+          '<td class="num"><small class="muted">Lag</small><br><b ' + clr(parseFloat(t4.eh.lag),1.0,2.0) + '>' + t4.eh.lag + '</b></td>' +
+          // K8s: CPU, Mem
+          '<td class="num"><small class="muted">CPU</small><br><b ' + clr(t4.k8s.cpu,20,30) + '>' + t4.k8s.cpu + '%</b></td>' +
+          '<td class="num"><small class="muted">Mem</small><br><b ' + clr(t4.k8s.mem,20,30) + '>' + t4.k8s.mem + '%</b></td>' +
+          "<td>" + badge(t4.overall) + "</td>" +
+          '<td><button class="btn detailBtn" data-idx="' + l + '" style="padding:5px 12px">Detail</button></td></tr>';
+      }
+      body.innerHTML = h4;
+    }
+  }
+
+  renderTable();
+
+  // Layer tabs
+  document.addEventListener("click", function(e){
+    var tabBtn = e.target.closest && e.target.closest("#layerTabs button");
+    if(tabBtn){
+      document.querySelectorAll("#layerTabs button").forEach(function(b){ b.classList.remove("active"); });
+      tabBtn.classList.add("active");
+      curLayer = tabBtn.getAttribute("data-layer");
+      renderTable();
+      return;
+    }
+    var detBtn = e.target.closest && e.target.closest(".detailBtn");
+    if(detBtn){
+      var idx = parseInt(detBtn.getAttribute("data-idx"));
+      showDetail(TENANTS[idx]);
+      return;
+    }
+  });
+
+  function showDetail(t){
+    var panel = document.getElementById("detailPanel");
+    var titleEl = document.getElementById("detailTitle");
+    var subEl = document.getElementById("detailSub");
+    var actionsEl = document.getElementById("detailActions");
+    if(!panel) return;
+
+    if(titleEl) titleEl.textContent = "Tenant Detail -- " + t.name;
+    if(subEl) subEl.textContent = t.region + " &middot; " + t.dbs + " databases";
+
+    if(actionsEl){
+      var actions = [];
+      if(t.ch.cpu >= 30 || t.ch.disk >= 85)
+        actions.push({color:"var(--danger)",bg:"var(--danger-soft)",title:"Migrate ClickHouse to dedicated cluster",desc:"Tenant is consuming " + t.ch.cpu + "% CPU and " + t.ch.disk + "% disk on the shared ClickHouse cluster."});
+      if(t.ch.slowQ > 5)
+        actions.push({color:"var(--info)",bg:"var(--info-soft)",title:"Optimize slow queries",desc:t.ch.slowQ + " slow queries detected in the last hour. Query optimization could reduce ClickHouse CPU."});
+      if(parseFloat(t.eh.lag) >= 1.5)
+        actions.push({color:"var(--amber)",bg:"var(--amber-soft)",title:"Scale Event Hub partitions",desc:"Consumer lag at " + t.eh.lag + ". Add partitions or scale consumer group to reduce backlog."});
+      if(t.k8s.evictions > 0)
+        actions.push({color:"var(--danger)",bg:"var(--danger-soft)",title:"Increase K8s resource limits",desc:t.k8s.evictions + " pod evictions detected. Increase memory/CPU limits to prevent scheduling failures."});
+      if(actions.length === 0)
+        actions.push({color:"var(--green)",bg:"var(--green-soft)",title:"No action required",desc:"Tenant resource consumption is within normal bounds across all infrastructure layers."});
+
+      actionsEl.innerHTML = actions.map(function(a){
+        return '<div style="padding:8px 12px;border-radius:8px;background:' + a.bg + ';font-size:13px;margin-bottom:6px"><b style="color:' + a.color + '">' + a.title + '</b><br><small class="muted">' + a.desc + '</small></div>';
+      }).join("");
+    }
+
+    panel.style.display = "block";
+    panel.scrollIntoView({behavior:"smooth", block:"start"});
+
+    if(window.pf){
+      pf.line("#chResourceTrend",{labels:["00:00","04:00","08:00","12:00","16:00","20:00","Now"],lines:[
+        {name:"CH CPU %",color:"var(--danger)",points:[t.ch.cpu-6,t.ch.cpu-8,t.ch.cpu-4,t.ch.cpu,t.ch.cpu+2,t.ch.cpu-1,t.ch.cpu]},
+        {name:"EH TPU %",color:"var(--info)",points:[t.eh.tpu-8,t.eh.tpu-10,t.eh.tpu-4,t.eh.tpu,t.eh.tpu+4,t.eh.tpu-2,t.eh.tpu]},
+        {name:"K8s CPU %",color:"var(--amber)",points:[t.k8s.cpu-4,t.k8s.cpu-2,t.k8s.cpu-1,t.k8s.cpu+2,t.k8s.cpu+4,t.k8s.cpu,t.k8s.cpu]}
+      ]},{height:180,max:80});
+    }
+  }
+
+  // WebSocket push simulation
+  var lastRefreshEl = document.getElementById("lastRefresh");
+  var wsStatus = document.getElementById("wsStatus");
+
+  function simulatePush(){
+    if(lastRefreshEl) lastRefreshEl.textContent = "updated just now";
+    if(wsStatus){
+      wsStatus.innerHTML = "&#9679; Push received";
+      wsStatus.style.color = "var(--primary)";
+      wsStatus.style.background = "var(--primary-soft)";
+      setTimeout(function(){
+        wsStatus.innerHTML = "&#9679; WebSocket connected";
+        wsStatus.style.color = "var(--green)";
+        wsStatus.style.background = "var(--green-soft)";
+      }, 1500);
+    }
+    if(lastRefreshEl){
+      var elapsed = 0;
+      clearInterval(window._nnRefreshTimer);
+      window._nnRefreshTimer = setInterval(function(){
+        elapsed++;
+        if(elapsed < 60) lastRefreshEl.textContent = "updated " + elapsed + "s ago";
+        else lastRefreshEl.textContent = "updated " + Math.floor(elapsed/60) + "m ago";
+      }, 1000);
+    }
+  }
+
+  function schedulePush(){
+    var delay = 30000 + Math.floor(Math.random() * 30000);
+    setTimeout(function(){
+      simulatePush();
+      if(window.pf) pf.toast("Live update -- tenant resource metrics refreshed", "ok");
+      schedulePush();
+    }, delay);
+  }
+  schedulePush();
+
+  var manualRefresh = document.getElementById("manualRefresh");
+  if(manualRefresh) manualRefresh.onclick = function(){
+    simulatePush();
+    if(window.pf) pf.toast("Manual refresh -- fetching latest resource metrics", "ok");
+  };
+}
+</script>
+</body></html>

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Data Sovereignty</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="platform-audit">
+
+  <div class="phead">
+    <div>
+      <h1>Data Sovereignty</h1>
+      <div class="meta"><span>region enforcement &middot; compliance proof &middot; audit trail</span></div>
+    </div>
+    <div class="acts">
+      <button class="btn primary" onclick="pf.toast('Generating sovereignty report for auditors...','ok')">Generate sovereignty report</button>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Tenants with residency rules</div><div class="kv">38</div><div class="kd">of 42 total tenants</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#9737;</span> Regions enforced</div><div class="kv">5</div><div class="kd">US &middot; EU &middot; IN &middot; UK &middot; CA</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Violations detected</div><div class="kv" style="color:var(--green)">0</div><div class="kd up">zero violations</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9201;</span> Last audit</div><div class="kv">2h ago</div><div class="kd up">automated continuous</div></div>
+  </div>
+
+  <div id="sovContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doSovereignty, 100);
+})();
+function doSovereignty(){
+  var c = document.getElementById("sovContent");
+  if(!c) return;
+
+  c.innerHTML =
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Region Residency Rules</span></div>" +
+      "<div class=\"bd\">" +
+        "<div class=\"grid\" style=\"grid-template-columns:repeat(3,1fr);gap:10px\">" +
+          "<div style=\"padding:10px 12px;border-radius:6px;border-left:3px solid var(--amber);background:var(--amber-soft)\">" +
+            "<div style=\"font-size:13px;font-weight:600\">India tenants &rarr; IN-Mumbai only</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">RBI data localization mandate &middot; all data stores must remain in India</div>" +
+          "</div>" +
+          "<div style=\"padding:10px 12px;border-radius:6px;border-left:3px solid var(--info);background:var(--info-soft)\">" +
+            "<div style=\"font-size:13px;font-weight:600\">EU tenants &rarr; EU-West only (GDPR)</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">GDPR Article 44-49 &middot; no transfers outside EEA without adequacy decision</div>" +
+          "</div>" +
+          "<div style=\"padding:10px 12px;border-radius:6px;border-left:3px solid var(--primary);background:var(--primary-soft)\">" +
+            "<div style=\"font-size:13px;font-weight:600\">UK tenants &rarr; UK-South (post-Brexit)</div>" +
+            "<div style=\"font-size:12px;color:var(--muted)\">UK GDPR &middot; UK adequacy regime &middot; separate from EU processing</div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>" +
+
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Tenant Residency Compliance</span><span class=\"s\">showing 8 representative tenants</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Tenant</th><th>Required region</th><th>Actual region</th><th>ClickHouse</th><th>Kafka</th><th>Blob</th><th>Backups</th><th>Status</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>Meridian Financial</b></td><td>US-East</td><td>US-East</td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green dot\">Compliant</span></td></tr>" +
+            "<tr><td><b>Bharat National Bank</b></td><td>IN-Mumbai</td><td>IN-Mumbai</td><td><span class=\"badge green\">IN-Mumbai</span></td><td><span class=\"badge green\">IN-Mumbai</span></td><td><span class=\"badge green\">IN-Mumbai</span></td><td><span class=\"badge green\">IN-Mumbai</span></td><td><span class=\"badge green dot\">Compliant</span></td></tr>" +
+            "<tr><td><b>GovData India</b></td><td>IN-Mumbai</td><td>IN-Mumbai</td><td><span class=\"badge green\">IN-Mumbai</span></td><td><span class=\"badge green\">IN-Mumbai</span></td><td><span class=\"badge green\">IN-Mumbai</span></td><td><span class=\"badge green\">IN-Mumbai</span></td><td><span class=\"badge green dot\">Compliant</span></td></tr>" +
+            "<tr><td><b>Nordic Insurance Group</b></td><td>EU-West</td><td>EU-West</td><td><span class=\"badge green\">EU-West</span></td><td><span class=\"badge green\">EU-West</span></td><td><span class=\"badge green\">EU-West</span></td><td><span class=\"badge green\">EU-West</span></td><td><span class=\"badge green dot\">Compliant</span></td></tr>" +
+            "<tr><td><b>Royal Commerce UK</b></td><td>UK-South</td><td>UK-South</td><td><span class=\"badge green\">UK-South</span></td><td><span class=\"badge green\">UK-South</span></td><td><span class=\"badge green\">UK-South</span></td><td><span class=\"badge green\">UK-South</span></td><td><span class=\"badge green dot\">Compliant</span></td></tr>" +
+            "<tr><td><b>Pacific Health Partners</b></td><td>US-West</td><td>US-West</td><td><span class=\"badge green\">US-West</span></td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green\">US-West</span></td><td><span class=\"badge green\">US-West</span></td><td><span class=\"badge green dot\">Compliant</span></td></tr>" +
+            "<tr><td><b>Maple Bank Canada</b></td><td>CA-Central</td><td>CA-Central</td><td><span class=\"badge green\">CA-Central</span></td><td><span class=\"badge green\">CA-Central</span></td><td><span class=\"badge green\">CA-Central</span></td><td><span class=\"badge green\">CA-Central</span></td><td><span class=\"badge green dot\">Compliant</span></td></tr>" +
+            "<tr><td><b>TechStart Inc</b></td><td>US-East</td><td>US-East</td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green\">US-East</span></td><td><span class=\"badge green dot\">Compliant</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>" +
+
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Cross-Region Transfer Log</span><span class=\"s\">last 10 data operations</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Timestamp</th><th>From region</th><th>To region</th><th>Type</th><th>Tenant</th><th>Size</th><th>Status</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td class=\"muted\">23 Jun 14:18</td><td>US-East</td><td>US-East</td><td><span class=\"badge\">Backup</span></td><td>Meridian Financial</td><td>2.4 GB</td><td><span class=\"badge green\">Allowed</span></td></tr>" +
+            "<tr><td class=\"muted\">23 Jun 13:42</td><td>IN-Mumbai</td><td>IN-Mumbai</td><td><span class=\"badge\">Backup</span></td><td>Bharat National Bank</td><td>3.8 GB</td><td><span class=\"badge green\">Allowed</span></td></tr>" +
+            "<tr><td class=\"muted\">23 Jun 12:30</td><td>EU-West</td><td>EU-West</td><td><span class=\"badge blue\">Export</span></td><td>Nordic Insurance Group</td><td>180 MB</td><td><span class=\"badge green\">Allowed</span></td></tr>" +
+            "<tr><td class=\"muted\">23 Jun 11:15</td><td>UK-South</td><td>UK-South</td><td><span class=\"badge\">Backup</span></td><td>Royal Commerce UK</td><td>1.1 GB</td><td><span class=\"badge green\">Allowed</span></td></tr>" +
+            "<tr><td class=\"muted\">23 Jun 10:08</td><td>EU-West</td><td>US-East</td><td><span class=\"badge ind\">Migration</span></td><td>Test tenant (internal)</td><td>42 MB</td><td><span class=\"badge amber\">Blocked</span></td></tr>" +
+            "<tr><td class=\"muted\">23 Jun 09:22</td><td>CA-Central</td><td>CA-Central</td><td><span class=\"badge\">Backup</span></td><td>Maple Bank Canada</td><td>890 MB</td><td><span class=\"badge green\">Allowed</span></td></tr>" +
+            "<tr><td class=\"muted\">22 Jun 22:45</td><td>IN-Mumbai</td><td>IN-Mumbai</td><td><span class=\"badge blue\">Export</span></td><td>GovData India</td><td>1.4 GB</td><td><span class=\"badge green\">Allowed</span></td></tr>" +
+            "<tr><td class=\"muted\">22 Jun 18:30</td><td>US-East</td><td>US-East</td><td><span class=\"badge\">Backup</span></td><td>Pacific Health Partners</td><td>1.8 GB</td><td><span class=\"badge green\">Allowed</span></td></tr>" +
+            "<tr><td class=\"muted\">22 Jun 15:12</td><td>IN-Mumbai</td><td>US-East</td><td><span class=\"badge blue\">Export</span></td><td>Anonymous request</td><td>0 B</td><td><span class=\"badge amber\">Blocked</span></td></tr>" +
+            "<tr><td class=\"muted\">22 Jun 12:05</td><td>UK-South</td><td>UK-South</td><td><span class=\"badge blue\">Export</span></td><td>Royal Commerce UK</td><td>240 MB</td><td><span class=\"badge green\">Allowed</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>";
+}
+</script>
+</body></html>

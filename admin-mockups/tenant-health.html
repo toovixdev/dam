@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Tenant Health</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1>Tenant Health</h1>
+      <div class="meta"><span>single-pane support view &middot; per-tenant diagnostics</span></div>
+    </div>
+  </div>
+
+  <div style="margin-bottom:14px;display:flex;align-items:center;gap:12px">
+    <label style="font-size:13px;font-weight:600;color:var(--muted)">Select tenant</label>
+    <select id="tenantSel" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:var(--card);color:var(--fg);font-size:13px;min-width:240px">
+      <option value="meridian" selected>Meridian Financial</option>
+      <option value="bnb">Bharat National Bank</option>
+      <option value="nordic">Nordic Insurance Group</option>
+      <option value="pacific">Pacific Health Partners</option>
+      <option value="royal">Royal Commerce UK</option>
+      <option value="govdata">GovData India</option>
+      <option value="techstart">TechStart Inc</option>
+    </select>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Overall health</div><div class="kv" id="kvHealth" style="color:var(--green)">92</div><div class="kd up">composite score 0-100</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> Databases</div><div class="kv" id="kvDbs">186</div><div class="kd">monitored</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Events/day</div><div class="kv" id="kvEvents">142.6M</div><div class="kd up">steady</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9888;</span> Open issues</div><div class="kv" id="kvIssues">2</div><div class="kd down">1 high &middot; 1 medium</div></div>
+  </div>
+
+  <div id="healthContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doTenantHealth, 100);
+})();
+function doTenantHealth(){
+  var TENANTS = {
+    meridian: {name:"Meridian Financial", health:92, healthColor:"var(--green)", dbs:186, events:"142.6M", issues:2, issueDesc:"1 high - 1 medium",
+      ingest:{eps:"1,651",lag:"0.8s",last:"2s ago",status:"Running",statusColor:"var(--green)",badge:"Healthy",badgeColor:"var(--green)"},
+      agent:{online:339,total:341,offline:"agent-us-214, agent-us-307",coverage:"99.4%",gaps:"2 DBs uncovered",badge:"Warning",badgeColor:"var(--amber)"},
+      alert:{count:47,ackRate:"94%",avgResp:"3.2 min",unack:3,badge:"Healthy",badgeColor:"var(--green)"},
+      classify:{cols:"12,482",lastScan:"14 min ago",coverage:"98.6%",pending:"18 columns",badge:"Healthy",badgeColor:"var(--green)"},
+      compliance:{frameworks:"3 (SOX, PCI-DSS, SOC2)",passRate:"96.2%",gaps:4,nextAudit:"12 Jul 2026",badge:"Healthy",badgeColor:"var(--green)"},
+      integration:{siemRate:"99.8%",itsm:"Connected",notifSuccess:"99.2%",lastFail:"None (7d)",badge:"Healthy",badgeColor:"var(--green)"},
+      recentIssues:[
+        {time:"23 Jun 14:22",issue:"Agent agent-us-214 offline",detail:"Lost heartbeat - covering 1 Oracle DB",sub:"Agent",sev:"high",sevCls:"amber",st:"Open",stCls:"amber"},
+        {time:"23 Jun 11:08",issue:"Agent agent-us-307 offline",detail:"Lost heartbeat - covering 1 PostgreSQL DB",sub:"Agent",sev:"medium",sevCls:"blue",st:"Open",stCls:"amber"},
+        {time:"22 Jun 19:45",issue:"Classification scan timeout",detail:"Scan on db-prod-12 took 18 min (threshold 15 min)",sub:"Classification",sev:"medium",sevCls:"blue",st:"Resolved",stCls:"green"},
+      ]},
+    bnb: {name:"Bharat National Bank", health:89, healthColor:"var(--green)", dbs:240, events:"198.4M", issues:4, issueDesc:"2 high - 2 medium",
+      ingest:{eps:"2,296",lag:"1.2s",last:"1s ago",status:"Running",statusColor:"var(--green)",badge:"Healthy",badgeColor:"var(--green)"},
+      agent:{online:478,total:482,offline:"agent-in-041, agent-in-042, agent-in-118, agent-in-209",coverage:"99.2%",gaps:"4 DBs uncovered",badge:"Warning",badgeColor:"var(--amber)"},
+      alert:{count:82,ackRate:"88%",avgResp:"5.1 min",unack:10,badge:"Warning",badgeColor:"var(--amber)"},
+      classify:{cols:"28,410",lastScan:"8 min ago",coverage:"97.1%",pending:"42 columns",badge:"Healthy",badgeColor:"var(--green)"},
+      compliance:{frameworks:"4 (DPDPA, RBI, PCI-DSS, CERT-In)",passRate:"91.8%",gaps:8,nextAudit:"28 Jun 2026",badge:"Warning",badgeColor:"var(--amber)"},
+      integration:{siemRate:"99.6%",itsm:"Connected",notifSuccess:"98.8%",lastFail:"1d ago",badge:"Healthy",badgeColor:"var(--green)"},
+      recentIssues:[
+        {time:"24 Jun 09:15",issue:"4 agents offline in Mumbai DC",detail:"Network switch failure in rack M-14",sub:"Agent",sev:"high",sevCls:"amber",st:"Open",stCls:"amber"},
+        {time:"24 Jun 06:30",issue:"Compliance gap - DPDPA",detail:"3 tables missing consent column audit",sub:"Compliance",sev:"high",sevCls:"amber",st:"In progress",stCls:"blue"},
+        {time:"23 Jun 22:10",issue:"Alert storm - 48 alerts in 5 min",detail:"Batch job triggered volume anomaly rules",sub:"Alert",sev:"medium",sevCls:"blue",st:"Resolved",stCls:"green"},
+      ]},
+    nordic: {name:"Nordic Insurance Group", health:76, healthColor:"var(--amber)", dbs:89, events:"67.2M", issues:5, issueDesc:"2 high - 3 medium",
+      ingest:{eps:"778",lag:"2.4s",last:"4s ago",status:"Running",statusColor:"var(--green)",badge:"Degraded",badgeColor:"var(--amber)"},
+      agent:{online:158,total:164,offline:"6 agents offline",coverage:"96.3%",gaps:"6 DBs uncovered",badge:"Warning",badgeColor:"var(--amber)"},
+      alert:{count:31,ackRate:"72%",avgResp:"12.4 min",unack:9,badge:"Warning",badgeColor:"var(--amber)"},
+      classify:{cols:"6,240",lastScan:"2h ago",coverage:"94.2%",pending:"86 columns",badge:"Warning",badgeColor:"var(--amber)"},
+      compliance:{frameworks:"3 (GDPR, PCI-DSS, ISO 27001)",passRate:"88.4%",gaps:11,nextAudit:"08 Aug 2026",badge:"Warning",badgeColor:"var(--amber)"},
+      integration:{siemRate:"97.2%",itsm:"Connected",notifSuccess:"96.1%",lastFail:"6h ago",badge:"Degraded",badgeColor:"var(--amber)"},
+      recentIssues:[
+        {time:"24 Jun 11:00",issue:"6 agents offline in EU-West",detail:"K8s node scaling event - pods evicted",sub:"Agent",sev:"high",sevCls:"amber",st:"Open",stCls:"amber"},
+        {time:"24 Jun 08:22",issue:"SIEM delivery failures",detail:"Splunk HEC endpoint returning 503",sub:"Integration",sev:"high",sevCls:"amber",st:"Open",stCls:"amber"},
+        {time:"23 Jun 15:40",issue:"Classification scan stale",detail:"Last full scan was 2h ago (threshold 30 min)",sub:"Classification",sev:"medium",sevCls:"blue",st:"Open",stCls:"amber"},
+      ]},
+    pacific: {name:"Pacific Health Partners", health:82, healthColor:"var(--green)", dbs:112, events:"84.1M", issues:3, issueDesc:"1 high - 2 medium",
+      ingest:{eps:"974",lag:"1.1s",last:"3s ago",status:"Running",statusColor:"var(--green)",badge:"Healthy",badgeColor:"var(--green)"},
+      agent:{online:216,total:218,offline:"agent-us-w-044, agent-us-w-091",coverage:"99.1%",gaps:"2 DBs uncovered",badge:"Warning",badgeColor:"var(--amber)"},
+      alert:{count:56,ackRate:"91%",avgResp:"4.8 min",unack:5,badge:"Healthy",badgeColor:"var(--green)"},
+      classify:{cols:"9,840",lastScan:"22 min ago",coverage:"97.8%",pending:"24 columns",badge:"Healthy",badgeColor:"var(--green)"},
+      compliance:{frameworks:"3 (HIPAA, PCI-DSS, SOX)",passRate:"94.6%",gaps:5,nextAudit:"15 Sep 2026",badge:"Healthy",badgeColor:"var(--green)"},
+      integration:{siemRate:"99.9%",itsm:"Connected",notifSuccess:"99.5%",lastFail:"None (14d)",badge:"Healthy",badgeColor:"var(--green)"},
+      recentIssues:[
+        {time:"24 Jun 07:45",issue:"2 agents offline in US-West",detail:"VM maintenance window - auto-recovery expected",sub:"Agent",sev:"medium",sevCls:"blue",st:"Open",stCls:"amber"},
+        {time:"23 Jun 18:30",issue:"HIPAA control gap",detail:"PHI accessed without audit trail on 1 legacy DB",sub:"Compliance",sev:"high",sevCls:"amber",st:"In progress",stCls:"blue"},
+      ]},
+    royal: {name:"Royal Commerce UK", health:58, healthColor:"var(--danger)", dbs:64, events:"41.8M", issues:7, issueDesc:"3 high - 4 medium",
+      ingest:{eps:"484",lag:"4.8s",last:"12s ago",status:"Degraded",statusColor:"var(--amber)",badge:"Degraded",badgeColor:"var(--danger)"},
+      agent:{online:118,total:128,offline:"10 agents offline",coverage:"92.2%",gaps:"8 DBs uncovered",badge:"Critical",badgeColor:"var(--danger)"},
+      alert:{count:24,ackRate:"62%",avgResp:"22.1 min",unack:9,badge:"Critical",badgeColor:"var(--danger)"},
+      classify:{cols:"4,120",lastScan:"6h ago",coverage:"88.4%",pending:"148 columns",badge:"Critical",badgeColor:"var(--danger)"},
+      compliance:{frameworks:"2 (GDPR, PCI-DSS)",passRate:"82.1%",gaps:18,nextAudit:"30 Jul 2026",badge:"Critical",badgeColor:"var(--danger)"},
+      integration:{siemRate:"94.2%",itsm:"Degraded",notifSuccess:"91.8%",lastFail:"2h ago",badge:"Degraded",badgeColor:"var(--danger)"},
+      recentIssues:[
+        {time:"24 Jun 10:30",issue:"10 agents offline - UK-South",detail:"Network partition between AZs",sub:"Agent",sev:"high",sevCls:"amber",st:"Open",stCls:"amber"},
+        {time:"24 Jun 09:00",issue:"Ingest lag spike to 4.8s",detail:"ClickHouse merge queue backed up",sub:"Ingest",sev:"high",sevCls:"amber",st:"Open",stCls:"amber"},
+        {time:"24 Jun 08:15",issue:"ITSM sync failing",detail:"ServiceNow instance returning 429 rate limit",sub:"Integration",sev:"high",sevCls:"amber",st:"Open",stCls:"amber"},
+      ]},
+    govdata: {name:"GovData India", health:85, healthColor:"var(--green)", dbs:156, events:"124.8M", issues:2, issueDesc:"1 high - 1 low",
+      ingest:{eps:"1,444",lag:"1.4s",last:"2s ago",status:"Running",statusColor:"var(--green)",badge:"Healthy",badgeColor:"var(--green)"},
+      agent:{online:310,total:312,offline:"agent-gov-088, agent-gov-201",coverage:"99.4%",gaps:"2 DBs uncovered",badge:"Warning",badgeColor:"var(--amber)"},
+      alert:{count:38,ackRate:"96%",avgResp:"2.8 min",unack:2,badge:"Healthy",badgeColor:"var(--green)"},
+      classify:{cols:"18,640",lastScan:"6 min ago",coverage:"99.1%",pending:"12 columns",badge:"Healthy",badgeColor:"var(--green)"},
+      compliance:{frameworks:"4 (DPDPA, RBI, CERT-In, ISO 27001)",passRate:"97.4%",gaps:2,nextAudit:"01 Mar 2027",badge:"Healthy",badgeColor:"var(--green)"},
+      integration:{siemRate:"99.9%",itsm:"Connected",notifSuccess:"99.8%",lastFail:"None (30d)",badge:"Healthy",badgeColor:"var(--green)"},
+      recentIssues:[
+        {time:"23 Jun 20:10",issue:"2 agents offline in air-gapped zone",detail:"Scheduled maintenance - will recover on next window",sub:"Agent",sev:"medium",sevCls:"blue",st:"Open",stCls:"amber"},
+      ]},
+    techstart: {name:"TechStart Inc", health:44, healthColor:"var(--danger)", dbs:3, events:"0.4M", issues:3, issueDesc:"1 high - 2 medium",
+      ingest:{eps:"5",lag:"0.2s",last:"14s ago",status:"Running",statusColor:"var(--green)",badge:"Healthy",badgeColor:"var(--green)"},
+      agent:{online:5,total:6,offline:"agent-ts-003",coverage:"83.3%",gaps:"1 DB uncovered",badge:"Warning",badgeColor:"var(--amber)"},
+      alert:{count:2,ackRate:"0%",avgResp:"--",unack:2,badge:"Critical",badgeColor:"var(--danger)"},
+      classify:{cols:"84",lastScan:"2d ago",coverage:"100%",pending:"0",badge:"Healthy",badgeColor:"var(--green)"},
+      compliance:{frameworks:"1 (PCI-DSS)",passRate:"68.2%",gaps:6,nextAudit:"Trial ends 28 Jun",badge:"Critical",badgeColor:"var(--danger)"},
+      integration:{siemRate:"--",itsm:"Not configured",notifSuccess:"--",lastFail:"--",badge:"Not configured",badgeColor:"var(--subtle)"},
+      recentIssues:[
+        {time:"22 Jun 14:00",issue:"No admin login in 14 days",detail:"Trial engagement at risk",sub:"Usage",sev:"high",sevCls:"amber",st:"Open",stCls:"amber"},
+        {time:"20 Jun 09:30",issue:"Agent agent-ts-003 offline",detail:"Lost heartbeat - covering 1 MongoDB DB",sub:"Agent",sev:"medium",sevCls:"blue",st:"Open",stCls:"amber"},
+      ]}
+  };
+
+  function renderHealth(key){
+    var t = TENANTS[key];
+    if(!t) return;
+
+    // Update KPIs
+    var kvHealth = document.getElementById("kvHealth");
+    var kvDbs = document.getElementById("kvDbs");
+    var kvEvents = document.getElementById("kvEvents");
+    var kvIssues = document.getElementById("kvIssues");
+    if(kvHealth){ kvHealth.textContent = t.health; kvHealth.style.color = t.healthColor; }
+    if(kvDbs) kvDbs.textContent = t.dbs;
+    if(kvEvents) kvEvents.textContent = t.events;
+    if(kvIssues){ kvIssues.textContent = t.issues; kvIssues.parentElement.querySelector(".kd").textContent = t.issueDesc; }
+
+    function hRow(label, val, valStyle){ return '<div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:6px"><span class="muted">' + label + '</span><b' + (valStyle ? ' style="color:' + valStyle + '"' : '') + '>' + val + '</b></div>'; }
+    function card(title, badge, badgeColor, rows){
+      return '<div class="card"><div class="hd"><span class="t">' + title + '</span><span class="s" style="color:' + badgeColor + '">&#9679; ' + badge + '</span></div><div class="bd">' + rows + '</div></div>';
+    }
+
+    var c = document.getElementById("healthContent");
+    if(!c) return;
+
+    c.innerHTML =
+      '<div style="margin-bottom:10px"><h2 style="font-size:14px;font-weight:700;margin:0 0 10px">Health Cards -- ' + t.name + '</h2></div>' +
+
+      '<div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">' +
+        card("Ingest Health", t.ingest.badge, t.ingest.badgeColor,
+          hRow("Events/s", t.ingest.eps) + hRow("Ingest lag", t.ingest.lag) + hRow("Last event", t.ingest.last) + hRow("Pipeline status", t.ingest.status, t.ingest.statusColor)) +
+        card("Agent Health", t.agent.badge, t.agent.badgeColor,
+          hRow("Online / Total", t.agent.online + " / " + t.agent.total) + hRow("Offline agents", t.agent.offline, "var(--amber)") + hRow("Coverage", t.agent.coverage) + hRow("Coverage gaps", t.agent.gaps, "var(--amber)")) +
+        card("Alert Health", t.alert.badge, t.alert.badgeColor,
+          hRow("Alerts generated (24h)", t.alert.count) + hRow("Acknowledged rate", t.alert.ackRate) + hRow("Avg response time", t.alert.avgResp) + hRow("Unacknowledged", t.alert.unack)) +
+      '</div>' +
+
+      '<div class="grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:14px">' +
+        card("Classification Health", t.classify.badge, t.classify.badgeColor,
+          hRow("Columns classified", t.classify.cols) + hRow("Last scan", t.classify.lastScan) + hRow("Coverage", t.classify.coverage) + hRow("Pending review", t.classify.pending)) +
+        card("Compliance Health", t.compliance.badge, t.compliance.badgeColor,
+          hRow("Frameworks active", t.compliance.frameworks) + hRow("Control pass rate", t.compliance.passRate, t.compliance.badgeColor) + hRow("Gaps identified", t.compliance.gaps, "var(--amber)") + hRow("Next audit due", t.compliance.nextAudit)) +
+        card("Integration Health", t.integration.badge, t.integration.badgeColor,
+          hRow("SIEM delivery rate", t.integration.siemRate, t.integration.badgeColor) + hRow("ITSM sync status", t.integration.itsm) + hRow("Notification success", t.integration.notifSuccess) + hRow("Last sync failure", t.integration.lastFail)) +
+      '</div>' +
+
+      '<div class="card" style="margin-bottom:14px">' +
+        '<div class="hd"><span class="t">Recent Issues</span><span class="s">' + t.name + '</span></div>' +
+        '<div class="bd" style="padding:0;overflow-x:auto"><table class="tbl"><thead><tr><th>Time</th><th>Issue</th><th>Subsystem</th><th>Severity</th><th>Status</th></tr></thead><tbody>' +
+        t.recentIssues.map(function(r){
+          return '<tr><td class="muted">' + r.time + '</td><td><b>' + r.issue + '</b><br><small class="muted">' + r.detail + '</small></td><td>' + r.sub + '</td><td><span class="badge ' + r.sevCls + '">' + r.sev + '</span></td><td><span class="badge ' + r.stCls + ' dot">' + r.st + '</span></td></tr>';
+        }).join("") +
+        '</tbody></table></div></div>';
+  }
+
+  // Initial render
+  renderHealth("meridian");
+
+  // Tenant selector
+  var sel = document.getElementById("tenantSel");
+  if(sel){
+    sel.onchange = function(){
+      renderHealth(sel.value);
+      if(window.pf) pf.toast("Switched to " + sel.options[sel.selectedIndex].text, "ok");
+    };
+  }
+}
+</script>
+</body></html>

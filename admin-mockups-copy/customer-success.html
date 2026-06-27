@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Customer Success</title>
+<link rel="stylesheet" href="assets/app.css">
+<style>
+.health-dot{width:10px;height:10px;border-radius:50%;display:inline-block;margin-right:6px}
+.funnel-bar{display:flex;align-items:center;gap:10px;margin:6px 0}
+.funnel-bar .fb{height:24px;border-radius:6px;display:flex;align-items:center;padding:0 10px;font-size:11px;font-weight:700;color:#fff;white-space:nowrap}
+</style>
+</head>
+<body data-active="billing">
+
+  <div class="phead">
+    <div>
+      <h1>Customer Success</h1>
+      <div class="meta"><span>account health &middot; renewal pipeline &middot; feature adoption &middot; expansion signals</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Healthy</div><div class="kv">34</div><div class="kd">81% of tenants</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9679;</span> At risk</div><div class="kv">6</div><div class="kd down">declining usage</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--danger-soft);color:var(--danger)">&#9679;</span> Churn risk</div><div class="kv">2</div><div class="kd down">action needed</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8635;</span> Renewals (90d)</div><div class="kv">8</div><div class="kd">$142K ARR at stake</div></div>
+  </div>
+
+  <div id="csContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doCS, 100);
+})();
+
+function doCS(){
+  var container = document.getElementById("csContent");
+  if(!container) return;
+
+  var TENANTS = [
+    {n:"Meridian Financial", plan:"Enterprise", health:92, trend:"up", renewal:"14 Oct 2026", arr:"$86K", usage:88, alerts:94, adopt:8, signal:"", risk:"green"},
+    {n:"Bharat National Bank", plan:"Enterprise", health:89, trend:"up", renewal:"22 Dec 2026", arr:"$112K", usage:92, alerts:87, adopt:9, signal:"", risk:"green"},
+    {n:"Nordic Insurance Group", plan:"Business", health:76, trend:"flat", renewal:"08 Aug 2026", arr:"$38K", usage:71, alerts:68, adopt:6, signal:"Alert ack rate dropped 24%", risk:"amber"},
+    {n:"Pacific Health Partners", plan:"Business", health:82, trend:"up", renewal:"15 Sep 2026", arr:"$44K", usage:79, alerts:91, adopt:7, signal:"+12 DBs this quarter", risk:"green"},
+    {n:"Royal Commerce UK", plan:"Business", health:58, trend:"down", renewal:"30 Jul 2026", arr:"$28K", usage:42, alerts:31, adopt:4, signal:"No login in 14 days", risk:"red"},
+    {n:"GovData India", plan:"Enterprise", health:85, trend:"up", renewal:"01 Mar 2027", arr:"$96K", usage:81, alerts:78, adopt:7, signal:"Requested DSAR module", risk:"green"},
+    {n:"TechStart Inc", plan:"Starter", health:44, trend:"down", renewal:"Trial ends 28 Jun", arr:"$0", usage:18, alerts:0, adopt:1, signal:"Only 1 DB connected", risk:"red"},
+  ];
+
+  var riskColor = {green:"var(--green)", amber:"var(--amber)", red:"var(--danger)"};
+
+  container.innerHTML =
+    // Account health table
+    '<div class="card" style="margin-bottom:14px"><div class="hd"><span class="t">Account Health</span><span class="s">composite score based on usage, alert response, coverage, support tickets</span></div>' +
+    '<div class="bd" style="padding:0 4px"><table class="tbl"><thead><tr><th>Tenant</th><th>Plan</th><th class="num">Health</th><th>Trend</th><th>Usage %</th><th>Alert ack %</th><th>Features</th><th>Signal</th><th>Renewal</th></tr></thead><tbody>' +
+    TENANTS.map(function(t){
+      return "<tr>" +
+        "<td><b>" + t.n + "</b></td>" +
+        '<td><span class="badge ' + (t.plan==="Enterprise"?"ind":"") + '">' + t.plan + "</span></td>" +
+        '<td class="num"><span style="font-weight:800;color:' + riskColor[t.risk] + '">' + t.health + '</span></td>' +
+        "<td>" + (t.trend==="up"?'<span style="color:var(--green)">&#9650;</span>':t.trend==="down"?'<span style="color:var(--danger)">&#9660;</span>':'<span style="color:var(--muted)">&#9654;</span>') + "</td>" +
+        '<td class="num">' + t.usage + "%</td>" +
+        '<td class="num">' + t.alerts + "%</td>" +
+        '<td class="num">' + t.adopt + "/10</td>" +
+        "<td>" + (t.signal ? '<span style="font-size:12px;color:' + (t.risk==="red"?"var(--danger)":"var(--amber)") + '">' + t.signal + "</span>" : '<span class="muted">—</span>') + "</td>" +
+        "<td>" + t.renewal + "<br><small class='muted'>" + t.arr + "</small></td>" +
+      "</tr>";
+    }).join("") +
+    "</tbody></table></div></div>" +
+
+    // Two column: Feature adoption + Expansion signals
+    '<div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">' +
+
+    // Feature adoption heatmap
+    '<div class="card"><div class="hd"><span class="t">Feature Adoption</span><span class="s">across all tenants</span></div><div class="bd" style="padding:0 4px">' +
+    '<table class="tbl"><thead><tr><th>Feature</th><th class="num">Adoption</th><th>Bar</th></tr></thead><tbody>' +
+    [
+      {f:"Alert rules", pct:95}, {f:"VA scanning", pct:88}, {f:"Compliance reports", pct:82},
+      {f:"Data classification", pct:79}, {f:"Dynamic masking", pct:64}, {f:"SIEM integration", pct:61},
+      {f:"Behavioral analytics", pct:52}, {f:"Inline blocking", pct:38}, {f:"DSAR module", pct:22},
+      {f:"LLM monitoring", pct:12}
+    ].map(function(f){
+      var c = f.pct >= 70 ? "var(--green)" : f.pct >= 40 ? "var(--amber)" : "var(--info)";
+      return '<tr><td>' + f.f + '</td><td class="num">' + f.pct + '%</td><td><div style="background:var(--line);height:8px;border-radius:4px;width:120px"><div style="width:' + f.pct + '%;height:8px;border-radius:4px;background:' + c + '"></div></div></td></tr>';
+    }).join("") +
+    "</tbody></table></div></div>" +
+
+    // Expansion signals
+    '<div class="card"><div class="hd"><span class="t">Expansion Signals</span><span class="s">upsell &amp; cross-sell opportunities</span></div><div class="bd">' +
+    '<div style="display:flex;flex-direction:column;gap:10px">' +
+      '<div style="background:var(--green-soft);border:1px solid rgba(22,163,74,.15);border-radius:10px;padding:12px 14px">' +
+        '<b style="font-size:13px">Pacific Health Partners</b><br>' +
+        '<span style="font-size:12px;color:var(--muted)">Added 12 databases this quarter. Approaching Business plan limit (100 DBs). <b style="color:var(--green)">Upsell to Enterprise.</b></span>' +
+      '</div>' +
+      '<div style="background:var(--info-soft);border:1px solid rgba(8,145,178,.15);border-radius:10px;padding:12px 14px">' +
+        '<b style="font-size:13px">GovData India</b><br>' +
+        '<span style="font-size:12px;color:var(--muted)">Requested DSAR module demo. Currently not using LLM monitoring or masking. <b style="color:var(--info)">Cross-sell DSAR + masking.</b></span>' +
+      '</div>' +
+      '<div style="background:var(--amber-soft);border:1px solid rgba(234,138,6,.15);border-radius:10px;padding:12px 14px">' +
+        '<b style="font-size:13px">Nordic Insurance Group</b><br>' +
+        '<span style="font-size:12px;color:var(--muted)">Alert ack rate dropped from 92% to 68%. Only 4 of 9 SOC analysts active. <b style="color:var(--amber)">Schedule QBR — engagement declining.</b></span>' +
+      '</div>' +
+      '<div style="background:var(--danger-soft);border:1px solid rgba(225,29,72,.15);border-radius:10px;padding:12px 14px">' +
+        '<b style="font-size:13px">Royal Commerce UK</b><br>' +
+        '<span style="font-size:12px;color:var(--muted)">No admin login in 14 days. Usage at 42%. Renewal in 38 days. <b style="color:var(--danger)">Churn risk — escalate to account exec.</b></span>' +
+      '</div>' +
+    '</div></div></div>' +
+
+    '</div>' +
+
+    // Time-to-value
+    '<div class="card"><div class="hd"><span class="t">Time-to-Value Benchmarks</span><span class="s">median days from signup to milestone</span></div><div class="bd" style="padding:0 4px">' +
+    '<table class="tbl"><thead><tr><th>Milestone</th><th class="num">Median (days)</th><th class="num">Best</th><th class="num">Worst</th><th>Benchmark</th></tr></thead><tbody>' +
+      '<tr><td><b>First DB connected</b></td><td class="num">0.8</td><td class="num">0.1</td><td class="num">4.2</td><td><span class="badge green">good</span></td></tr>' +
+      '<tr><td><b>First alert fired</b></td><td class="num">1.2</td><td class="num">0.3</td><td class="num">6.0</td><td><span class="badge green">good</span></td></tr>' +
+      '<tr><td><b>First compliance report</b></td><td class="num">3.4</td><td class="num">1.0</td><td class="num">14.0</td><td><span class="badge amber">improve</span></td></tr>' +
+      '<tr><td><b>First custom policy</b></td><td class="num">5.8</td><td class="num">2.0</td><td class="num">21.0</td><td><span class="badge amber">improve</span></td></tr>' +
+      '<tr><td><b>SSO configured</b></td><td class="num">2.1</td><td class="num">0.5</td><td class="num">8.0</td><td><span class="badge green">good</span></td></tr>' +
+      '<tr><td><b>SIEM integration live</b></td><td class="num">7.2</td><td class="num">1.0</td><td class="num">30.0</td><td><span class="badge amber">improve</span></td></tr>' +
+    "</tbody></table></div></div>";
+}
+</script>
+</body></html>

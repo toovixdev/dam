@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Agent Version Management</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="content-packs">
+
+  <div class="phead">
+    <div>
+      <h1>Agent Version Management</h1>
+      <div class="meta"><span>fleet versions &middot; compatibility &middot; rollout schedules</span></div>
+    </div>
+    <div class="acts">
+      <button class="btn primary" onclick="pf.toast('Schedule new rollout wizard would open','ok')">Schedule new rollout</button>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9655;</span> Current version</div><div class="kv">v2.4.1</div><div class="kd">released 19 Jun 2026</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Fleet coverage</div><div class="kv" style="color:var(--green)">87%</div><div class="kd up">3,663 / 4,210 agents</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9201;</span> Pending upgrades</div><div class="kv" style="color:var(--amber)">612</div><div class="kd">agents awaiting v2.4.1</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Rollout status</div><div class="kv">In Progress</div><div class="kd">batch 9 of 10</div></div>
+  </div>
+
+  <div class="grid" style="grid-template-columns:1fr 1fr;margin-bottom:14px">
+    <div class="card">
+      <div class="hd"><span class="t">Version Distribution</span><span class="s">across fleet</span></div>
+      <div class="bd"><div id="chVersionDist"></div></div>
+    </div>
+
+    <div class="card">
+      <div class="hd"><span class="t">Active Rollout &mdash; v2.3.x to v2.4.1</span><span class="s">in progress</span></div>
+      <div class="bd">
+        <div style="display:flex;gap:16px;margin-bottom:12px;flex-wrap:wrap">
+          <div>
+            <small class="muted">From</small><br>
+            <b>v2.3.x</b>
+          </div>
+          <div>
+            <small class="muted">To</small><br>
+            <b style="color:var(--primary)">v2.4.1</b>
+          </div>
+          <div>
+            <small class="muted">Batch size</small><br>
+            <b>10%</b> <span class="muted">(~42 agents/batch)</span>
+          </div>
+          <div>
+            <small class="muted">Error rate</small><br>
+            <b style="color:var(--green)">0.3%</b>
+          </div>
+        </div>
+        <div style="margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+            <span class="muted">Rollout progress</span>
+            <b>87%</b>
+          </div>
+          <div id="rolloutProgress"></div>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:12px">
+          Batch 9 of 10 complete &middot; Started 19 Jun 2026 &middot; ETA completion: 24 Jun 2026
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn" onclick="pf.toast('Rollout paused','ok')">Pause</button>
+          <button class="btn primary" onclick="pf.toast('Resuming rollout batch 10','ok')">Resume</button>
+          <button class="btn" style="color:var(--danger)" onclick="pf.toast('Rollback would revert 3,663 agents to v2.3.x','err')">Rollback</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Compatibility Matrix</span><span class="s">Agent version vs. database engine and OS</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th rowspan="2" style="vertical-align:bottom">Agent Version</th>
+            <th colspan="6" style="text-align:center;border-bottom:1px solid var(--border)">Database Engine</th>
+            <th colspan="2" style="text-align:center;border-bottom:1px solid var(--border)">OS</th>
+          </tr>
+          <tr>
+            <th>Oracle</th>
+            <th>SQL Server</th>
+            <th>Db2</th>
+            <th>PostgreSQL</th>
+            <th>MySQL</th>
+            <th>MongoDB</th>
+            <th>Linux</th>
+            <th>Windows</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>v2.4.1</b> <span class="badge green" style="font-size:10px">latest</span></td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+          </tr>
+          <tr>
+            <td><b>v2.3.x</b></td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--amber)">&#9888;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+          </tr>
+          <tr>
+            <td><b>v2.2.x</b></td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--amber)">&#9888;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--danger)">&#10007;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--amber)">&#9888;</td>
+          </tr>
+          <tr>
+            <td><b>v2.1.x</b> <span class="badge" style="font-size:10px;color:var(--danger)">EOL</span></td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--danger)">&#10007;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--amber)">&#9888;</td>
+            <td style="text-align:center;color:var(--danger)">&#10007;</td>
+            <td style="text-align:center;color:var(--green)">&#10003;</td>
+            <td style="text-align:center;color:var(--danger)">&#10007;</td>
+          </tr>
+        </tbody>
+      </table>
+      <div style="padding:8px 12px;font-size:11px;color:var(--muted)">
+        &#10003; = Fully supported &nbsp;&middot;&nbsp; &#9888; = Partial / deprecated &nbsp;&middot;&nbsp; &#10007; = Not supported
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Rollout History</span><span class="s">last 5 rollouts</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Version</th>
+            <th>Started</th>
+            <th>Completed</th>
+            <th>Duration</th>
+            <th class="num">Success Rate</th>
+            <th>Rollback</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>v2.3.x &rarr; v2.4.1</b></td>
+            <td class="muted">19 Jun 2026</td>
+            <td class="muted">&mdash;</td>
+            <td>5d (ongoing)</td>
+            <td class="num"><b style="color:var(--green)">99.7%</b></td>
+            <td><span class="badge green">No</span></td>
+            <td><span class="badge blue dot">In progress</span></td>
+          </tr>
+          <tr>
+            <td><b>v2.2.x &rarr; v2.3.0</b></td>
+            <td class="muted">28 May 2026</td>
+            <td class="muted">02 Jun 2026</td>
+            <td>5d</td>
+            <td class="num"><b style="color:var(--green)">99.9%</b></td>
+            <td><span class="badge green">No</span></td>
+            <td><span class="badge green dot">Complete</span></td>
+          </tr>
+          <tr>
+            <td><b>v2.1.x &rarr; v2.2.0</b></td>
+            <td class="muted">10 Apr 2026</td>
+            <td class="muted">16 Apr 2026</td>
+            <td>6d</td>
+            <td class="num"><b style="color:var(--green)">99.4%</b></td>
+            <td><span class="badge green">No</span></td>
+            <td><span class="badge green dot">Complete</span></td>
+          </tr>
+          <tr>
+            <td><b>v2.0.x &rarr; v2.1.0</b></td>
+            <td class="muted">15 Feb 2026</td>
+            <td class="muted">22 Feb 2026</td>
+            <td>7d</td>
+            <td class="num"><b style="color:var(--amber)">97.8%</b></td>
+            <td><span class="badge amber">Partial</span></td>
+            <td><span class="badge green dot">Complete</span></td>
+          </tr>
+          <tr>
+            <td><b>v1.9.x &rarr; v2.0.0</b></td>
+            <td class="muted">05 Dec 2025</td>
+            <td class="muted">14 Dec 2025</td>
+            <td>9d</td>
+            <td class="num"><b style="color:var(--green)">99.1%</b></td>
+            <td><span class="badge green">No</span></td>
+            <td><span class="badge green dot">Complete</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doAgentVersions, 100);
+})();
+function doAgentVersions(){
+  if(window.pf){
+    pf.donut("#chVersionDist",[
+      {label:"v2.4.1 (87%)",value:87,color:"var(--green)"},
+      {label:"v2.3.x (11%)",value:11,color:"var(--amber)"},
+      {label:"v2.2.x (2%)",value:2,color:"var(--danger)"}
+    ],{center:"4,210",centerSub:"agents",legend:true});
+
+    var bar = document.getElementById("rolloutProgress");
+    if(bar){
+      bar.innerHTML = pf.progress(87, "var(--primary)");
+    }
+  }
+}
+</script>
+</body></html>

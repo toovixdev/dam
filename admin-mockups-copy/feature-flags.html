@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Feature Flags</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenants">
+
+  <div class="phead">
+    <div>
+      <h1>Feature Flags</h1>
+      <div class="meta"><span>per-tenant feature toggles &middot; staged rollout</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9654;</span> Features defined</div><div class="kv">10</div><div class="kd">across all modules</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#9646;</span> GA features</div><div class="kv">6</div><div class="kd up">generally available</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9737;</span> Beta features</div><div class="kv">3</div><div class="kd">staged rollout</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Alpha features</div><div class="kv">1</div><div class="kd">internal testing</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Global Feature List</span><span class="s">10 features</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="featureTbl">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Description</th>
+            <th>Default</th>
+            <th class="num">Enabled</th>
+            <th>Rollout</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>LLM Monitoring</b></td>
+            <td><small class="muted">Monitor LLM queries, prompt injection detection, token tracking</small></td>
+            <td><span class="badge green">ON</span></td>
+            <td class="num">38 / 42</td>
+            <td><span class="badge green">GA</span></td>
+            <td><span class="badge green dot">Active</span></td>
+            <td><button class="btn" onclick="showOverrides('llm')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Inline Blocking / Proxy</b></td>
+            <td><small class="muted">Real-time SQL interception and policy-based blocking</small></td>
+            <td><span class="badge green">ON</span></td>
+            <td class="num">35 / 42</td>
+            <td><span class="badge green">GA</span></td>
+            <td><span class="badge green dot">Active</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Inline Blocking overrides','ok')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>DSAR Module</b></td>
+            <td><small class="muted">Data Subject Access Request automation and PII discovery</small></td>
+            <td><span class="badge green">ON</span></td>
+            <td class="num">28 / 42</td>
+            <td><span class="badge green">GA</span></td>
+            <td><span class="badge green dot">Active</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening DSAR Module overrides','ok')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>VA Scanner</b></td>
+            <td><small class="muted">Vulnerability assessment scanning for database configurations</small></td>
+            <td><span class="badge green">ON</span></td>
+            <td class="num">40 / 42</td>
+            <td><span class="badge green">GA</span></td>
+            <td><span class="badge green dot">Active</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening VA Scanner overrides','ok')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Behavioral Analytics (UEBA)</b></td>
+            <td><small class="muted">User and entity behavior analytics, anomaly detection</small></td>
+            <td><span class="badge">OFF</span></td>
+            <td class="num">18 / 42</td>
+            <td><span class="badge amber">Beta</span></td>
+            <td><span class="badge amber dot">Staged</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening UEBA overrides','ok')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Dynamic Masking</b></td>
+            <td><small class="muted">Real-time data masking based on user role and context</small></td>
+            <td><span class="badge green">ON</span></td>
+            <td class="num">32 / 42</td>
+            <td><span class="badge green">GA</span></td>
+            <td><span class="badge green dot">Active</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Dynamic Masking overrides','ok')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Static Masking</b></td>
+            <td><small class="muted">Persistent data masking for non-production environments</small></td>
+            <td><span class="badge">OFF</span></td>
+            <td class="num">14 / 42</td>
+            <td><span class="badge amber">Beta</span></td>
+            <td><span class="badge amber dot">Staged</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Static Masking overrides','ok')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>Deception Console</b></td>
+            <td><small class="muted">Honeypot tables and decoy records for threat detection</small></td>
+            <td><span class="badge">OFF</span></td>
+            <td class="num">8 / 42</td>
+            <td><span class="badge amber">Beta</span></td>
+            <td><span class="badge amber dot">Staged</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Deception Console overrides','ok')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>JIT Access</b></td>
+            <td><small class="muted">Just-in-time privileged access with automatic expiry</small></td>
+            <td><span class="badge">OFF</span></td>
+            <td class="num">5 / 42</td>
+            <td><span class="badge blue">Alpha</span></td>
+            <td><span class="badge blue dot">Internal</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening JIT Access overrides','ok')">Manage</button></td>
+          </tr>
+          <tr>
+            <td><b>SQL Grammar Allowlist</b></td>
+            <td><small class="muted">Whitelist approved SQL patterns, block unknown grammar</small></td>
+            <td><span class="badge green">ON</span></td>
+            <td class="num">36 / 42</td>
+            <td><span class="badge green">GA</span></td>
+            <td><span class="badge green dot">Active</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening SQL Grammar Allowlist overrides','ok')">Manage</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="overridePanel" style="margin-bottom:14px;display:none">
+    <div class="hd"><span class="t">Per-Tenant Overrides &mdash; LLM Monitoring</span><span class="s">4 overrides</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Plan</th>
+            <th>Override Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>Meridian Financial</b><br><small class="muted">meridian-fin</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td><span class="badge green dot">Enabled</span></td>
+            <td><button class="btn" onclick="pf.toast('Toggle would change override','ok')">Disable</button></td>
+          </tr>
+          <tr>
+            <td><b>Bharat National Bank</b><br><small class="muted">bnb-india</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td><span class="badge amber dot">Beta</span></td>
+            <td><button class="btn" onclick="pf.toast('Toggle would change override','ok')">Promote to GA</button></td>
+          </tr>
+          <tr>
+            <td><b>Nordic Insurance Group</b><br><small class="muted">nordic-ins</small></td>
+            <td><span class="badge">Business</span></td>
+            <td><span class="badge" style="color:var(--danger)">Disabled</span></td>
+            <td><button class="btn" onclick="pf.toast('Toggle would change override','ok')">Enable</button></td>
+          </tr>
+          <tr>
+            <td><b>Pacific Health Partners</b><br><small class="muted">pacific-hp</small></td>
+            <td><span class="badge">Business</span></td>
+            <td><span class="badge green dot">Default (ON)</span></td>
+            <td><span class="muted">No override</span></td>
+          </tr>
+          <tr>
+            <td><b>Royal Commerce UK</b><br><small class="muted">royal-comm</small></td>
+            <td><span class="badge">Business</span></td>
+            <td><span class="badge green dot">Default (ON)</span></td>
+            <td><span class="muted">No override</span></td>
+          </tr>
+          <tr>
+            <td><b>TechStart Inc</b><br><small class="muted">techstart</small></td>
+            <td><span class="badge amber">Starter / Trial</span></td>
+            <td><span class="badge green dot">Default (ON)</span></td>
+            <td><span class="muted">No override</span></td>
+          </tr>
+          <tr>
+            <td><b>GovData India</b><br><small class="muted">govdata-in</small></td>
+            <td><span class="badge ind">Enterprise</span></td>
+            <td><span class="badge green dot">Default (ON)</span></td>
+            <td><span class="muted">No override</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Staged Rollout &mdash; Behavioral Analytics (UEBA)</span><span class="s">beta phase</span></div>
+    <div class="bd">
+      <div style="display:flex;gap:24px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+        <div>
+          <small class="muted">Current phase</small><br>
+          <span class="badge amber" style="font-size:13px">Beta</span>
+        </div>
+        <div>
+          <small class="muted">Tenants enabled</small><br>
+          <b>18 / 42</b> <span class="muted">(43%)</span>
+        </div>
+        <div>
+          <small class="muted">Target</small><br>
+          <b>100% by Q3 2026</b>
+        </div>
+        <div>
+          <small class="muted">Error rate</small><br>
+          <b style="color:var(--green)">0.02%</b>
+        </div>
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px">
+          <span class="muted">Rollout progress</span>
+          <b>43%</b>
+        </div>
+        <div id="rolloutBar"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn primary" onclick="pf.toast('Expanding to next batch of 5 tenants','ok')">Expand to next batch</button>
+        <button class="btn" onclick="pf.toast('Rollout paused','ok')">Pause rollout</button>
+        <button class="btn" style="color:var(--danger)" onclick="pf.toast('Rollback would revert all beta tenants','err')">Rollback</button>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doFeatureFlags, 100);
+})();
+function showOverrides(feature){
+  var panel = document.getElementById("overridePanel");
+  if(panel){
+    panel.style.display = panel.style.display === "none" ? "block" : "none";
+    if(panel.style.display === "block"){
+      panel.scrollIntoView({behavior:"smooth", block:"start"});
+    }
+  }
+}
+function doFeatureFlags(){
+  var bar = document.getElementById("rolloutBar");
+  if(bar && window.pf){
+    bar.innerHTML = pf.progress(43, "var(--amber)");
+  }
+}
+</script>
+</body></html>

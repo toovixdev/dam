@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — Noisy Neighbor Detection</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="infra-health">
+
+  <div class="phead">
+    <div>
+      <h1>Noisy Neighbor Detection</h1>
+      <div class="meta"><span>per-tenant resource consumption &middot; auto-throttle</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--danger-soft);color:var(--danger)">&#9650;</span> Top consumer</div><div class="kv" style="font-size:16px">Bharat National Bank</div><div class="kd down">34% of IN-Mumbai cluster</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9673;</span> Throttled tenants</div><div class="kv" style="color:var(--green)">0</div><div class="kd up">no active throttles</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9888;</span> Resource alerts</div><div class="kv" style="color:var(--amber)">2</div><div class="kd down">capacity warnings</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8776;</span> Cluster utilization</div><div class="kv">78%</div><div class="kd">across all regions</div></div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px;border-left:3px solid var(--amber)">
+    <div class="bd" style="display:flex;align-items:center;gap:12px">
+      <span style="font-size:18px;color:var(--amber)">&#9888;</span>
+      <div>
+        <b style="color:var(--amber)">Capacity Warning</b><br>
+        <span>Bharat National Bank is consuming 34% of IN-Mumbai cluster capacity &mdash; consider migration to dedicated cluster</span>
+      </div>
+      <div style="margin-left:auto;display:flex;gap:8px">
+        <button class="btn" onclick="pf.toast('Opening migration planner','ok')">Plan migration</button>
+        <button class="btn" onclick="pf.toast('Alert acknowledged','ok')">Acknowledge</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Resource Consumption by Tenant</span><span class="s">sorted by highest consumption</span></div>
+    <div class="bd" style="padding:0;overflow-x:auto">
+      <table class="tbl" id="noisyTbl">
+        <thead>
+          <tr>
+            <th>Tenant</th>
+            <th>Region</th>
+            <th class="num">Events/s</th>
+            <th class="num">CPU Share %</th>
+            <th class="num">Memory Share %</th>
+            <th class="num">Disk I/O %</th>
+            <th class="num">Kafka Lag</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="background:var(--danger-soft)">
+            <td><b>Bharat National Bank</b><br><small class="muted">bnb-india &middot; 240 DBs</small></td>
+            <td>IN-Mumbai</td>
+            <td class="num"><b>2,296</b></td>
+            <td class="num"><b style="color:var(--danger)">34%</b></td>
+            <td class="num"><b style="color:var(--amber)">28%</b></td>
+            <td class="num"><b style="color:var(--amber)">31%</b></td>
+            <td class="num">1.8s</td>
+            <td><span class="badge amber dot">Warning</span></td>
+            <td><button class="btn" onclick="showDetail('bnb')">Detail</button></td>
+          </tr>
+          <tr>
+            <td><b>Meridian Financial</b><br><small class="muted">meridian-fin &middot; 186 DBs</small></td>
+            <td>US-East</td>
+            <td class="num">1,651</td>
+            <td class="num">22%</td>
+            <td class="num">19%</td>
+            <td class="num">18%</td>
+            <td class="num">0.6s</td>
+            <td><span class="badge green dot">Normal</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Meridian detail','ok')">Detail</button></td>
+          </tr>
+          <tr>
+            <td><b>GovData India</b><br><small class="muted">govdata-in &middot; 156 DBs</small></td>
+            <td>IN-Mumbai</td>
+            <td class="num">1,444</td>
+            <td class="num"><b style="color:var(--amber)">26%</b></td>
+            <td class="num">21%</td>
+            <td class="num">24%</td>
+            <td class="num">1.2s</td>
+            <td><span class="badge amber dot">Warning</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening GovData detail','ok')">Detail</button></td>
+          </tr>
+          <tr>
+            <td><b>Pacific Health Partners</b><br><small class="muted">pacific-hp &middot; 112 DBs</small></td>
+            <td>US-West</td>
+            <td class="num">974</td>
+            <td class="num">16%</td>
+            <td class="num">14%</td>
+            <td class="num">12%</td>
+            <td class="num">0.4s</td>
+            <td><span class="badge green dot">Normal</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Pacific Health detail','ok')">Detail</button></td>
+          </tr>
+          <tr>
+            <td><b>Nordic Insurance Group</b><br><small class="muted">nordic-ins &middot; 89 DBs</small></td>
+            <td>EU-West</td>
+            <td class="num">778</td>
+            <td class="num">12%</td>
+            <td class="num">11%</td>
+            <td class="num">9%</td>
+            <td class="num">0.3s</td>
+            <td><span class="badge green dot">Normal</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Nordic Insurance detail','ok')">Detail</button></td>
+          </tr>
+          <tr>
+            <td><b>Royal Commerce UK</b><br><small class="muted">royal-comm &middot; 64 DBs</small></td>
+            <td>UK-South</td>
+            <td class="num">484</td>
+            <td class="num">8%</td>
+            <td class="num">7%</td>
+            <td class="num">6%</td>
+            <td class="num">0.2s</td>
+            <td><span class="badge green dot">Normal</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening Royal Commerce detail','ok')">Detail</button></td>
+          </tr>
+          <tr>
+            <td><b>TechStart Inc</b><br><small class="muted">techstart &middot; 3 DBs</small></td>
+            <td>US-East</td>
+            <td class="num">5</td>
+            <td class="num">&lt;1%</td>
+            <td class="num">&lt;1%</td>
+            <td class="num">&lt;1%</td>
+            <td class="num">0.1s</td>
+            <td><span class="badge green dot">Normal</span></td>
+            <td><button class="btn" onclick="pf.toast('Opening TechStart detail','ok')">Detail</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" id="detailPanel" style="margin-bottom:14px;display:none">
+    <div class="hd"><span class="t">Tenant Detail &mdash; Bharat National Bank</span><span class="s">IN-Mumbai cluster</span></div>
+    <div class="bd">
+      <div class="grid" style="grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px">
+        <div>
+          <h3 style="font-size:13px;font-weight:700;margin:0 0 8px">Resource Trend (24h)</h3>
+          <div id="chResourceTrend"></div>
+        </div>
+        <div>
+          <h3 style="font-size:13px;font-weight:700;margin:0 0 8px">Recommended Actions</h3>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div style="padding:8px 12px;border-radius:8px;background:var(--danger-soft);font-size:13px">
+              <b style="color:var(--danger)">Migrate to dedicated cluster</b><br>
+              <small class="muted">Current shared cluster is approaching saturation. Dedicated cluster would eliminate noisy-neighbor risk.</small>
+            </div>
+            <div style="padding:8px 12px;border-radius:8px;background:var(--amber-soft);font-size:13px">
+              <b style="color:var(--amber)">Enable rate limiting</b><br>
+              <small class="muted">Set events/s cap at 2,000 to prevent burst consumption from impacting co-tenants.</small>
+            </div>
+            <div style="padding:8px 12px;border-radius:8px;background:var(--info-soft);font-size:13px">
+              <b style="color:var(--info)">Optimize query patterns</b><br>
+              <small class="muted">14 slow queries detected in last hour. Query optimization could reduce CPU by ~8%.</small>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:14px">
+    <div class="hd"><span class="t">Throttle Controls</span><span class="s">per-tenant rate limiting</span></div>
+    <div class="bd">
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:14px;flex-wrap:wrap">
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Auto-throttle</label>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-size:12px;color:var(--muted)">When a tenant exceeds 30% of shared cluster capacity</span>
+            <button class="btn" id="autoThrottleBtn" onclick="toggleAutoThrottle()" style="min-width:80px">Enable</button>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;background:var(--surface)">
+          <b style="min-width:180px;font-size:13px">Bharat National Bank</b>
+          <span class="muted" style="font-size:12px;min-width:100px">Current: 2,296/s</span>
+          <input type="range" min="500" max="5000" value="3000" step="100" style="flex:1" oninput="this.nextElementSibling.textContent=this.value+'/s'">
+          <span style="font-size:12px;font-weight:600;min-width:60px">3000/s</span>
+          <button class="btn" onclick="pf.toast('Rate limit applied to Bharat National Bank','ok')">Apply</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;background:var(--surface)">
+          <b style="min-width:180px;font-size:13px">GovData India</b>
+          <span class="muted" style="font-size:12px;min-width:100px">Current: 1,444/s</span>
+          <input type="range" min="500" max="5000" value="2500" step="100" style="flex:1" oninput="this.nextElementSibling.textContent=this.value+'/s'">
+          <span style="font-size:12px;font-weight:600;min-width:60px">2500/s</span>
+          <button class="btn" onclick="pf.toast('Rate limit applied to GovData India','ok')">Apply</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;padding:8px 12px;border-radius:8px;background:var(--surface)">
+          <b style="min-width:180px;font-size:13px">Meridian Financial</b>
+          <span class="muted" style="font-size:12px;min-width:100px">Current: 1,651/s</span>
+          <input type="range" min="500" max="5000" value="2500" step="100" style="flex:1" oninput="this.nextElementSibling.textContent=this.value+'/s'">
+          <span style="font-size:12px;font-weight:600;min-width:60px">2500/s</span>
+          <button class="btn" onclick="pf.toast('Rate limit applied to Meridian Financial','ok')">Apply</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doNoisyNeighbor, 100);
+})();
+function showDetail(tenant){
+  var panel = document.getElementById("detailPanel");
+  if(panel){
+    panel.style.display = panel.style.display === "none" ? "block" : "none";
+    if(panel.style.display === "block"){
+      panel.scrollIntoView({behavior:"smooth", block:"start"});
+    }
+  }
+}
+function toggleAutoThrottle(){
+  var btn = document.getElementById("autoThrottleBtn");
+  if(!btn) return;
+  if(btn.textContent === "Enable"){
+    btn.textContent = "Disable";
+    btn.classList.add("primary");
+    pf.toast("Auto-throttle enabled at 30% threshold","ok");
+  } else {
+    btn.textContent = "Enable";
+    btn.classList.remove("primary");
+    pf.toast("Auto-throttle disabled","ok");
+  }
+}
+function doNoisyNeighbor(){
+  if(window.pf){
+    pf.line("#chResourceTrend",{labels:["00:00","04:00","08:00","12:00","16:00","20:00","Now"],lines:[
+      {name:"CPU %",color:"var(--danger)",points:[28,26,30,34,36,33,34]},
+      {name:"Memory %",color:"var(--info)",points:[24,23,25,27,28,27,28]},
+      {name:"Disk I/O %",color:"var(--amber)",points:[26,25,28,31,32,30,31]}
+    ]},{height:180,max:50});
+  }
+}
+</script>
+</body></html>

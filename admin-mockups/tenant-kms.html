@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en"><head><!--data-theme-boot--><script>(function(){try{var t=localStorage.getItem("nx-theme")||"dark";if(t==="system")t=(window.matchMedia&&matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","dark");}})();</script><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TooVix Admin — KMS &amp; BYOK</title>
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body data-active="tenant-kms">
+
+  <div class="phead">
+    <div>
+      <h1>KMS &amp; BYOK Configuration</h1>
+      <div class="meta"><span>Meridian Financial &middot; Key management &amp; encryption</span></div>
+    </div>
+  </div>
+
+  <div class="grid c4" style="margin-bottom:14px">
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--primary-soft);color:var(--primary)">&#128273;</span> KMS Provider</div><div class="kv" style="font-size:18px">HashiCorp Vault</div><div class="kd">Enterprise cluster</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--green-soft);color:var(--green)">&#9679;</span> Key Status</div><div class="kv" style="color:var(--green)">Active</div><div class="kd up">AES-256-GCM</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--info-soft);color:var(--info)">&#8634;</span> Last Rotation</div><div class="kv">14d ago</div><div class="kd">9 Jun 2026</div></div>
+    <div class="kpi"><div class="kl"><span class="ki" style="background:var(--amber-soft);color:var(--amber)">&#9201;</span> Next Rotation</div><div class="kv">76 days</div><div class="kd">7 Sep 2026 (90d policy)</div></div>
+  </div>
+
+  <div id="kmsContent"></div>
+
+<script src="assets/ui.js"></script>
+<script src="assets/admin-shell.js"></script>
+<script>
+(function init(){
+  if(!document.querySelector(".app")){ setTimeout(init, 50); return; }
+  setTimeout(doKms, 100);
+})();
+function doKms(){
+  var c = document.getElementById("kmsContent");
+  if(!c) return;
+
+  c.innerHTML =
+    /* --- Current Key Configuration --- */
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Current Key Configuration</span><span class=\"badge green\" style=\"margin-left:8px\">Active</span></div>" +
+      "<div class=\"bd\">" +
+        "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr;gap:20px\">" +
+          "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Provider</span><b>HashiCorp Vault (Enterprise)</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Key URI</span><span class=\"mono\" style=\"font-size:11px\">vault://transit/keys/meridian-dam-prod-v4</span></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Algorithm</span><b>AES-256-GCM</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Key version</span><b>v4</b></div>" +
+          "</div>" +
+          "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Purpose</span><b>Audit encryption + hash-chain signing</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Rotation policy</span><b>Every 90 days (auto)</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Min decryption ver.</span><b>v2 (backward compat)</b></div>" +
+            "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+            "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Vault endpoint</span><span class=\"mono\" style=\"font-size:11px\">https://vault.meridianfin.com:8200</span></div>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>" +
+
+    /* --- Key Rotation History --- */
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Key Rotation History</span><span class=\"s\">Last 12 months</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Date</th><th>Old Key</th><th>New Key</th><th>Rotated By</th><th>Method</th><th>Status</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>9 Jun 2026</b><br><small class=\"muted\">14:22 UTC</small></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v3</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v4</span></td><td>System (auto-rotate)</td><td><span class=\"badge blue\">Automatic</span></td><td><span class=\"badge green dot\">Completed</span></td></tr>" +
+            "<tr><td><b>11 Mar 2026</b><br><small class=\"muted\">14:18 UTC</small></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v2</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v3</span></td><td>System (auto-rotate)</td><td><span class=\"badge blue\">Automatic</span></td><td><span class=\"badge green dot\">Completed</span></td></tr>" +
+            "<tr><td><b>11 Dec 2025</b><br><small class=\"muted\">14:15 UTC</small></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v1</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v2</span></td><td>System (auto-rotate)</td><td><span class=\"badge blue\">Automatic</span></td><td><span class=\"badge green dot\">Completed</span></td></tr>" +
+            "<tr><td><b>12 Sep 2025</b><br><small class=\"muted\">10:00 UTC</small></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-initial</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v1</span></td><td>Sarah Chen (manual)</td><td><span class=\"badge\">Manual</span></td><td><span class=\"badge green dot\">Completed</span></td></tr>" +
+            "<tr><td><b>15 Jan 2024</b><br><small class=\"muted\">09:30 UTC</small></td><td><span class=\"muted\">&mdash;</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-initial</span></td><td>Sarah Chen (initial setup)</td><td><span class=\"badge ind\">Initial</span></td><td><span class=\"badge green dot\">Completed</span></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>" +
+
+    /* --- BYOK Setup --- */
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">BYOK Setup</span><span class=\"s\">Bring Your Own Key configuration</span></div>" +
+      "<div class=\"bd\">" +
+        "<div style=\"margin-bottom:14px\">" +
+          "<div style=\"font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:10px\">Supported Providers</div>" +
+          "<div style=\"display:flex;gap:10px;flex-wrap:wrap\">" +
+            "<div style=\"display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px;font-size:13px\">" +
+              "<span style=\"color:var(--info);font-weight:700\">&#9729;</span> Azure Key Vault" +
+            "</div>" +
+            "<div style=\"display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px;font-size:13px\">" +
+              "<span style=\"color:var(--amber);font-weight:700\">&#9729;</span> AWS KMS" +
+            "</div>" +
+            "<div style=\"display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px;font-size:13px\">" +
+              "<span style=\"color:var(--danger);font-weight:700\">&#9729;</span> GCP Cloud KMS" +
+            "</div>" +
+            "<div style=\"display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:9px;font-size:13px\">" +
+              "<span style=\"color:var(--green);font-weight:700\">&#9729;</span> OCI Vault" +
+            "</div>" +
+            "<div style=\"display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--primary-soft);border:1px solid var(--primary-ring);border-radius:9px;font-size:13px;font-weight:600;color:var(--primary)\">" +
+              "<span>&#9733;</span> HashiCorp Vault <span class=\"badge green\" style=\"margin-left:4px\">Active</span>" +
+            "</div>" +
+          "</div>" +
+        "</div>" +
+        "<div style=\"border-top:1px solid var(--line);padding-top:14px\">" +
+          "<div style=\"font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:10px\">Current Provider Configuration</div>" +
+          "<div class=\"grid\" style=\"grid-template-columns:1fr 1fr;gap:20px\">" +
+            "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Provider</span><b>HashiCorp Vault Enterprise</b></div>" +
+              "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Vault address</span><span class=\"mono\" style=\"font-size:11px\">https://vault.meridianfin.com:8200</span></div>" +
+              "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Auth method</span><b>AppRole + mTLS</b></div>" +
+            "</div>" +
+            "<div style=\"display:flex;flex-direction:column;gap:10px\">" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Transit engine</span><span class=\"mono\" style=\"font-size:12px\">transit/</span></div>" +
+              "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Namespace</span><span class=\"mono\" style=\"font-size:12px\">meridian/production</span></div>" +
+              "<div style=\"border-bottom:1px solid var(--line-2)\"></div>" +
+              "<div style=\"display:flex;justify-content:space-between;font-size:13px\"><span class=\"muted\">Connection</span><span class=\"badge green dot\">Verified</span></div>" +
+            "</div>" +
+          "</div>" +
+          "<div style=\"margin-top:14px;display:flex;gap:10px\">" +
+            "<button class=\"btn primary\" onclick=\"pf.toast('Connection test passed - Vault reachable, transit engine healthy','ok')\">Test Connection</button>" +
+            "<button class=\"btn\" onclick=\"pf.toast('Key rotation would be triggered','ok')\">Rotate Key Now</button>" +
+          "</div>" +
+        "</div>" +
+      "</div>" +
+    "</div>" +
+
+    /* --- Encryption Scope --- */
+    "<div class=\"card\" style=\"margin-bottom:14px\">" +
+      "<div class=\"hd\"><span class=\"t\">Encryption Scope</span><span class=\"s\">What data is encrypted with the tenant key</span></div>" +
+      "<div class=\"bd\" style=\"padding:0;overflow-x:auto\">" +
+        "<table class=\"tbl\">" +
+          "<thead><tr><th>Data Category</th><th>Encryption</th><th>Key Used</th><th>At Rest</th><th>In Transit</th><th>Notes</th></tr></thead>" +
+          "<tbody>" +
+            "<tr><td><b>Audit events</b><br><small class=\"muted\">All ingested database activity</small></td><td><span class=\"badge green dot\">Encrypted</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v4</span></td><td><span class=\"badge green\">AES-256</span></td><td><span class=\"badge green\">TLS 1.3</span></td><td><small class=\"muted\">Per-event envelope encryption</small></td></tr>" +
+            "<tr><td><b>Hash-chain checkpoints</b><br><small class=\"muted\">Tamper-proof chain anchors</small></td><td><span class=\"badge green dot\">Signed</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v4</span></td><td><span class=\"badge green\">AES-256</span></td><td><span class=\"badge green\">TLS 1.3</span></td><td><small class=\"muted\">HMAC-SHA256 chain signing</small></td></tr>" +
+            "<tr><td><b>Exports</b><br><small class=\"muted\">Scheduled and on-demand exports</small></td><td><span class=\"badge green dot\">Encrypted</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v4</span></td><td><span class=\"badge green\">AES-256</span></td><td><span class=\"badge green\">TLS 1.3</span></td><td><small class=\"muted\">Encrypted at generation, decrypted on download</small></td></tr>" +
+            "<tr><td><b>Credentials store</b><br><small class=\"muted\">Agent tokens, API keys, DB passwords</small></td><td><span class=\"badge green dot\">Encrypted</span></td><td><span class=\"mono\" style=\"font-size:12px\">meridian-dam-prod-v4</span></td><td><span class=\"badge green\">AES-256</span></td><td><span class=\"badge green\">TLS 1.3</span></td><td><small class=\"muted\">Double-encrypted: Vault seal + tenant key</small></td></tr>" +
+            "<tr><td><b>Agent configuration</b><br><small class=\"muted\">Agent deployment configs</small></td><td><span class=\"badge blue dot\">Platform key</span></td><td><span class=\"muted\">Platform default</span></td><td><span class=\"badge green\">AES-256</span></td><td><span class=\"badge green\">TLS 1.3</span></td><td><small class=\"muted\">Non-sensitive; uses platform encryption</small></td></tr>" +
+            "<tr><td><b>Dashboard metadata</b><br><small class=\"muted\">User prefs, saved queries, layouts</small></td><td><span class=\"badge blue dot\">Platform key</span></td><td><span class=\"muted\">Platform default</span></td><td><span class=\"badge green\">AES-256</span></td><td><span class=\"badge green\">TLS 1.3</span></td><td><small class=\"muted\">Non-sensitive; uses platform encryption</small></td></tr>" +
+          "</tbody>" +
+        "</table>" +
+      "</div>" +
+    "</div>";
+}
+</script>
+</body></html>
