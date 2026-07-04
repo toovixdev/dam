@@ -1883,6 +1883,26 @@ workspaces (adding them anywhere else → "user already exists"). Switched to tr
 - Verified: same email added to a 2nd workspace (previously rejected); login without workspace → 409;
   login with `workspace=meridian-fg` → scoped to the right account.
 
+## 51. Real authentication for the Super-Admin console (closed an open-admin hole)
+
+The admin console (`dam-admin-react`) and **all 41 `/api/admin/*` endpoints had NO auth** — and because
+the product app proxies `/api`, they were reachable unauthenticated on the public domain
+(`https://…/api/admin/tenants`). Added a proper platform-admin identity + gate.
+- **Identity**: `platform_operators` gained `password_hash` + `status`; a super-admin is seeded on boot
+  (`PLATFORM_ADMIN_EMAIL`/`PLATFORM_ADMIN_PASSWORD`, default `superadmin@toovix.com` / `ChangeMe@Admin1`,
+  logged on creation). Separate from tenant users.
+- **Auth**: `POST /api/admin/auth/login` (bcrypt) → JWT with `platform:true`; `GET /api/admin/auth/me`.
+  A single **`app.use('/api/admin', guard)`** (registered before the first admin route, login exempted)
+  protects **every** admin endpoint — current and future — on all domains. Tenant JWTs are rejected (they
+  lack `platform:true`), and platform tokens carry no `tenantId` so they can't reach tenant APIs.
+- **Admin frontend**: `client.js` now sends the Bearer token + clears it and bounces to `/login` on 401;
+  new `Login.jsx`; `App.jsx` wraps every route in `RequireAuth`; TopBar "Sign out" wired to `adminLogout`
+  and shows the operator.
+- **Env**: `PLATFORM_ADMIN_EMAIL/PASSWORD` added to compose + both env templates.
+- Verified: `/api/admin/*` → 401 without a token (was open); super-admin login → token; token → 200;
+  **tenant JWT → 401**; bad password → 401.
+- Follow-up option: add TOTP MFA to the super-admin (the TOTP helpers already exist).
+
 ## 9. App entry points
 
 - Dev SPA (HMR): http://localhost:5173  · API: http://localhost:3000

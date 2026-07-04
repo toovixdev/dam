@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getBranding, onBrandingChange } from '../branding';
+import { adminLogout, getOperator } from '../api/client';
 
 // All 11 themes from the main product app — including `signature` and
 // `enterprise`, the two that were added beyond the original mockups.
@@ -96,13 +97,13 @@ export default function TopBar({ lastRefresh, onRefresh }) {
             <div className="user-popup-header">
               <span className="user-popup-avatar">PO</span>
               <div className="user-popup-info">
-                <b>Platform Ops</b>
-                <small className="user-popup-role">TooVix Platform Operations</small>
+                <b>{getOperator()?.name || 'Platform Ops'}</b>
+                <small className="user-popup-role">{getOperator()?.email || 'TooVix Platform Operations'}</small>
                 <small className="user-popup-tenant">Super Admin</small>
               </div>
             </div>
-            <a className="user-popup-item" href="http://localhost:5173/" target="_blank" rel="noreferrer"><span>▷</span> Open product app</a>
-            <button className="user-popup-item signout" onClick={() => setMenuOpen(false)}><span>⎋</span> Sign out</button>
+            <a className="user-popup-item" href="/" target="_blank" rel="noreferrer"><span>▷</span> Open product app</a>
+            <button className="user-popup-item signout" onClick={() => { setMenuOpen(false); adminLogout(); }}><span>⎋</span> Sign out</button>
           </div>
         )}
       </div>

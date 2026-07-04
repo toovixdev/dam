@@ -18,6 +18,8 @@ import Roles from './pages/Roles';
 import PlatformEmail from './pages/PlatformEmail';
 import Approvals from './pages/Approvals';
 import Placeholder from './pages/Placeholder';
+import Login from './pages/Login';
+import { getToken } from './api/client';
 import './App.css';
 
 // Sidebar entries that don't have a real page yet resolve to a titled placeholder.
@@ -27,30 +29,37 @@ const STUBS = [
   ['/agent-versions', 'Agent Versions'],
 ];
 
+// Gate the console behind a platform-admin token. Invalid/expired tokens are cleared
+// by the API client on the first 401, which bounces back here to /login.
+function RequireAuth({ children }) {
+  return getToken() ? children : <Navigate to="/login" replace />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<PlatformDashboard />} />
-        <Route path="/tenants" element={<Tenants />} />
-        <Route path="/feature-flags" element={<FeatureFlags />} />
-        <Route path="/quotas" element={<Quotas />} />
-        <Route path="/tenant-health" element={<TenantHealth />} />
-        <Route path="/infra-health" element={<InfraHealth />} />
-        <Route path="/noisy-neighbor" element={<NoisyNeighbor />} />
-        <Route path="/canary" element={<CanaryDeployments />} />
-        <Route path="/capacity" element={<CapacityPlanning />} />
-        <Route path="/billing" element={<Billing />} />
-        <Route path="/trials" element={<TrialConversion />} />
-        <Route path="/success" element={<CustomerSuccess />} />
-        <Route path="/audit" element={<PlatformAudit />} />
-        <Route path="/impersonation" element={<Impersonation />} />
-        <Route path="/break-glass" element={<BreakGlass />} />
-        <Route path="/roles" element={<Roles />} />
-        <Route path="/platform-email" element={<PlatformEmail />} />
-        <Route path="/approvals" element={<Approvals />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/" element={<RequireAuth><PlatformDashboard /></RequireAuth>} />
+        <Route path="/tenants" element={<RequireAuth><Tenants /></RequireAuth>} />
+        <Route path="/feature-flags" element={<RequireAuth><FeatureFlags /></RequireAuth>} />
+        <Route path="/quotas" element={<RequireAuth><Quotas /></RequireAuth>} />
+        <Route path="/tenant-health" element={<RequireAuth><TenantHealth /></RequireAuth>} />
+        <Route path="/infra-health" element={<RequireAuth><InfraHealth /></RequireAuth>} />
+        <Route path="/noisy-neighbor" element={<RequireAuth><NoisyNeighbor /></RequireAuth>} />
+        <Route path="/canary" element={<RequireAuth><CanaryDeployments /></RequireAuth>} />
+        <Route path="/capacity" element={<RequireAuth><CapacityPlanning /></RequireAuth>} />
+        <Route path="/billing" element={<RequireAuth><Billing /></RequireAuth>} />
+        <Route path="/trials" element={<RequireAuth><TrialConversion /></RequireAuth>} />
+        <Route path="/success" element={<RequireAuth><CustomerSuccess /></RequireAuth>} />
+        <Route path="/audit" element={<RequireAuth><PlatformAudit /></RequireAuth>} />
+        <Route path="/impersonation" element={<RequireAuth><Impersonation /></RequireAuth>} />
+        <Route path="/break-glass" element={<RequireAuth><BreakGlass /></RequireAuth>} />
+        <Route path="/roles" element={<RequireAuth><Roles /></RequireAuth>} />
+        <Route path="/platform-email" element={<RequireAuth><PlatformEmail /></RequireAuth>} />
+        <Route path="/approvals" element={<RequireAuth><Approvals /></RequireAuth>} />
         {STUBS.map(([path, title]) => (
-          <Route key={path} path={path} element={<Placeholder title={title} />} />
+          <Route key={path} path={path} element={<RequireAuth><Placeholder title={title} /></RequireAuth>} />
         ))}
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

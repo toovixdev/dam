@@ -1211,6 +1211,22 @@ async function runAdminMigration() {
       console.log('[Admin] Purged fabricated Security & Ops seeds — real data only');
     }
 
+    // Platform operators are the SUPER-ADMINS of the console (cross-tenant). They log in
+    // with their own credentials, separate from tenant users.
+    await client.query(`ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS password_hash VARCHAR(200)`);
+    await client.query(`ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'`);
+    // Seed the first super-admin (idempotent). Credentials are env-configurable.
+    const padminEmail = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@toovix.com').toLowerCase().trim();
+    const padminExists = await client.query('SELECT id, password_hash FROM platform_operators WHERE email = $1', [padminEmail]);
+    if (!padminExists.rows.length) {
+      const padminPass = process.env.PLATFORM_ADMIN_PASSWORD || 'ChangeMe@Admin1';
+      await client.query(
+        `INSERT INTO platform_operators (name, email, role, mfa_enabled, status, password_hash)
+         VALUES ('Platform Admin', $1, 'super_admin', false, 'active', $2)`,
+        [padminEmail, bcrypt.hashSync(padminPass, 10)]);
+      console.log(`[Admin] Seeded platform super-admin: ${padminEmail}${process.env.PLATFORM_ADMIN_PASSWORD ? '' : ' / ChangeMe@Admin1 (set PLATFORM_ADMIN_PASSWORD to override)'}`);
+    }
+
     console.log('[Admin] Platform migration complete');
   } finally {
     client.release();
@@ -1240,6 +1256,20 @@ function adminOnly(req, res, next) {
     return res.status(403).json({ error: 'Tenant admin access required' });
   }
   next();
+}
+
+// ── Platform super-admin auth (the Super-Admin console) ───────────────────────
+// Separate identity from tenant users: platform operators sign in with their own
+// credentials and get a token carrying `platform:true`. Tenant JWTs cannot access
+// /api/admin/* (they lack that claim), and a platform token can't access tenant APIs
+// (authRequired sets req.user but platform tokens have no tenantId).
+function issuePlatformToken(op) {
+  return jwt.sign({ operatorId: op.id, email: op.email, name: op.name, role: op.role, platform: true }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+}
+function verifyPlatformToken(req) {
+  const h = req.headers.authorization;
+  if (!h || !h.startsWith('Bearer ')) return null;
+  try { const p = jwt.verify(h.split(' ')[1], JWT_SECRET); return p.platform === true ? p : null; } catch { return null; }
 }
 
 // ── Login ─────────────────────────────────────────────────
@@ -2048,6 +2078,39 @@ app.get('/api/tenants/:id', async (req, res) => {
   const { rows } = await pgPool.query('SELECT * FROM tenants WHERE id = $1', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   res.json(rows[0]);
+});
+
+// ── Admin · Platform auth ──────────────────────────────────
+// Public: platform super-admin login. Registered BEFORE the guard below so it stays open.
+app.post('/api/admin/auth/login', async (req, res) => {
+  const email = String(req.body?.email || '').toLowerCase().trim();
+  const password = String(req.body?.password || '');
+  if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+  try {
+    const op = (await pgPool.query('SELECT id, name, email, role, status, password_hash FROM platform_operators WHERE email = $1', [email])).rows[0];
+    if (!op || op.status !== 'active' || !op.password_hash || !bcrypt.compareSync(password, op.password_hash)) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    await pgPool.query('UPDATE platform_operators SET last_active_at = now() WHERE id = $1', [op.id]);
+    try { await logPlatformAudit({ actor: op.email, action: 'platform.login', resource: 'admin-console', ip: req.ip, details: 'Super-admin sign-in' }); } catch (e) { /* best-effort */ }
+    res.json({ token: issuePlatformToken(op), operator: { id: op.id, email: op.email, name: op.name, role: op.role } });
+  } catch (err) { console.error('[Admin] login failed:', err.message); res.status(500).json({ error: 'Login failed' }); }
+});
+
+// GUARD: every other /api/admin/* route requires a valid platform token. This single
+// mount protects all 40+ admin endpoints (and any future ones) on ALL domains — so the
+// unauthenticated super-admin API is no longer reachable via the public app proxy.
+app.use('/api/admin', (req, res, next) => {
+  if (req.method === 'POST' && req.path === '/auth/login') return next(); // the login itself is public
+  const op = verifyPlatformToken(req);
+  if (!op) return res.status(401).json({ error: 'Platform admin authentication required' });
+  req.operator = op;
+  next();
+});
+
+// Who am I (validates the platform token; reaches here only if the guard passed).
+app.get('/api/admin/auth/me', (req, res) => {
+  res.json({ operator: { id: req.operator.operatorId, email: req.operator.email, name: req.operator.name, role: req.operator.role } });
 });
 
 // ── Admin · Platform (Super-Admin console) ─────────────────
