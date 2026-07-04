@@ -3,8 +3,14 @@
 .claude/
 .gstack/
 
-# Dev environment secrets
-dev/.env
+# Environment secrets — never commit real .env files. Templates (*.example) are allowed.
+.env
+.env.*
+!.env.example
+!.env.gcp.example
+!*.env.example
+
+# node
 dev/dam/frontend/node_modules/
 dev/*/node_modules/
 node_modules/

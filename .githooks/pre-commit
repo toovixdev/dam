@@ -1,0 +1,15 @@
+#!/bin/sh
+# Refuse to commit real .env files (secrets). Only *.env.example templates are allowed.
+# Enable once per clone:  git config core.hooksPath .githooks
+
+staged=$(git diff --cached --name-only --diff-filter=AM)
+bad=$(printf '%s\n' "$staged" | grep -E '(^|/)\.env(\.[^/]*)?$' | grep -vE '\.example$')
+
+if [ -n "$bad" ]; then
+  echo "✋ Blocked: these look like real env files with secrets —"
+  printf '%s\n' "$bad" | sed 's/^/     /'
+  echo "   Only *.env.example templates may be committed."
+  echo "   Unstage them:  git restore --staged <file>"
+  exit 1
+fi
+exit 0
