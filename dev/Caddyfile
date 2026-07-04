@@ -9,7 +9,9 @@ dam.suchirasoistories.in {
     reverse_proxy dam-react:5173
 }
 
-# Admin console (optional — remove if you don't expose it publicly)
-admin-dam.suchirasoistories.in {
-    reverse_proxy dam-admin-react:5174
-}
+# Admin console (optional). To expose it: create an A record for this name → the VM IP,
+# then uncomment this block and `docker compose restart dam-caddy`. Leaving it commented
+# avoids Caddy failing/retrying on a name that has no DNS record.
+# admin-dam.suchirasoistories.in {
+#     reverse_proxy dam-admin-react:5174
+# }
