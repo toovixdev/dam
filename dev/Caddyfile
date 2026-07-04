@@ -1,0 +1,15 @@
+# TooVix DAM — automatic HTTPS (Let's Encrypt) reverse proxy.
+# Caddy terminates TLS on 443 and forwards to the Vite dev servers, which already
+# proxy /api, /auth and /ws to dam-api internally — so the browser only ever talks
+# to Caddy over HTTPS. Certs are obtained + renewed automatically.
+#
+# DNS: point both names' A records at the GCP VM's static IP before starting Caddy.
+
+dam.suchirasoistories.in {
+    reverse_proxy dam-react:5173
+}
+
+# Admin console (optional — remove if you don't expose it publicly)
+admin-dam.suchirasoistories.in {
+    reverse_proxy dam-admin-react:5174
+}

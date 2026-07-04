@@ -1,0 +1,10 @@
+{
+  "name": "dam-discovery",
+  "version": "0.1.0",
+  "private": true,
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js",
+    "scan": "node scanner.js"
+  }
+}

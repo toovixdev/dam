@@ -60,3 +60,11 @@ INSERT INTO audit_log (action, principal, table_name, row_count, ip_address) VAL
 ('SELECT', 'bi_reader',    'customers',    8,   '10.0.2.30'),
 ('UPDATE', 'app_payments', 'transactions', 1,   '10.0.1.15'),
 ('SELECT', 'svc_report',   'transactions', 1000,'10.0.3.10');
+
+-- ── JIT broker account (the "DB owner provisions the broker" runbook step) ──
+-- LEAST-PRIVILEGE, NOT root: it can create/drop users and grant ONLY read on
+-- payments (with grant option). Vault holds this credential; DAM never sees it.
+CREATE USER IF NOT EXISTS 'dam_jit_payments'@'%' IDENTIFIED BY 'broker-payments-pw';
+GRANT CREATE USER ON *.* TO 'dam_jit_payments'@'%';
+GRANT SELECT ON payments.* TO 'dam_jit_payments'@'%' WITH GRANT OPTION;
+FLUSH PRIVILEGES;

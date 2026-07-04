@@ -18,6 +18,11 @@ volumes:
   dam-pg-data:
   dam-ch-data:
   dam-redis-data:
+  dam-minio-data:
+  dam-vault-bootstrap:   # shared tmpfs-style channel: role_id + secret_id only
+  dam-signer-keys:       # the Approval Signer's private key (DAM never mounts this)
+  caddy-data:            # Caddy TLS certs + ACME account (persist across restarts)
+  caddy-config:
 
 services:
 
@@ -64,6 +69,28 @@ services:
       interval: 5s
       retries: 5
 
+  # A second, "shadow" MySQL on a NON-default port (3307) — used to demo
+  # auto-discovery: DAM finds it by protocol handshake, not by port number.
+  client-mysql-2:
+    image: mysql:8.0
+    container_name: client-mysql-2
+    command: ["--port=3307"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: inventory
+      MYSQL_USER: app_inv
+      MYSQL_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+    ports:
+      - "3307:3307"
+    volumes:
+      - ./client/mysql2/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+    networks:
+      - client-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-P", "3307"]
+      interval: 5s
+      retries: 10
+
   client-mongo:
     image: mongo:7
     container_name: client-mongo
@@ -87,16 +114,15 @@ services:
     build: ./client/traffic-gen
     container_name: traffic-gen
     depends_on:
-      client-postgres:
-        condition: service_healthy
       client-mysql:
         condition: service_healthy
-      client-mongo:
-        condition: service_healthy
+      dam-agent-mysql-proxy:
+        condition: service_started
     environment:
       PG_HOST: client-postgres
       PG_PASSWORD: ${CLIENT_PG_PASSWORD}
-      MYSQL_HOST: client-mysql
+      # MySQL traffic is routed THROUGH the inline-proxy agent so it's captured + policy-enforced.
+      MYSQL_HOST: dam-agent-mysql-proxy
       MYSQL_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
       MONGO_HOST: client-mongo
       MONGO_PASSWORD: ${CLIENT_MONGO_PASSWORD}
@@ -171,13 +197,106 @@ services:
     networks:
       - dam-net
 
+  # Immutable (WORM) archive for audit evidence — S3-compatible, Object Lock enabled.
+  dam-minio:
+    image: minio/minio:latest
+    container_name: dam-minio
+    command: server /data --console-address ":9090"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dam_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dam_minio_secret}
+    ports:
+      - "9100:9000"   # S3 API (host 9100 — host 9000 is taken by ClickHouse native)
+      - "9090:9090"   # MinIO console
+    volumes:
+      - dam-minio-data:/data
+    networks:
+      - dam-net
+
+  # ═══════════════════════════════════════════════════════════
+  #  SECRETS & APPROVAL (JIT trust separation)
+  # ═══════════════════════════════════════════════════════════
+
+  # HashiCorp Vault (dev mode, in-memory). Holds the privileged broker credential
+  # and mints short-lived, scoped DB users on demand — so DAM stores NO DB password.
+  # On both networks: dam-net (DAM reaches it) + client-net (it reaches client DBs).
+  dam-vault:
+    image: hashicorp/vault:1.15
+    container_name: dam-vault
+    cap_add:
+      - IPC_LOCK
+    command: ["server", "-dev"]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: root
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+      VAULT_ADDR: http://127.0.0.1:8200
+    ports:
+      - "8200:8200"
+    networks:
+      - dam-net
+      - client-net
+
+  # One-shot bootstrap: provisions the least-privilege broker account, configures
+  # the DB secrets engine + scoped JIT role, and hands DAM its AppRole identity.
+  dam-vault-init:
+    image: hashicorp/vault:1.15
+    container_name: dam-vault-init
+    user: root
+    depends_on:
+      dam-vault:
+        condition: service_started
+      client-mysql:
+        condition: service_healthy
+      client-mysql-2:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "/bootstrap.sh"]
+    environment:
+      VAULT_ADDR: http://dam-vault:8200
+      VAULT_BOOTSTRAP_TOKEN: root
+      CLIENT_MYSQL_ROOT_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+      BROKER_MYSQL_PASSWORD: ${BROKER_MYSQL_PASSWORD:-broker-payments-pw}
+      BROKER_INVENTORY_PASSWORD: ${BROKER_INVENTORY_PASSWORD:-broker-inventory-pw}
+    volumes:
+      - ./dam/vault/bootstrap.sh:/bootstrap.sh:ro
+      - dam-vault-bootstrap:/vault-bootstrap
+    restart: "no"
+    networks:
+      - dam-net
+      - client-net
+
+  # Approval Signer — SEPARATE trust domain. Its Ed25519 private key lives only in
+  # dam-signer-keys, which the DAM API never mounts. Exposed on :3100 so the
+  # approver's browser can sign directly, without DAM seeing the approver credential.
+  dam-approval-signer:
+    build: ./dam/approval-signer
+    container_name: dam-approval-signer
+    ports:
+      - "3100:3100"
+    environment:
+      PORT: 3100
+      KEY_DIR: /keys
+      SIGNER_APPROVER_TOKEN: ${SIGNER_APPROVER_TOKEN:-dev-approver-token}
+    volumes:
+      - dam-signer-keys:/keys
+    networks:
+      - dam-net
+
   dam-api:
     build: ./dam/api
     container_name: dam-api
     ports:
       - "3000:3000"
+    volumes:
+      # Read-only: the AppRole bootstrap identity (role_id + secret_id). No DB password here.
+      - dam-vault-bootstrap:/vault-bootstrap:ro
     environment:
       NODE_ENV: development
+      # ── JIT: Vault (dynamic broker creds) + Approval Signer (anti-compromise gate) ──
+      VAULT_ADDR: ${VAULT_ADDR:-http://dam-vault:8200}
+      VAULT_ROLE_ID_FILE: /vault-bootstrap/role_id
+      VAULT_SECRET_ID_FILE: /vault-bootstrap/secret_id
+      SIGNER_URL: ${SIGNER_URL:-http://dam-approval-signer:3100}
+      SIGNER_PUBLIC_URL: ${SIGNER_PUBLIC_URL:-http://localhost:3100}
       PG_HOST: dam-postgres
       PG_PORT: 5432
       PG_USER: dam_admin
@@ -190,6 +309,62 @@ services:
       REDIS_URL: redis://dam-redis:6379
       NATS_URL: nats://dam-nats:4222
       JWT_SECRET: ${DAM_JWT_SECRET}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
+      AZURE_REDIRECT_URI: ${AZURE_REDIRECT_URI}
+      OKTA_DOMAIN: ${OKTA_DOMAIN:-}
+      OKTA_CLIENT_ID: ${OKTA_CLIENT_ID:-}
+      OKTA_CLIENT_SECRET: ${OKTA_CLIENT_SECRET:-}
+      OKTA_REDIRECT_URI: ${OKTA_REDIRECT_URI:-http://localhost:5173/auth/okta/callback}
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:5173}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-TooVix DAM <no-reply@toovix.security>}
+      # Payment gateways (test/sandbox). Secrets stay server-side.
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      PAYU_MERCHANT_KEY: ${PAYU_MERCHANT_KEY:-}
+      PAYU_SALT: ${PAYU_SALT:-}
+      PAYU_MODE: ${PAYU_MODE:-test}
+      USD_TO_INR: ${USD_TO_INR:-83.5}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:3000}
+      BILLING_TEST_TOTAL_USD: ${BILLING_TEST_TOTAL_USD:-}
+      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
+      # Read-only lookups into client DBs for DSAR subject discovery.
+      CLIENT_MYSQL_ROOT_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+      # Quarantine-release execution: LEAST-PRIVILEGE per-engine accounts (NOT root).
+      # Overridable per database instance via the exec_credentials table.
+      EXEC_MYSQL_USER: ${EXEC_MYSQL_USER:-app_payments}
+      EXEC_MYSQL_PASS: ${EXEC_MYSQL_PASS:-${CLIENT_MYSQL_ROOT_PASSWORD}}
+      EXEC_PG_USER: ${EXEC_PG_USER:-app_crm}
+      EXEC_PG_PASS: ${EXEC_PG_PASS:-${CLIENT_PG_PASSWORD}}
+      # ── Immutable (WORM) audit archive — pluggable backend ──
+      # Dev default = S3-compatible MinIO. Switch clouds by changing these vars only:
+      #   AWS:   ARCHIVE_PROVIDER=s3  S3_ENDPOINT=s3.<region>.amazonaws.com S3_USE_SSL=true S3_PORT=443
+      #          S3_REGION=<region> S3_ACCESS_KEY=... S3_SECRET_KEY=... ARCHIVE_LOCK_MODE=COMPLIANCE
+      #   Azure: ARCHIVE_PROVIDER=azure AZURE_STORAGE_ACCOUNT=... AZURE_STORAGE_KEY=...
+      #          (or AZURE_STORAGE_CONNECTION_STRING=...) ARCHIVE_LOCK_MODE=COMPLIANCE
+      #   Off:   ARCHIVE_PROVIDER=none   (detection-only, no archive)
+      ARCHIVE_PROVIDER: ${ARCHIVE_PROVIDER:-s3}
+      ARCHIVE_BUCKET: ${ARCHIVE_BUCKET:-dam-audit-archive}
+      ARCHIVE_LOCK_DAYS: ${ARCHIVE_LOCK_DAYS:-7}
+      ARCHIVE_LOCK_MODE: ${ARCHIVE_LOCK_MODE:-GOVERNANCE}
+      # S3-compatible config (also used for AWS S3). Defaults point at the local MinIO.
+      S3_ENDPOINT: ${S3_ENDPOINT:-dam-minio}
+      S3_PORT: ${S3_PORT:-9000}
+      S3_USE_SSL: ${S3_USE_SSL:-false}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-dam_minio}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-dam_minio_secret}
+      # Azure config (only read when ARCHIVE_PROVIDER=azure)
+      AZURE_STORAGE_ACCOUNT: ${AZURE_STORAGE_ACCOUNT:-}
+      AZURE_STORAGE_KEY: ${AZURE_STORAGE_KEY:-}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:-dev-audit-signing-key}
     depends_on:
       dam-postgres:
         condition: service_healthy
@@ -199,8 +374,13 @@ services:
         condition: service_started
       dam-nats:
         condition: service_started
+      dam-vault:
+        condition: service_started
+      dam-approval-signer:
+        condition: service_started
     networks:
       - dam-net
+      - client-net   # DSAR subject discovery + Vault reach client DBs
 
   dam-frontend:
     image: nginx:alpine
@@ -228,6 +408,56 @@ services:
     depends_on:
       - dam-api
 
+  dam-react:
+    build: ./dam/frontend
+    container_name: dam-react
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./dam/frontend/src:/app/src
+      - ./dam/frontend/index.html:/app/index.html
+    networks:
+      - dam-net
+    depends_on:
+      - dam-api
+
+  # Super-Admin console (React/Vite) — sits beside the product app on its own port.
+  # The static admin mockups remain available via dam-admin-frontend (nginx, :8092).
+  dam-admin-react:
+    build: ./dam/admin-frontend
+    container_name: dam-admin-react
+    ports:
+      - "5174:5174"
+    volumes:
+      - ./dam/admin-frontend/src:/app/src
+      - ./dam/admin-frontend/index.html:/app/index.html
+    networks:
+      - dam-net
+    depends_on:
+      - dam-api
+
+  # ═══════════════════════════════════════════════════════════
+  #  HTTPS REVERSE PROXY (automatic TLS via Let's Encrypt)
+  #  Only needed for the public test env; harmless locally (just don't open 80/443).
+  # ═══════════════════════════════════════════════════════════
+
+  dam-caddy:
+    image: caddy:2
+    container_name: dam-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data       # certs + ACME account (persist across restarts)
+      - caddy-config:/config
+    networks:
+      - dam-net
+    depends_on:
+      - dam-react
+      - dam-admin-react
+
   # ═══════════════════════════════════════════════════════════
   #  COLLECTOR (bridges both networks — like a real agent)
   # ═══════════════════════════════════════════════════════════
@@ -247,6 +477,8 @@ services:
       MONGO_HOST: client-mongo
       MONGO_USER: admin
       MONGO_PASSWORD: ${CLIENT_MONGO_PASSWORD}
+      CONTROL_PLANE: http://dam-api:3000
+      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
       NATS_URL: nats://dam-nats:4222
       CLICKHOUSE_HOST: dam-clickhouse
       CLICKHOUSE_PORT: 8123
@@ -261,3 +493,135 @@ services:
     networks:
       - client-net
       - dam-net
+
+  # ═══════════════════════════════════════════════════════════
+  #  DISCOVERY AGENT — in-network DB scanner (port scan + fingerprint).
+  #  Sits on client-net (reachability to DB subnets) and reports candidates.
+  # ═══════════════════════════════════════════════════════════
+  dam-discovery:
+    build: ./dam/discovery
+    container_name: dam-discovery
+    environment:
+      CONTROL_PLANE: http://dam-api:3000
+      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
+      DISCOVERY_TARGETS: client-postgres,client-mysql,client-mongo,client-mysql-2
+      DISCOVERY_PRESET: common
+      DISCOVERY_INTERVAL: "300000"
+    depends_on:
+      - dam-api
+      - client-postgres
+      - client-mysql
+      - client-mongo
+    networks:
+      - client-net
+      - dam-net
+
+  # ═══════════════════════════════════════════════════════════
+  #  DAM AGENT — Go binary, MODE-selectable (network|host|proxy)
+  #  Increment 1: inline PROXY for MySQL. Built locally (no registry).
+  # ═══════════════════════════════════════════════════════════
+  dam-agent-mysql-proxy:
+    build: ./dam/agent
+    container_name: dam-agent-mysql-proxy
+    environment:
+      MODE: proxy
+      DB_ENGINE: mysql
+      TARGET_HOST: client-mysql
+      TARGET_PORT: 3306
+      TARGET_DB: MYSQL-PAYMENTS-PROD
+      LISTEN_PORT: 3306
+      UPSTREAM: client-mysql:3306
+      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
+      CONTROL_PLANE: http://dam-api:3000
+      CLICKHOUSE_URL: http://dam-clickhouse:8123
+      CLICKHOUSE_USER: dam_writer
+      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+    depends_on:
+      - dam-api
+      - client-mysql
+      - dam-clickhouse
+    networks:
+      - client-net
+      - dam-net
+
+  # NETWORK agent for the DISCOVERED instance client-mysql-2 (port 3307).
+  # Enrolls against host:port+engine → attaches to the instance discovery registered,
+  # flips it to "monitored", and shows online on the Agent Fleet page.
+  dam-agent-mysql2-network:
+    build: ./dam/agent
+    container_name: dam-agent-mysql2-network
+    user: root
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    network_mode: "service:client-mysql-2"
+    environment:
+      MODE: network
+      DB_ENGINE: mysql
+      TARGET_HOST: client-mysql-2
+      TARGET_PORT: 3307
+      TARGET_DB: client-mysql-2
+      CAPTURE_IFACE: eth0
+      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
+      CONTROL_PLANE: http://host.docker.internal:3000
+      CLICKHOUSE_URL: http://host.docker.internal:8123
+      CLICKHOUSE_USER: dam_writer
+      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+    depends_on:
+      - dam-api
+      - client-mysql-2
+      - dam-clickhouse
+
+  # INLINE PROXY agent for the discovered instance client-mysql-2 (port 3307).
+  # Listens on 3307 and forwards to client-mysql-2:3307; can block/quarantine.
+  dam-agent-mysql2-proxy:
+    build: ./dam/agent
+    container_name: dam-agent-mysql2-proxy
+    environment:
+      MODE: proxy
+      DB_ENGINE: mysql
+      TARGET_HOST: client-mysql-2
+      TARGET_PORT: 3307
+      TARGET_DB: client-mysql-2
+      LISTEN_PORT: 3307
+      UPSTREAM: client-mysql-2:3307
+      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
+      CONTROL_PLANE: http://dam-api:3000
+      CLICKHOUSE_URL: http://dam-clickhouse:8123
+      CLICKHOUSE_USER: dam_writer
+      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+    depends_on:
+      - dam-api
+      - client-mysql-2
+      - dam-clickhouse
+    networks:
+      - client-net
+      - dam-net
+
+  # NETWORK agent — passive libpcap-style capture. Shares client-mysql's network namespace
+  # (the only way to sniff another container's traffic on a switched Docker bridge) and so
+  # cannot also join dam-net → it reaches the platform via host-published ports.
+  dam-agent-mysql-network:
+    build: ./dam/agent
+    container_name: dam-agent-mysql-network
+    user: root
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    network_mode: "service:client-mysql"
+    environment:
+      MODE: network
+      DB_ENGINE: mysql
+      TARGET_HOST: client-mysql
+      TARGET_PORT: 3306
+      TARGET_DB: MYSQL-PAYMENTS-PROD
+      CAPTURE_IFACE: eth0
+      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
+      CONTROL_PLANE: http://host.docker.internal:3000
+      CLICKHOUSE_URL: http://host.docker.internal:8123
+      CLICKHOUSE_USER: dam_writer
+      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+    depends_on:
+      - dam-api
+      - client-mysql
+      - dam-clickhouse

@@ -2,3 +2,9 @@
 ~$*
 .claude/
 .gstack/
+
+# Dev environment secrets
+dev/.env
+dev/dam/frontend/node_modules/
+dev/*/node_modules/
+node_modules/

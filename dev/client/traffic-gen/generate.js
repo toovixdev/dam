@@ -26,6 +26,17 @@ const MYSQL_QUERIES = [
   { label: 'SELECT SIN numbers (PII!)',           sql: () => `SELECT full_name, sin FROM customers WHERE sin IS NOT NULL` },
 ];
 
+// ── MySQL policy-violating queries ──────────────────────────
+// These match the inline proxy's BLOCK_PATTERNS (DROP TABLE / DROP DATABASE /
+// TRUNCATE / GRANT ALL), so the proxy stops them at the gate before they ever
+// reach MySQL. They deliberately target throwaway object names so that, even if
+// a block somehow didn't fire, nothing real is harmed.
+const MYSQL_BLOCKED_QUERIES = [
+  { label: 'TRUNCATE (destructive)',            sql: () => `TRUNCATE TABLE payments.zzz_scratch` },
+  { label: 'GRANT ALL (privilege escalation)',  sql: () => `GRANT ALL PRIVILEGES ON payments.* TO 'dam_probe'@'%'` },
+  { label: 'DROP TABLE (destructive)',          sql: () => `DROP TABLE IF EXISTS payments.zzz_scratch` },
+];
+
 // ── MongoDB queries ─────────────────────────────────────────
 const MONGO_QUERIES = [
   { label: 'Find user by email',          fn: (db) => db.collection('users').findOne({ email: 'oliver.w@example.co.uk' }, { projection: { full_name: 1, email: 1 } }) },
@@ -125,6 +136,21 @@ async function main() {
       try {
         await pgConns['bi_reader'].query('SELECT full_name, email, phone, ssn, date_of_birth, address FROM crm.contacts');
       } catch (e) { /* ignore */ }
+      console.log('');
+    }
+
+    // Policy violation every ~12 iterations: fire a blockable MySQL query THROUGH the
+    // inline proxy. The proxy matches a BLOCK_PATTERN and refuses to forward it, so the
+    // query throws here (that throw IS the block working) — and raises an alert upstream.
+    if (counter % 12 === 0 && mysqlConn) {
+      const bad = pick(MYSQL_BLOCKED_QUERIES);
+      console.log(`\n[${ts()}] *** POLICY VIOLATION: app_payments attempts ${bad.label} (expect inline block) ***`);
+      try {
+        await mysqlConn.query(bad.sql());
+        console.log(`[${ts()}] MySQL | ${'app_payments'.padEnd(14)} | ${bad.label} — NOT blocked?!`);
+      } catch (e) {
+        console.log(`[${ts()}] MySQL | ${'app_payments'.padEnd(14)} | ${bad.label} — BLOCKED by proxy ✓`);
+      }
       console.log('');
     }
   }

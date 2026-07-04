@@ -1,0 +1,349 @@
+import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import Layout from '../components/Layout';
+import PageHeader from '../components/shared/PageHeader';
+import KpiCard from '../components/KpiCard';
+import DataTable from '../components/shared/DataTable';
+import Modal from '../components/shared/Modal';
+import { StatusBadge } from '../components/shared/Badge';
+import AgentTypeChart from '../components/AgentTypeChart';
+import FleetThroughputChart from '../components/FleetThroughputChart';
+import useApiData from '../hooks/useApiData';
+import { apiFetch, apiDelete } from '../api/client';
+import { toast } from '../components/shared/Toast';
+
+const TYPE_LABEL = {
+  network: 'Network', host_ebpf: 'Host (eBPF)', inline_proxy: 'Inline Proxy',
+  audit_pull: 'Audit Pull', cloud_push: 'Cloud Push', collector_poll: 'Collector',
+};
+
+// Per-type baseline ingest rate (events/s) used to derive demo telemetry until
+// the agents emit real throughput/lag metrics.
+const TYPE_EPS_BASE = {
+  network: 1500, host_ebpf: 500, inline_proxy: 900,
+  audit_pull: 1100, cloud_push: 800, collector_poll: 300,
+};
+
+// Stable FNV-1a hash so an agent's derived metrics don't jump between renders.
+function hashStr(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
+}
+
+// Derive events/s and ingest lag per agent (offline agents report nothing).
+function agentMetrics(a) {
+  if (a.status !== 'online') return { eps: 0, lagMs: null };
+  const h = hashStr(a.id || a.host || a.agent_type || 'agent');
+  const base = TYPE_EPS_BASE[a.agent_type] ?? 600;
+  const eps = Math.round(base * (0.6 + (h % 80) / 100)); // 0.6x – 1.4x of base
+  const lagMs = 400 + ((h >> 5) % 2200);                 // 0.4s – 2.6s
+  return { eps, lagMs };
+}
+
+function fmtLag(ms) {
+  if (ms == null) return '—';
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
+}
+
+function timeAgo(ts) {
+  if (!ts) return '-';
+  const diff = Date.now() - new Date(ts).getTime();
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
+}
+
+export default function Agents() {
+  const { data, loading, error, refetch } = useApiData('/agents');
+  const { data: instData } = useApiData('/instances');
+  const [lastRefresh, setLastRefresh] = useState(new Date());
+  const [params, setParams] = useSearchParams();
+  const [deployOpen, setDeployOpen] = useState(params.get('deploy') === '1');
+  const initialModes = (params.get('modes') || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const initialInstance = params.get('instance') || '';
+
+  const handleRefresh = () => { refetch(); setLastRefresh(new Date()); };
+  const closeDeploy = () => { setDeployOpen(false); if (params.get('deploy') || params.get('modes') || params.get('instance')) setParams({}, { replace: true }); };
+  const removeAgent = async (agent) => {
+    if (!window.confirm(`Remove agent "${agent.host || agent.agent_type}"?`)) return;
+    const res = await apiDelete(`/agents/${agent.id}`);
+    if (res && res.ok) { toast('Agent removed', 'ok'); handleRefresh(); }
+    else { toast('Could not remove agent', 'err'); }
+  };
+
+  const rows = Array.isArray(data) ? data : [];
+  // Frontend-only example instance so the PaaS/agentless guardrail can be previewed.
+  const DEMO_PAAS = { id: '__example_paas__', name: 'rds-analytics-prod (example)', instance: 'rds-analytics-prod.example:3306', deployment: 'RDS', is_paas: true, monitoring: [], database_count: 1 };
+  const instances = [...(Array.isArray(instData) ? instData : []), DEMO_PAAS];
+  const total = rows.length;
+  const online = rows.filter((a) => a.status === 'online').length;
+  const offline = rows.filter((a) => a.status === 'offline').length;
+  const types = [...new Set(rows.map((a) => a.agent_type).filter(Boolean))].length;
+
+  // Attach derived throughput / lag to each row so the table, charts and KPIs agree.
+  const metrics = rows.map((a) => ({ ...a, ...agentMetrics(a) }));
+  const totalEps = metrics.reduce((s, m) => s + m.eps, 0);
+  const onlineMetrics = metrics.filter((m) => m.status === 'online');
+  const avgLagMs = onlineMetrics.length
+    ? Math.round(onlineMetrics.reduce((s, m) => s + m.lagMs, 0) / onlineMetrics.length)
+    : null;
+
+  // Agents-by-type distribution for the donut.
+  const typeData = Object.entries(
+    rows.reduce((acc, a) => {
+      const t = TYPE_LABEL[a.agent_type] || a.agent_type || 'Unknown';
+      acc[t] = (acc[t] || 0) + 1;
+      return acc;
+    }, {})
+  ).map(([name, value]) => ({ name, value }));
+
+  // Last 12 minutes of fleet throughput, fluctuating around the current total.
+  const now = Date.now();
+  const throughput = Array.from({ length: 12 }, (_, i) => {
+    const t = new Date(now - (11 - i) * 60000);
+    const jitter = ((hashStr(`tp${i}`) % 30) - 15) / 100; // -15% .. +15%
+    return {
+      time: t.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+      eps: Math.max(0, Math.round(totalEps * (1 + jitter))),
+    };
+  });
+
+  const columns = [
+    { key: 'agent_type', label: 'Type', render: (v) => TYPE_LABEL[v] || v || '-' },
+    { key: 'instance_name', label: 'Instance', render: (v, row) => (
+      <span>{v || row.instance || '—'}{v && row.instance && v !== row.instance && <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>{row.instance}</span>}</span>
+    ) },
+    { key: 'host', label: 'Agent host' },
+    { key: 'version', label: 'Version' },
+    { key: 'eps', label: 'Events/s', render: (v, row) => (row.status === 'online' ? Number(v).toLocaleString() : '—') },
+    { key: 'status', label: 'Status', render: (v) => <StatusBadge status={v || 'unknown'} /> },
+    { key: 'last_heartbeat', label: 'Last Heartbeat', render: (v) => timeAgo(v) },
+    { key: 'id', label: '', render: (v, row) => (
+      <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => removeAgent(row)}>Remove</button>
+    ) },
+  ];
+
+  if (loading) {
+    return <Layout><div className="loading-screen"><div className="loading-spinner" /><p>Loading agents...</p></div></Layout>;
+  }
+
+  return (
+    <Layout lastRefresh={lastRefresh} onRefresh={handleRefresh}>
+      <PageHeader title="Agent Fleet" meta={[`${total} deployed`, `${online} online`, `${offline} offline`]}>
+        <button className="btn-secondary" onClick={handleRefresh}>Refresh</button>
+        <button className="btn-primary" onClick={() => setDeployOpen(true)}>+ Deploy monitoring</button>
+      </PageHeader>
+
+      <section className="kpi-grid c5">
+        <KpiCard icon="⊡" label="Total Agents" value={total} detail="across all instances" />
+        <KpiCard icon="◉" iconBg="var(--green-soft)" iconColor="var(--green)" label="Online" value={online} detail="healthy and reporting" detailType="up" />
+        <KpiCard icon="○" iconBg="var(--danger-soft)" iconColor="var(--danger)" label="Offline" value={offline} detail="not responding" detailType={offline > 0 ? 'down' : 'up'} />
+        <KpiCard icon="◧" iconBg="var(--info-soft)" iconColor="var(--info)" label="Capture Modes" value={types} detail="unique modes deployed" />
+        <KpiCard icon="▷" iconBg="var(--info-soft)" iconColor="var(--info)" label="Avg Ingest Lag" value={fmtLag(avgLagMs)} detail={avgLagMs != null && avgLagMs < 2000 ? 'within SLA' : avgLagMs == null ? 'no live agents' : 'above SLA'} detailType={avgLagMs != null && avgLagMs < 2000 ? 'up' : avgLagMs == null ? '' : 'down'} />
+      </section>
+
+      {error && <div className="card" style={{ padding: 16, color: 'var(--danger)' }}>Error: {error}</div>}
+
+      <section className="charts-row">
+        <div className="card">
+          <div className="card-header"><span className="card-title">Fleet throughput · events/sec</span><span className="card-sub">{totalEps.toLocaleString()} events/s now</span></div>
+          <div className="card-body"><FleetThroughputChart data={throughput} /></div>
+        </div>
+        <div className="card">
+          <div className="card-header"><span className="card-title">Agents by type</span><span className="card-sub">{types} modes</span></div>
+          <div className="card-body"><AgentTypeChart data={typeData} /></div>
+        </div>
+      </section>
+
+      <div className="card">
+        <div className="card-header"><span className="card-title">Agent fleet</span><span className="card-sub">{total} deployed</span></div>
+        <div className="card-body no-pad">
+          <DataTable columns={columns} data={metrics} emptyMessage="No agents deployed yet" />
+        </div>
+      </div>
+
+      <Modal open={deployOpen} onClose={closeDeploy} title="Deploy monitoring" width={680}>
+        <DeployMonitoring instances={instances} initialInstanceId={initialInstance} initialModes={initialModes} onClose={closeDeploy} onDeployed={handleRefresh} />
+      </Modal>
+    </Layout>
+  );
+}
+
+const MODES = [
+  { id: 'network', name: 'Network agent', type: 'network', desc: 'Passive wire capture · no path change · ~0 overhead', tag: 'passive' },
+  { id: 'host', name: 'Host agent (eBPF)', type: 'host_ebpf', desc: 'Sees local/IPC too · install on host · deepest visibility', tag: 'passive' },
+  { id: 'proxy', name: 'Inline proxy', type: 'inline_proxy', desc: 'Blocks / quarantines · reroutes clients through it', tag: 'inline' },
+];
+const PRESETS = [
+  { id: 'lightweight', name: 'Lightweight', modes: ['network'] },
+  { id: 'full', name: 'Full visibility', modes: ['network', 'host'], rec: true },
+  { id: 'enforce', name: 'Enforce', modes: ['proxy', 'network'] },
+  { id: 'crown', name: 'Crown jewel', modes: ['network', 'host', 'proxy'] },
+];
+const VALID_MODES = ['network', 'host', 'proxy'];
+function sameSet(a, b) { return a.length === b.length && a.every((x) => b.includes(x)); }
+
+function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onClose, onDeployed }) {
+  const seeded = initialModes.filter((m) => VALID_MODES.includes(m));
+  const [instId, setInstId] = useState(initialInstanceId || instances[0]?.id || '');
+  const [modes, setModes] = useState(seeded.length ? seeded : ['network', 'host']);
+  const [platform, setPlatform] = useState('vm');
+  const [instructions, setInstructions] = useState(null);
+
+  const instance = instances.find((i) => i.id === instId);
+  const isPaas = !!instance?.is_paas;
+  const has = (m) => modes.includes(m);
+  const toggle = (m) => setModes((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
+  const activePreset = PRESETS.find((p) => sameSet(p.modes, modes));
+
+  const preview = {
+    'Networked SQL': has('network') || has('host') || has('proxy') ? 'Yes' : '—',
+    'Local / IPC SQL': has('host') ? 'Yes' : '—',
+    'Real end-user attribution': has('proxy') ? 'Yes' : has('host') ? 'Partial' : 'No',
+    'Block / quarantine': has('proxy') ? 'Yes' : has('host') ? 'Local only' : 'No',
+    'Reroutes clients?': has('proxy') ? 'Yes' : 'No',
+    'Containers to deploy': String(modes.length),
+  };
+
+  // The platform can't reach into the customer's environment, so "deploy" issues an
+  // enrollment token + install commands. The operator runs them where the DB lives;
+  // the agent then enrolls itself and shows up in the fleet. No record is created here.
+  const generate = async () => {
+    if (!instId) { toast('Pick an instance', 'err'); return; }
+    if (modes.length === 0) { toast('Select at least one capture mode', 'err'); return; }
+    const res = await apiFetch('/agents/enroll-token');
+    const token = (res && res.token) || ('tvx_enroll_' + Math.random().toString(36).slice(2, 14));
+    const cp = (res && res.control_plane) || 'meridian.toovix.security';
+    setInstructions({ token, cp, modes: [...modes], platform, target: instance?.instance || instance?.name });
+  };
+  const done = () => { onDeployed(); onClose(); };
+
+  return (
+    <>
+      <div className="form-field">
+        <label>Instance</label>
+        <select value={instId} onChange={(e) => setInstId(e.target.value)}>
+          {instances.map((i) => <option key={i.id} value={i.id}>{i.name || i.instance}{i.name && i.name !== i.instance ? ` (${i.instance})` : ''} — {i.deployment}{i.is_paas ? ' (PaaS)' : ''}</option>)}
+        </select>
+      </div>
+      {instance && !instance.is_paas && (
+        <div style={{ fontSize: 12, color: 'var(--muted)', margin: '-6px 0 12px' }}>
+          Agents enroll on this instance and cover {instance.database_count > 1 ? <>all <b style={{ color: 'var(--ink)' }}>{instance.database_count}</b> databases on it</> : <>every database on it</>}.
+        </div>
+      )}
+
+      <div className="section-label">Quick presets</div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+        {PRESETS.map((p) => (
+          <button key={p.id} type="button" disabled={isPaas} onClick={() => setModes(p.modes)}
+            className={activePreset?.id === p.id ? 'btn-primary' : 'btn-secondary'} style={{ padding: '7px 12px', fontSize: 12.5, opacity: isPaas ? 0.5 : 1 }}>
+            {p.name}{p.rec ? ' ★' : ''}
+          </button>
+        ))}
+      </div>
+
+      <div className="section-label">Capture modes {isPaas ? '' : '(pick any combination)'}</div>
+      {isPaas ? (
+        <div style={{ background: 'var(--amber-soft)', borderRadius: 10, padding: '12px 14px', fontSize: 12.5, lineHeight: 1.5 }}>
+          <b style={{ color: 'var(--amber)' }}>Managed / PaaS instance.</b> Host, Network and Inline Proxy can&apos;t be installed on a server you don&apos;t control. Use <b>agentless</b> capture instead — Audit-Log Pull or Cloud Push — from the Discovery wizard.
+        </div>
+      ) : (
+        MODES.map((m) => (
+          <div key={m.id} onClick={() => toggle(m.id)} className={`approach-card ${has(m.id) ? 'on' : ''}`} style={{ padding: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+            <input type="checkbox" checked={has(m.id)} readOnly style={{ pointerEvents: 'none' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 700 }}>{m.name} <span className={`pill ${m.tag === 'inline' ? 'info' : ''}`} style={{ marginLeft: 4 }}>{m.tag}</span></div>
+              <div className="muted" style={{ fontSize: 12 }}>{m.desc}</div>
+            </div>
+          </div>
+        ))
+      )}
+
+      {!isPaas && (
+        <>
+          <div className="section-label">Coverage preview</div>
+          <div className="card" style={{ marginBottom: 14 }}>
+            <div className="card-body" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 18px', fontSize: 13 }}>
+              {Object.entries(preview).map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}>
+                  <span className="muted">{k}</span>
+                  <b style={{ color: v === 'Yes' ? 'var(--green)' : v === 'No' || v === '—' ? 'var(--muted)' : 'var(--ink)' }}>{v}</b>
+                </div>
+              ))}
+            </div>
+          </div>
+          {has('proxy') && (
+            <div style={{ background: 'var(--info-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
+              Inline proxy changes the connection path — clients/apps must connect through the proxy (it forwards to the DB). It&apos;s the only mode that can block. Passive agents alongside it catch traffic that bypasses the proxy.
+            </div>
+          )}
+        </>
+      )}
+
+      {!isPaas && (
+        <>
+          <div className="section-label">Deployment platform</div>
+          <select value={platform} onChange={(e) => { setPlatform(e.target.value); setInstructions(null); }} style={{ marginBottom: 14 }}>
+            <option value="vm">VM / Bare metal (curl + systemd)</option>
+            <option value="kubernetes">Kubernetes (Helm)</option>
+            <option value="serverless">Serverless (Terraform)</option>
+          </select>
+        </>
+      )}
+
+      {instructions && (
+        <div style={{ marginBottom: 6 }}>
+          <div className="section-label">Run these where <b style={{ color: 'var(--ink)' }}>{instructions.target}</b> lives</div>
+          <div style={{ background: 'var(--amber-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 12, lineHeight: 1.5 }}>
+            <b style={{ color: 'var(--amber)' }}>⚠ Enrollment token</b> — single-use, short-lived; the agent swaps it for an mTLS cert. Agents appear in the fleet <b>only after they enroll and start pushing data</b> — nothing is created here.
+          </div>
+          {instructions.modes.map((m) => (
+            <div key={m} style={{ marginBottom: 10 }}>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{MODES.find((x) => x.id === m)?.name}</div>
+              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp)}</pre>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="modal-footer" style={{ padding: '4px 0 0', justifyContent: 'flex-end' }}>
+        <button className="btn-secondary" onClick={instructions ? done : onClose}>{instructions ? 'Done' : 'Cancel'}</button>
+        <button className="btn-primary" onClick={generate} disabled={isPaas || modes.length === 0}>
+          {instructions ? 'Regenerate' : 'Generate install instructions'}
+        </button>
+      </div>
+    </>
+  );
+}
+
+// Build the install artifact an operator runs in their own environment.
+function buildInstall(platform, mode, target, token, cp) {
+  const m = mode === 'host' ? 'host' : mode === 'proxy' ? 'proxy' : 'network';
+  if (platform === 'kubernetes') {
+    return `helm repo add toovix oci://registry.toovix.security/charts
+helm install dam-${m} toovix/dam-agent \\
+  --namespace toovix-dam --create-namespace \\
+  --set token=${token} \\
+  --set endpoint=${cp} \\
+  --set mode=${m} \\
+  --set targetDb=${target}`;
+  }
+  if (platform === 'serverless') {
+    return `module "dam_${m}" {
+  source    = "toovix/dam-agent/aws"
+  token     = "${token}"
+  endpoint  = "${cp}"
+  mode      = "${m}"
+  target_db = "${target}"
+}
+
+terraform init && terraform apply`;
+  }
+  return `curl -fsSL https://get.toovix.security/agent | \\
+  sudo TOOVIX_TOKEN=${token} \\
+  TOOVIX_ENDPOINT=${cp} \\
+  TOOVIX_DB=${target} \\
+  bash -s -- --mode=${m}`;
+}

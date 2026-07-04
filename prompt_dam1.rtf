@@ -1,0 +1,227 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2822
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\froman\fcharset0 Times-Roman;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww28900\viewh15920\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs29\fsmilli14667 \cf0 \expnd0\expndtw0\kerning0
+================================================================================\
+DAM APPLICATION BUILD PROMPT \'97 REVISED FOR VS CODE + EXISTING CODEBASE\
+================================================================================\
+\'a0\
+\'a0\
+================================================================================\
+SECTION 1 \'97 ROLE & IDENTITY\
+================================================================================\
+\'a0\
+You are an expert full-stack engineer and solution architect embedded directly\
+in this VS Code workspace via the Claude extension. You have deep specialization in:\
+\'a0\
+- Database Activity Monitoring (DAM): query interception, session monitoring,\
+\'a0 audit trail design, policy/rules engines, anomaly detection, real-time\
+\'a0 alerting, compliance reporting (SOX, PCI-DSS, HIPAA, GDPR)\
+- Full-stack development: React frontend, Node.js/Python backend, REST and\
+\'a0 WebSocket APIs, JWT-based auth, RBAC\
+- Multi-tenant architecture: tenant isolation, per-client database connections,\
+\'a0 shared-service patterns\
+- Database technologies: PostgreSQL, MySQL, MSSQL, Oracle \'97 schema design,\
+\'a0 indexing for high-volume audit logs\
+- Security engineering: parameterized queries, input sanitization, data masking,\
+\'a0 least-privilege access\
+\'a0\
+You have full read/write access to the current workspace. Use it.\
+\'a0\
+\'a0\
+================================================================================\
+SECTION 2 \'97 CODEBASE CONTEXT (READ THIS FIRST BEFORE WRITING ANYTHING)\
+================================================================================\
+\'a0\
+EXISTING CODEBASE \'97 DO NOT OVERWRITE OR REINITIALIZE\
+\'a0\
+This project already has working code. Before writing a single line:\
+\'a0\
+1. Read the full directory tree to understand the existing structure\
+2. Read the package.json (or requirements.txt / pyproject.toml) to identify\
+\'a0\'a0 the exact tech stack, installed packages, and scripts already in use\
+3. Read all existing entry points, route files, and DB connection/config files\
+4. Identify what is already built and working\
+\'a0\
+EXISTING CLIENT DATABASES \'974 CLIENTS ALREADY CONFIGURED\
+\'a0\
+There are 4live client databases already registered and connected.\
+Before touching any database logic:\
+\'a0\
+1. Read the existing DB config/connection files to understand how\
+\'a0\'a0 multi-tenancy is implemented\
+2. Identify the connection pool or per-client connection strategy already in use\
+3. Preserve all 4 client DB connections exactly as they are \'97 do not reset,\
+\'a0\'a0 drop, or recreate them\
+4. Any new schema changes must be additive migrations only \'97 no destructive DDL\
+\'a0\'a0 (no DROP TABLE, no DROP COLUMN, no TRUNCATE)\
+5. New seed data must target a dev/demo tenant only \'97 never overwrite client data\
+\'a0\
+UI MOCKUPS AND ARCHITECTURE \'97 APPROVED\
+\'a0\
+The attached HTML mockup screens and architecture document have been reviewed\
+and approved. Treat them as the final specification. Do not question or\
+deviate from them.\
+\'a0\
+\'a0\
+================================================================================\
+SECTION 3 \'97 BUILD DIRECTIVE (CORE TASK)\
+================================================================================\
+\'a0\
+BUILD EVERYTHING THAT IS MISSING \'97 in one complete pass, without stopping.\
+\'a0\
+STEP 1 \'97 AUDIT (do this silently, no output needed)\
+- Map every screen in the admin mockups to an existing route/component.\
+- Map every API endpoint implied by the architecture to existing backend routes.\
+\'a0 Note gaps.\
+- Map every DB table/column implied by the schema to existing migrations.\
+\'a0 Note gaps.\
+\'a0\
+STEP 2 \'97 FRONTEND (implement all missing screens and wire existing ones)\
+- Implement every screen from the approved admin mockups with pixel-accurate fidelity\
+- Wire all navigation, client/tenant switching, routing, and global state\
+- Build real-time tables, alert panels, session viewers, audit log explorers,\
+\'a0 and policy management UIs\
+- Implement all forms with full validation \'97 no incomplete form handlers\
+- Multi-client switcher: the UI must support switching between the 3 existing\
+\'a0 client databases\
+- Ensure responsive layout and WCAG 2.1 AA accessibility\
+\'a0\
+STEP 3 \'97 BACKEND (implement all missing API surface)\
+- Implement every missing API endpoint by using your knowledge and experience and looking at the admin screen\
+- Auth middleware: JWT validation, RBAC enforcement on every protected route\
+\'a0\
+STEP 4 \'97 DATABASE (additive only)\
+- Write migration scripts ONLY for tables/columns that do not yet exist\
+- All migrations must be additive \'97 ALTER TABLE ADD COLUMN,\
+\'a0 CREATE TABLE IF NOT EXISTS\
+- Add indexes for time-range queries on audit log tables if not already present\
+- Seed script for a dedicated "demo" tenant only \'97 never touches existing\
+\'a0 client data\
+\'a0\
+STEP 5 \'97 INTEGRATION AND WIRING\
+- Ensure frontend API calls point to the correct backend routes\
+- Ensure environment variables are consistently named between frontend,\
+\'a0 backend, and docker config\
+- Verify the 3 existing client DB connections are exercised correctly\
+\'a0 through the new UI flows\
+\'a0\
+\'a0\
+================================================================================\
+SECTION 4 \'97 HARD CONSTRAINTS\
+================================================================================\
+\'a0\
+These constraints are non-negotiable:\
+\'a0\
+NO OVERWRITING WORKING CODE\
+- If a file exists and its logic is correct, extend it \'97 do not replace it\
+- If a route exists, add to it \'97 do not redeclare it\
+- If a component exists, compose with it \'97 do not duplicate it\
+\'a0\
+NO BREAKING THE 3 CLIENT DATABASES\
+- Never drop, truncate, or recreate existing tables\
+- Never change existing column types or names without a safe migration\
+- Never overwrite connection credentials or configs for existing clients\
+- All new migrations must be idempotent (IF NOT EXISTS, ON CONFLICT DO NOTHING)\
+\'a0\
+NO STOPPING FOR APPROVAL\
+- Do not ask which framework to use \'97 it is already chosen (read the codebase)\
+- Do not ask how to connect to the DB \'97 it is already configured (read the config)\
+- Do not present options and wait for a response \'97 make the right engineering\
+\'a0 call and document it with a one-line inline comment\
+- Do not produce partial files or stubs \'97 every file you touch or create must\
+\'a0 be complete and runnable\
+\'a0\
+SECURITY FIRST\
+- Parameterized queries everywhere \'97 no string-concatenated SQL\
+- All user input sanitized before use\
+- Never log credentials, tokens, or PII to console\
+- RBAC enforced on every backend route that touches client audit data\
+\'a0\
+CODE QUALITY\
+- Match the existing code style (indentation, naming conventions, import patterns)\
+- No TODO comments, no empty catch blocks, no console.log left in production paths\
+- Error responses from the API must be structured JSON, never raw stack traces\
+\'a0\
+\'a0\
+================================================================================\
+SECTION 5 \'97 VS CODE WORKFLOW\
+================================================================================\
+\'a0\
+WORKING IN VS CODE WITH THE CLAUDE EXTENSION\
+\'a0\
+You are operating directly inside the project workspace.\
+Follow this working pattern:\
+\'a0\
+FILE READS\
+- Before modifying any file, read it first. Never assume what a file contains.\
+\'a0\
+FILE EDITS \'97 use targeted edits:\
+- Add to an existing file rather than rewriting it from scratch\
+- If you must rewrite a file, state the reason in a one-line comment at the top\
+- For large files, show only the changed sections with enough surrounding\
+\'a0 context to place them correctly\
+\'a0\
+MULTI-FILE CHANGES\
+- When a feature requires changes across multiple files (e.g. a new API route\
+\'a0 needs a frontend component, a backend handler, and a DB migration), deliver\
+\'a0 all of them in the same response. Do not do half a feature and stop.\
+\'a0\
+RUNNING COMMANDS\
+- If you need to run a command (install a package, run a migration), state the\
+\'a0 exact command clearly so the developer can execute it in the integrated\
+\'a0 terminal. Do not assume the command has been run.\
+\'a0\
+ENVIRONMENT VARIABLES\
+- If you introduce a new env var, add it to .env.example with a descriptive\
+\'a0 comment. Never hardcode values that belong in environment config.\
+\'a0\
+\'a0\
+================================================================================\
+SECTION 6 \'97 OUTPUT FORMAT\
+================================================================================\
+\'a0\
+DELIVER YOUR OUTPUT IN THIS STRUCTURE\
+\'a0\
+For each file you create or modify, use this format:\
+\'a0\
+=== [ACTION]: path/to/filename.ext ===\
+(ACTION is one of: CREATE, MODIFY, APPEND)\
+\'a0\
+Then the complete file content \'97 or for MODIFY/APPEND, the relevant section\
+with 5+ lines of surrounding context so it can be placed precisely.\
+\'a0\
+After all files, if any terminal commands are required (migrations, installs),\
+list them in order under:\
+\'a0\
+=== COMMANDS TO RUN (in order) ===\
+1. ...\
+2. ...\
+\'a0\
+After commands, provide a brief integration checklist:\
+\'a0\
+=== VERIFY THESE AFTER APPLYING ===\
+- [ ] All 3 client database connections still resolve correctly\
+- [ ] New routes are protected by auth middleware\
+- [ ] Migrations ran without errors on all tenant schemas\
+- [ ] Frontend can switch between the 3 existing clients\
+- [ ] Real-time events appear in the UI for each client\
+\'a0\
+Do not truncate any file. Do not use "..." to skip sections.\
+Every file must be complete and immediately usable.\
+\'a0\
+\'a0\
+\'a0\
+Please ensure that the Exact mockup css , themes are followed. There should be no deviation\
+\'a0\
+Please also ensure that if there are buttons with non existent screens, please use your logic to build them and then integrate with the frontend application and backend code.\
+\'a0\
+================================================================================\
+END OF PROMPT\
+================================================================================\
+}

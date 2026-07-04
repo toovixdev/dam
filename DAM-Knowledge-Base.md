@@ -30,6 +30,116 @@
 
 ---
 
+## Implementation Status (updated 2026-06-27)
+
+> Snapshot of what is actually built in the working codebase under `dev/`. Detailed,
+> append-only engineering log lives in **[dev/dam/BUILD-LOG.md](dev/dam/BUILD-LOG.md)** — keep
+> that file updated as development proceeds; this section is the high-level mirror.
+
+**Running stack** (`dev/docker-compose.yml`, 13 containers): React SPA `dam-react` (Vite, :5173),
+Express API `dam-api` (:3000), Postgres control plane (`dam_control`, 11 tables), ClickHouse
+analytics, Redis, NATS, plus 3 seeded **client DBs** (PG-CRM-PROD, MYSQL-PAYMENTS-PROD,
+MONGO-PROFILES-UK) — preserved, never reset. Seeded admin: `vikramsharma3107@gmail.com` / `Admin@123`.
+
+**Main app — frontend (`dev/dam/frontend`)**: all 23 routed screens now build and render. The
+9 screens that were imported but missing (and broke the Vite build) were implemented 2026-06-27 to
+mockup fidelity using the app's React component vocabulary (Layout/PageHeader/KpiCard/DataTable/
+TabNav/Modal/Badge + `useApiData`): **Active Defense, Discovery, Masking, Access Governance, LLM
+Monitoring, Reports, Settings, Profile, Support**. Added a shared `Toast` and an app-wide
+**timezone** preference (header clock + picker, synced to Profile; `src/hooks/useTimezone.js`).
+Real wiring where endpoints exist (auth/me, change-password, databases, agents, dashboard);
+presentational screens use inline demo data (same pattern as `Compliance`/`Classification`).
+
+**Backend (`dev/dam/api/main.js`)**: auth (JWT + Azure AD SSO), RBAC middleware, dashboard
+aggregations + fleet-risk score, CRUD for databases/agents/alerts/policies/classification/DSAR/
+users, audit trail, WebSocket live feed. No destructive DDL; client DBs/configs untouched.
+
+**Databases screen aligned to mockup (2026-06-27)**: `databases` got additive columns
+`environment`, `sensitivity_tags[]` (also `capture_modes[]`, now unused). `GET /api/databases`
+returns a shaped row (deployment label + PaaS flag, monitoring pills, coverage {net,host,pull,push},
+sensitivity, status, last_event from ClickHouse) where **monitoring/coverage/status are derived live
+from the real `agents` table**, not stored. `POST /api/databases` is auth-scoped to the caller's
+tenant. Frontend rebuilt to 5 KPIs + engine/text filters + 10-col table + detail & 3-mode register
+modals + CSV export. **Reflects real data only**: the screen shows just the 3 actually-running,
+container-backed client DBs (PG-CRM-PROD/MySQL-PAYMENTS-PROD/MONGO-PROFILES-UK); an earlier pass had
+seeded 16 fictional DBs and they were removed. Details: BUILD-LOG §9e.
+
+**User invitations (email)**: `POST /api/users` (admin) now generates a single-use, 7-day invite
+token and emails the invitee an `/accept-invite?token=…` link via **nodemailer SMTP**
+(provider-agnostic; dev with no `SMTP_HOST` logs the link instead of sending). Public
+`GET /api/invites/:token` + `POST /api/invites/:token/accept` back a new `/accept-invite` page;
+`POST /api/users/:id/resend-invite` re-sends. Additive `users` columns (`invite_token`,
+`invite_expires_at`, `invited_by`). Configure `SMTP_*` + `APP_BASE_URL` (see `dev/.env.example`)
+and rebuild `dam-api` for real delivery. Details: BUILD-LOG §9c. The Add User modal also offers an
+**Account type** toggle — *Local* (password invite) or *Azure AD (SSO)*: AD users are created with
+`auth_provider='azure_ad'`, no password/token, and authenticate via the existing Azure AD SSO
+callback; they get an SSO access email pointing at `/login` instead of a token link. BUILD-LOG §9d.
+
+**Agent deployment (Deploy-monitoring screen)**: the Agents & Coverage page now has a real
+**Deploy monitoring** panel — pick a database, choose 1/2/3 capture modes (Network / Host / Inline
+Proxy) via presets (Lightweight / Full visibility / Enforce / Crown jewel) or multi-select, with a
+**live coverage preview** (networked vs local/IPC visibility, attribution, blocking, path-change,
+container count) and a PaaS guardrail that steers managed DBs to agentless. Deploy creates real
+`agents` rows (`POST /api/agents`, now auth-scoped; `inline_proxy` recognised), which immediately
+flow into the Databases monitoring/coverage/status (all derived from the live agents table). Full
+design rationale in [§7.2](#72-agent-capture-modes--deployment-model--posture-guidance).
+
+**Go agent — increment 1 built** (BUILD-LOG §9j): one Go image (`dev/dam/agent`, pure stdlib),
+`MODE`-selectable, built locally by compose (**no registry needed for dev**; prod pushes to a
+registry the customer env pulls from). **MODE=proxy for MySQL** works end-to-end: the agent
+**self-enrolls** (`POST /api/agents/enroll`, token-gated, find-or-creates the `db_instances` row) +
+**heartbeats** (`/heartbeat`; a 60s reaper marks stale agents offline), and the inline proxy decodes
+the MySQL wire protocol — extracting the **real login user** + **SQL** (handles MySQL 8 query
+attributes) → events to ClickHouse with `agent_type='inline_proxy'`, attribution, operation, and
+sensitivity tags. **Increment 2 (BUILD-LOG §9k):** the MySQL agent now does **continuous capture**
+(live `traffic-gen` routed through the proxy) and **inline blocking** — a `COM_QUERY` matching a
+deny rule (`BLOCK_PATTERNS`) is dropped, a MySQL ERR is returned to the client, and a "Blocked by
+policy" alert is raised (`POST /api/agents/alert`). PG/Mongo + the old collector are stopped for a
+MySQL-only focus. Verified: `DROP TABLE` blocked (table survives) + alert on the Alerts screen.
+Limits: TLS content needs proxy TLS-termination (demo used `--ssl-mode=DISABLED`); postgres/mongo
+decoders, column/role-aware policy, and NATS publish are later increments. **Increment 3
+(BUILD-LOG §9l):** `MODE=network` now does **real passive capture** — a pure-Go `AF_PACKET` raw
+socket sniffs the DB's NIC (container shares `client-mysql`'s net namespace), decodes the MySQL wire
+protocol, and captures with attribution + tags, running in parallel with the proxy (instance shows
+**Network + Inline Proxy** coverage). **Host (eBPF) mode** stays a stub on macOS — to be validated
+for real on a Linux VM (no eBPF on Docker Desktop). So 2 of the 3 installable modes are real in dev.
+
+**First-class instance model** (BUILD-LOG §9h→§9i) — **now realizes the canonical
+[§10.2](#102-asset-inventory--classification-7-tables) `db_instances` design** (the central asset
+registry was always the intended model; the build was conflating server + schema and is now
+corrected). An **instance** (`host:port` server) owns **databases/schemas**, and **agents enroll on
+the instance**, so all its databases share coverage and new ones are auto-covered. Schema is
+additive (`db_instances` + `instance_id` on databases/agents, with backfill grouping existing rows
+by `(host,port,engine)`). API: `GET/POST/DELETE /api/instances` (instance delete **cascades** to its
+databases + agents), `POST /api/databases` adds a schema to an instance, `DELETE /api/databases/:id`
+removes a schema, agents enroll per `instance_id`. UI: Databases page has **Instances + Databases**
+tabs with register-instance, add-database, decommission (instance cascade / database) flows; the
+Agents deploy modal targets instances. Display convention: **instance name = host**, with `host:port`
+shown as the endpoint (uniform across engines). This `(host:port)` instance is the natural `TARGET`
+unit for the Go agents.
+
+> Simplifications vs the full §10.2 design (future work): clusters (`topology_type` /
+> `parent_instance_id` for RAC/AG/replica-set), `engine_metadata JSONB`, `db_groups`, and
+> object-level inventory via `object_classifications` are not yet implemented — the build uses a flat
+> `databases` table for schemas under an instance.
+
+**Capture Modes & Coverage page** (`/capture-modes`, BUILD-LOG §9g): a learn-then-deploy reference —
+the "who sees what by path" matrix, the "what each combination buys" matrix, and an "applicable by
+deployment type" table (IaaS/on-prem install agents; PaaS → agentless). Posture preset cards
+("Deploy this →") hand off to the Agents deploy panel pre-selected via `/agents?deploy=1&modes=…`.
+
+**Not yet built / deferred**: admin app (separate, out of current scope); persistence for the
+demo-only screens (masking rules, access entitlements, support tickets, discovery approvals);
+timezone applied to in-table timestamps (currently header/Profile only); other notification
+channels (Slack/Teams/webhook) — only transactional invite email exists so far. See BUILD-LOG §8/§9b/§9c.
+
+**Gotcha for contributors**: `dam-react` bind-mounts only `src/` + `index.html` (source hot-
+reloads; **`node_modules` does not**) — rebuild after any `package.json` change with
+`docker compose -f dev/docker-compose.yml up -d --build dam-react`. `dam-api` has no source mount
+and runs plain `node main.js`, so backend edits also require a rebuild/restart.
+
+---
+
 ## Table of Contents
 1. [Product Vision & Business Outcomes](#1-product-vision--business-outcomes)
 2. [Users & Personas](#2-users--personas)
@@ -239,6 +349,40 @@ Beyond the six GA engines, recommended additions in priority tiers (driven by In
 
 > **Note (RFP-driven):** Requirement #57 states the solution **should not use native DB audit functionality** — this favours network + host agent capture over audit-trail pull for that customer. Reconcile per deployment (see [§14](#14-open-questions--architect-decisions)).
 
+### 7.2 Agent capture modes — deployment model & posture guidance
+
+The four capture modes split into **3 installed agents** + **1 agentless** consumer:
+
+| Mode | Installed? | In the data path? | Can block? |
+|---|---|---|---|
+| **Network agent** | yes (sidecar/tap) | no — passive observer at the DB NIC | no |
+| **Host agent** (eBPF/ETW) | yes (on the DB host) | no — passive observer at the kernel | local/IPC only |
+| **Inline proxy / gateway** | yes (gateway in the path) | **yes** — clients connect *through* it | **yes** (block/quarantine) |
+| Audit pull / Cloud push | no (agentless) | no | no |
+
+**Mental model:** the **proxy is a gate** the traffic passes through (so it can stop it); the **network and host agents are cameras** pointed at the database (they see traffic arrive but can't stop it). Critically, each sees a path the others can't:
+
+| Connection path | Inline Proxy | Network agent | Host agent |
+|---|:--:|:--:|:--:|
+| App **routed through the proxy** | ✓ (+ real client IP) | ✓ (source = proxy) | ✓ |
+| **Direct** TCP (bypasses proxy) | ✗ | ✓ | ✓ |
+| **Local / IPC** (Unix socket, BEQUEATH, shared mem) | ✗ | ✗ | ✓ (only one) |
+
+So passive agents deployed *alongside* a proxy exist to catch **proxy-bypass and local connections**, and to provide the deep visibility the proxy lacks; the proxy provides **enforcement + real end-user attribution** for routed traffic (passive agents see pooled/proxied connections as coming from the proxy — the attribution problem the Access-Governance identity-resolution feature solves).
+
+**Packaging (decision):** **one** Go agent image; behaviour selected at container start by `MODE={network|host|proxy}` + `DB_ENGINE`. The image bundles all mode implementations + a shared `protocol/` decoder library (TNS/TDS/PG/MySQL/Mongo/DRDA). A **running container runs exactly one mode against one target DB** — the three modes have incompatible deployment shapes (network/host share the DB net namespace; host also needs `pid:` + `privileged`; the proxy needs its own networks to listen + forward). Therefore **#containers = #(database × mode) coverage points**: one DB monitored by Host+Network+Proxy = **3 containers**.
+
+**Posture guidance (drives the Deploy-monitoring screen presets):**
+- **Lightweight** = `Network` — cheapest passive monitoring; blind to local/IPC, can't block.
+- **Full visibility** (recommended for self-managed) = `Network + Host` — complete passive capture (wire + local), no blocking, no path change.
+- **Enforce** = `Proxy + Network` — block routed traffic + catch bypass; blind to local/IPC.
+- **Crown jewel** = `Network + Host + Proxy` — everything + bypass + local; highest overhead, redundant capture on the routed path (needs dedup), inline availability risk. Reserve for the few highest-value DBs.
+- **PaaS/managed DBs** can't install any of the three → use **agentless** (Audit Pull / Cloud Push).
+
+Decision rule: *PaaS? → agentless. Need to block? → Proxy + Network (+ Host if local conns). Else local/IPC conns? → Network + Host, else Network.*
+
+> Dev-environment note: the **inline proxy** and **network agent** are genuinely real in the Docker dev stack (the proxy listens + forwards; the network agent shares the DB's net namespace for real libpcap and ships events to the host-published NATS/ClickHouse ports). The **host eBPF agent runs in simulation on macOS/Docker-Desktop** (no real eBPF there); it is real on native Linux with `privileged`.
+
 ### Deployment targets by cloud
 | Cloud | Always-On Agents | Scheduled Scanners | Serverless Pull/Push |
 |---|---|---|---|
@@ -301,6 +445,7 @@ Same application architecture, three hosting models (supporting all three is a *
 ### 10.2 Asset Inventory & Classification (7 tables)
 `db_groups` · `db_instances` · `db_instance_groups` · `db_credentials` · `principal_classifications` · `object_classifications` · `classification_rules`
 - `db_instances` = central asset registry (one row per monitored DB across all engines/clouds); engine-specific attrs in `engine_metadata JSONB`; clusters (RAC/AG/replica-set) via `topology_type` + `parent_instance_id`.
+  - ✅ **Implemented (dev)**: `db_instances` + `databases` (schemas, `instance_id` FK) + `agents.instance_id`; coverage/status derived per instance; instances CRUD with cascade decommission. `engine_metadata`, clusters, and `db_groups` not yet built. See Implementation Status above + BUILD-LOG §9i.
 - `db_credentials` stores only a `secret_uri` reference (KMS/Vault) — **credentials never live in Postgres** (non-negotiable for a security product). Scoped by `purpose` (audit_reader / vuln_scanner / classifier / discovery).
 - `principal_classifications` tags DB principals (human/app/service/dba/system), flags privileged/dormant, records expected programs/IPs.
 - `object_classifications` is the **source of truth** replicated to the data plane (sensitivity tags: pii, pci, hipaa, aadhaar, pan…). Three-part name `object_database`/`object_schema`/`object_name`.
