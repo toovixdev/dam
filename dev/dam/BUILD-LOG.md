@@ -1961,3 +1961,24 @@ allowed endpoints (`dashboard/kpis`, `alerts`, `features`); tenant_admin → **2
 302 (reached handler, not blocked). Confirmed these surfaces are only consumed by their admin-only pages, so
 no non-admin screen breaks. (`/api/features`, used by many screens for feature gating, is intentionally left
 open to any authenticated user.)
+
+## 55. AI Copilot — per-tenant BYO LLM, grounded in the tenant's DAM data
+
+A security assistant where each tenant connects its OWN LLM account (Anthropic Claude / OpenAI); keys are
+stored server-side, write-only, never sent to the browser.
+- **Config** (`main.js`): stored in `integrations` (type='llm', config {provider, model, api_key}).
+  `assistantConfigFor(tenantId)` resolves it. Endpoints: `GET /api/assistant/status` (any user → ready?),
+  `GET/PUT /api/assistant/config` (adminOnly; key write-only/masked). `ASSISTANT_PROVIDERS` = anthropic
+  (default claude-sonnet-4-6) + openai (default gpt-4o).
+- **Grounding**: `buildDamContext(tenantId)` gathers a concise, **tenant-scoped** snapshot — databases +
+  risk + sensitivity, open alerts by severity, recent criticals, policy status counts, quarantined accounts
+  — injected into the system prompt so the copilot answers about the tenant's real environment.
+- **Chat**: `POST /api/assistant/chat` (authRequired) → builds context, calls the tenant's provider via
+  `callAnthropic` / `callOpenAI` (server-side key), returns `{ reply }`; audited (`assistant.chat`).
+- **Frontend** [Copilot.jsx](../frontend/src/pages/Copilot.jsx): chat UI (suggestions, thinking state, light
+  markdown) + inline admin **Configure** modal (provider/model/key/enable). New `/copilot` route + sidebar
+  item; `copilot` added to the universal screens so every role can use it (config stays admin-only).
+- Verified: status false→configure→true; config masked (no key returned); chat reached Anthropic (dummy key
+  → "invalid x-api-key", proving the full path). Dummy config removed.
+- **Phase-2 ideas**: streaming responses (SSE), tool/function-calling to drill into specific alerts/DBs,
+  PII redaction before egress, per-user rate limits.

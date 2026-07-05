@@ -7654,6 +7654,122 @@ app.get('/api/audit/activity', authRequired, async (req, res) => {
   }
 });
 
+// ── AI Copilot (per-tenant BYO LLM) ───────────────────────────────────────────
+// Each tenant configures its OWN LLM provider + key (stored server-side, write-only).
+// The copilot answers grounded in that tenant's DAM data; keys never reach the browser.
+const ASSISTANT_PROVIDERS = {
+  anthropic: { name: 'Anthropic (Claude)', defaultModel: 'claude-sonnet-4-6' },
+  openai:    { name: 'OpenAI', defaultModel: 'gpt-4o' },
+};
+async function assistantConfigFor(tenantId) {
+  const row = (await pgPool.query("SELECT config, status FROM integrations WHERE tenant_id = $1 AND type = 'llm'", [tenantId])).rows[0];
+  const c = row && row.config;
+  if (!row || row.status !== 'active' || !c || !c.provider || !c.api_key || !ASSISTANT_PROVIDERS[c.provider]) return null;
+  return { provider: c.provider, apiKey: c.api_key, model: c.model || ASSISTANT_PROVIDERS[c.provider].defaultModel };
+}
+
+// Any tenant user: is the copilot ready to chat? (no secrets)
+app.get('/api/assistant/status', authRequired, async (req, res) => {
+  try {
+    const cfg = await assistantConfigFor(req.user.tenantId);
+    res.json({ ready: !!cfg, provider: cfg ? cfg.provider : null, model: cfg ? cfg.model : null });
+  } catch (e) { res.json({ ready: false }); }
+});
+
+// Admin: read config (secret masked) / save config (secret write-only, blank keeps stored).
+app.get('/api/assistant/config', authRequired, adminOnly, async (req, res) => {
+  try {
+    const row = (await pgPool.query("SELECT config, status FROM integrations WHERE tenant_id = $1 AND type = 'llm'", [req.user.tenantId])).rows[0];
+    const c = (row && row.config) || {};
+    res.json({
+      configured: !!(c.provider && c.api_key && ASSISTANT_PROVIDERS[c.provider]),
+      enabled: row ? row.status === 'active' : false,
+      provider: c.provider || '', model: c.model || '', keySet: !!c.api_key,
+      providers: Object.entries(ASSISTANT_PROVIDERS).map(([k, v]) => ({ key: k, name: v.name, defaultModel: v.defaultModel })),
+    });
+  } catch (e) { res.status(500).json({ error: 'Failed to load assistant config' }); }
+});
+app.put('/api/assistant/config', authRequired, adminOnly, async (req, res) => {
+  const provider = String(req.body?.provider || '').trim();
+  if (!ASSISTANT_PROVIDERS[provider]) return res.status(400).json({ error: 'Unknown provider' });
+  const model = String(req.body?.model || '').trim() || ASSISTANT_PROVIDERS[provider].defaultModel;
+  const keyIn = req.body?.apiKey;
+  const enabled = req.body?.enabled !== false;
+  try {
+    const existing = (await pgPool.query("SELECT id, config FROM integrations WHERE tenant_id = $1 AND type = 'llm'", [req.user.tenantId])).rows[0];
+    const prev = (existing && existing.config) || {};
+    const apiKey = (keyIn !== undefined && keyIn !== null && String(keyIn).trim() !== '') ? String(keyIn).trim() : (prev.api_key || '');
+    if (!apiKey) return res.status(400).json({ error: 'An API key is required' });
+    const config = { provider, model, api_key: apiKey };
+    const status = enabled ? 'active' : 'inactive';
+    if (existing) await pgPool.query('UPDATE integrations SET config = $2, status = $3 WHERE id = $1', [existing.id, config, status]);
+    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,'AI Assistant','llm',$2,$3)", [req.user.tenantId, config, status]);
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'assistant.configure', resourceType: 'integration', details: { provider, model, enabled } });
+    res.json({ ok: true });
+  } catch (e) { console.error('[Assistant] config save failed:', e.message); res.status(500).json({ error: 'Failed to save assistant config' }); }
+});
+
+// Gather a concise, TENANT-SCOPED snapshot of the DAM environment to ground the copilot.
+async function buildDamContext(tenantId) {
+  const parts = [];
+  try {
+    const db = (await pgPool.query(`SELECT count(*) n, count(*) FILTER (WHERE risk_score >= 70) high FROM databases WHERE tenant_id = $1`, [tenantId])).rows[0];
+    parts.push(`Databases monitored: ${db.n} (high-risk ≥70: ${db.high}).`);
+    const top = (await pgPool.query(`SELECT name, engine, risk_score, sensitivity_tags FROM databases WHERE tenant_id = $1 ORDER BY risk_score DESC NULLS LAST LIMIT 6`, [tenantId])).rows;
+    if (top.length) parts.push('Top databases by risk: ' + top.map(d => `${d.name} (${d.engine || 'n/a'}, risk ${d.risk_score ?? 'n/a'}${(d.sensitivity_tags || []).length ? ', tags: ' + d.sensitivity_tags.join('/') : ''})`).join('; ') + '.');
+    const al = (await pgPool.query(`SELECT severity, count(*) n FROM alerts WHERE tenant_id = $1 AND status IN ('open','held') GROUP BY severity ORDER BY 1`, [tenantId])).rows;
+    parts.push('Open alerts by severity: ' + (al.length ? al.map(a => `${a.severity}: ${a.n}`).join(', ') : 'none') + '.');
+    const crit = (await pgPool.query(`SELECT summary, principal, object_name, created_at FROM alerts WHERE tenant_id = $1 AND severity = 'critical' AND status IN ('open','held') ORDER BY created_at DESC LIMIT 6`, [tenantId])).rows;
+    if (crit.length) parts.push('Recent critical alerts: ' + crit.map(a => `"${a.summary}" — ${a.principal}${a.object_name ? ' on ' + a.object_name : ''}`).join('; ') + '.');
+    const pol = (await pgPool.query(`SELECT status, count(*) n FROM policies WHERE tenant_id = $1 GROUP BY status`, [tenantId])).rows;
+    if (pol.length) parts.push('Policies: ' + pol.map(p => `${p.n} ${p.status}`).join(', ') + '.');
+    const q = (await pgPool.query(`SELECT count(DISTINCT principal) n FROM quarantine_sessions WHERE tenant_id = $1 AND status IN ('held','killed')`, [tenantId])).rows[0];
+    parts.push(`Quarantined accounts: ${q.n}.`);
+  } catch (e) { parts.push('(some environment data was unavailable)'); }
+  return parts.join('\n');
+}
+
+async function callAnthropic(apiKey, model, system, messages) {
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+    body: JSON.stringify({ model, max_tokens: 1024, system, messages: messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) })) }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+  return (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n') || '(no response)';
+}
+async function callOpenAI(apiKey, model, system, messages) {
+  const r = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST', headers: { Authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model, max_tokens: 1024, messages: [{ role: 'system', content: system }, ...messages.map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.content) }))] }),
+  });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.error?.message || `HTTP ${r.status}`);
+  return data.choices?.[0]?.message?.content || '(no response)';
+}
+
+// Chat — any authenticated tenant user. Grounds the model in the tenant's own DAM data.
+app.post('/api/assistant/chat', authRequired, async (req, res) => {
+  const cfg = await assistantConfigFor(req.user.tenantId);
+  if (!cfg) return res.status(400).json({ error: 'The AI assistant is not configured for this workspace. An admin can set it up in the Copilot screen.' });
+  const messages = (Array.isArray(req.body?.messages) ? req.body.messages : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).slice(-16);
+  if (!messages.length) return res.status(400).json({ error: 'No message provided' });
+  try {
+    const context = await buildDamContext(req.user.tenantId);
+    const system = `You are TooVix Copilot, a database-security assistant for the workspace "${req.user.tenantName}". `
+      + `Answer strictly grounded in the environment snapshot below — do not invent data. Be concise, practical, and security-minded; use short bullet points where useful. If asked about something not present in the snapshot, say you don't have that information and suggest where in the product to look.\n\n`
+      + `=== CURRENT ENVIRONMENT (${req.user.tenantName}) ===\n${context}`;
+    const reply = cfg.provider === 'anthropic'
+      ? await callAnthropic(cfg.apiKey, cfg.model, system, messages)
+      : await callOpenAI(cfg.apiKey, cfg.model, system, messages);
+    writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'assistant.chat', resourceType: 'assistant', details: { provider: cfg.provider, model: cfg.model } });
+    res.json({ reply });
+  } catch (e) {
+    console.error('[Assistant] chat failed:', e.message);
+    res.status(502).json({ error: 'The AI provider request failed: ' + e.message });
+  }
+});
+
 // ── WebSocket server (live updates) ───────────────────────
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });

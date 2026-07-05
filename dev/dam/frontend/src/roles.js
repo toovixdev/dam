@@ -9,8 +9,8 @@ export const ROLE_ALLOW = {
   viewer:       ['dashboard', 'access', 'reports'],
 };
 
-// Screens every signed-in user may reach (personal / help pages).
-const UNIVERSAL = ['dashboard', 'profile', 'support'];
+// Screens every signed-in user may reach (personal / help / copilot).
+const UNIVERSAL = ['dashboard', 'profile', 'support', 'copilot'];
 
 // SAFE DEFAULT: an unknown/blank role gets the minimum, NOT everything. (The old code
 // fell back to '*', which let mislabeled roles see all screens.)
