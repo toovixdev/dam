@@ -4973,6 +4973,10 @@ async function dispatchAlert(a) {
   } catch (e) { console.log('[dispatch] failed:', e.message); }
 }
 
+// The Integrations screen is tenant-admin only → gate the whole /api/integrations/* surface
+// (server-side enforcement, so it's not reachable by a non-admin even via direct API call).
+app.use('/api/integrations', authRequired, adminOnly);
+
 app.get('/api/integrations', authRequired, async (req, res) => {
   const rows = (await pgPool.query('SELECT id, name, type, status, config, last_sync_at FROM integrations WHERE tenant_id = $1', [req.user.tenantId])).rows;
   res.json(rows.map(r => ({
@@ -6662,6 +6666,13 @@ async function ensureInvoices(tenantId, usage, plan, rates) {
   return ref;
 }
 
+// Billing screen is tenant-admin only. Gate all /api/billing/* EXCEPT the async gateway
+// webhook (/payu/callback), which arrives server-to-server with no user token.
+app.use('/api/billing', (req, res, next) => {
+  if (req.path === '/payu/callback') return next();
+  authRequired(req, res, () => adminOnly(req, res, next));
+});
+
 app.get('/api/billing', authRequired, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
@@ -7027,6 +7038,9 @@ app.get('/api/billing/invoices/:reference/pdf', authRequired, async (req, res) =
 });
 
 // ── Users ─────────────────────────────────────────────────
+// The Users & Roles screen is tenant-admin only → gate the whole /api/users/* surface.
+app.use('/api/users', authRequired, adminOnly);
+
 app.get('/api/users', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
     'SELECT id, email, full_name, role, auth_provider, mfa_enabled, status, last_login_at, created_at FROM users WHERE tenant_id = $1 ORDER BY created_at', [req.user.tenantId]

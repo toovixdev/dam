@@ -1947,3 +1947,17 @@ gate was **menu-only** (routes weren't role-checked, so screens were reachable b
 - **Follow-up (defense-in-depth)**: the sensitive **backend** endpoints (users/billing/settings/
   integrations) still aren't role-gated — a determined non-admin could hit the API directly. Add
   server-side role checks next.
+
+## 54. Server-side RBAC on admin endpoints (defense-in-depth)
+
+Followed §53's UI gate with the authoritative backend layer. Path-mounted guards make the tenant-admin-only
+API surfaces reachable ONLY by a `tenant_admin`, so a non-admin can't get the data even via direct API call:
+- `app.use('/api/users', authRequired, adminOnly)`
+- `app.use('/api/integrations', authRequired, adminOnly)`
+- `app.use('/api/billing', …)` — same, but **exempts `/payu/callback`** (async gateway webhook, no user token).
+
+Verified with minted tokens: soc_analyst → **403** on `/api/users|billing|integrations` but **200** on his
+allowed endpoints (`dashboard/kpis`, `alerts`, `features`); tenant_admin → **200** on all; `payu/callback` →
+302 (reached handler, not blocked). Confirmed these surfaces are only consumed by their admin-only pages, so
+no non-admin screen breaks. (`/api/features`, used by many screens for feature gating, is intentionally left
+open to any authenticated user.)
