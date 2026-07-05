@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import useApiData from '../hooks/useApiData';
 import { getBranding, onBrandingChange } from '../branding';
+import { canSee as roleCanSee } from '../roles';
 
 const NAV = [
   { sec: 'Monitor' },
@@ -36,19 +37,9 @@ const NAV = [
   { id: 'settings',       ic: '⚙', label: 'Settings',          to: '/settings' },
 ];
 
-const ROLE_ALLOW = {
-  tenant_admin: '*',
-  soc_analyst:  ['dashboard','active-defense','databases','discovery','agents','capture-modes','alerts','policies','quarantine','classification','llm','support'],
-  db_owner:     ['dashboard','databases','agents','capture-modes','alerts','classification','access','reports','support'],
-  compliance:   ['dashboard','databases','classification','masking','access','compliance','dsar','audit','reports','llm','support'],
-  auditor:      ['dashboard','compliance','audit','reports','support'],
-  viewer:       ['dashboard','access','reports'],
-};
-
 export default function Sidebar({ collapsed, onToggle }) {
   const { user } = useAuth();
-  const allow = ROLE_ALLOW[user?.role] || '*';
-  const canSee = (id) => allow === '*' || allow.includes(id);
+  const canSee = (id) => roleCanSee(user?.role, id);
 
   // White-label branding (custom logo + name), reactive to Settings changes.
   const [brand, setBrand] = useState(getBranding());

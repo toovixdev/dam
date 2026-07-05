@@ -18,12 +18,15 @@ function formatDate(ts) {
 // SSO account types (auth_provider → display label). Local is not listed here.
 const SSO_LABELS = { azure_ad: 'Azure AD', okta: 'Okta', google: 'Google' };
 
+// `role` is the CANONICAL value stored on the user (matches the RBAC map); `name` is
+// the friendly label shown in the UI.
 const DEMO_ROLES = [
-  { id: 1, name: 'Admin', description: 'Full system access', users: 2, permissions: 'All permissions' },
-  { id: 2, name: 'Security Analyst', description: 'View alerts, policies, audit logs', users: 5, permissions: 'Read alerts, policies, audit; Write alert status' },
-  { id: 3, name: 'DBA', description: 'Database management access', users: 3, permissions: 'Read/Write databases, agents; Read alerts' },
-  { id: 4, name: 'Compliance Officer', description: 'Compliance and DSAR management', users: 2, permissions: 'Read/Write compliance, DSAR; Read audit' },
-  { id: 5, name: 'Viewer', description: 'Read-only dashboard access', users: 8, permissions: 'Read dashboard, databases' },
+  { id: 1, role: 'tenant_admin', name: 'Tenant Admin', description: 'Full system access', permissions: 'All permissions' },
+  { id: 2, role: 'soc_analyst', name: 'SOC Analyst', description: 'Monitoring, alerts, policies, quarantine', permissions: 'Read/act on alerts, policies, quarantine' },
+  { id: 3, role: 'db_owner', name: 'DB Owner', description: 'Owned databases, agents, access approvals', permissions: 'Read/Write databases, agents; approve JIT' },
+  { id: 4, role: 'compliance', name: 'Compliance', description: 'Compliance, DSAR, masking, audit', permissions: 'Read/Write compliance, DSAR; Read audit' },
+  { id: 5, role: 'auditor', name: 'Auditor', description: 'Read-only compliance, audit, reports', permissions: 'Read compliance, audit, reports' },
+  { id: 6, role: 'viewer', name: 'Viewer', description: 'Read-only dashboard access', permissions: 'Read dashboard, reports' },
 ];
 
 const DEMO_APIKEYS = [
@@ -39,7 +42,7 @@ export default function Users() {
   const [activeTab, setActiveTab] = useState('users');
   const [showModal, setShowModal] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({ full_name: '', email: '', role: 'Viewer', auth_provider: 'local' });
+  const [form, setForm] = useState({ full_name: '', email: '', role: 'viewer', auth_provider: 'local' });
 
   const handleRefresh = () => {
     refetch();
@@ -100,7 +103,7 @@ export default function Users() {
         const { emailSent, inviteLink } = result.data || {};
         const ssoLabel = SSO_LABELS[form.auth_provider];
         setShowModal(false);
-        setForm({ full_name: '', email: '', role: 'Viewer', auth_provider: 'local' });
+        setForm({ full_name: '', email: '', role: 'viewer', auth_provider: 'local' });
         refetch();
         if (ssoLabel) {
           toast(emailSent
@@ -246,7 +249,7 @@ export default function Users() {
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={{ fontSize: 13, fontWeight: 600 }}>Role</span>
             <select value={form.role} onChange={e => setForm({ ...form, role: e.target.value })} style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--line)', fontSize: 14 }}>
-              {DEMO_ROLES.map(r => <option key={r.name} value={r.name}>{r.name}</option>)}
+              {DEMO_ROLES.map(r => <option key={r.role} value={r.role}>{r.name}</option>)}
             </select>
           </label>
           {SSO_LABELS[form.auth_provider] && (

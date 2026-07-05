@@ -1926,3 +1926,24 @@ tenant resolution** — the login page never reveals the tenant name.
 - **Admin console (HMR): http://localhost:5174**
 - Seeded admin login: `vikramsharma3107@gmail.com` / `Admin@123`
 - MinIO console (dev WORM archive): http://localhost:9090 (`dam_minio` / `dam_minio_secret`)
+
+## 53. Fix RBAC — non-admins were seeing admin screens
+
+Root causes: (1) the invite form stored **display-label** roles (`Admin`, `Security Analyst`, `DBA`…) that
+don't match the RBAC map's **internal** keys (`tenant_admin`, `soc_analyst`, `db_owner`…), and (2) the
+Sidebar's fallback was `ROLE_ALLOW[role] || '*'` — so any unmatched role got **all** screens. Also the
+gate was **menu-only** (routes weren't role-checked, so screens were reachable by direct URL).
+- **Data**: migration normalizes legacy roles → internal (`Admin→tenant_admin`, `Security Analyst→soc_analyst`,
+  `DBA→db_owner`, `Compliance Officer→compliance`, `Viewer→viewer`).
+- **Invite form** ([Users.jsx](../frontend/src/pages/Users.jsx)): `DEMO_ROLES` now carries the canonical
+  `role` value (stored) + a friendly `name` (shown); the select/defaults use the internal value.
+- **Shared RBAC module** [roles.js](../frontend/src/roles.js): one `ROLE_ALLOW` + `canSee(role, screen)`
+  with a **safe least-privilege default** (unknown role → dashboard only, never `*`) and universal
+  personal screens (dashboard/profile/support).
+- **Sidebar** now imports `canSee` (no inline map, no `|| '*'`).
+- **Route guard**: `ProtectedRoute` takes a `screen` prop and redirects to `/dashboard` if the role can't
+  see it — so hidden screens can't be reached by URL either.
+- Verified: role table normalized (no display labels remain); Sidebar + App serve the new gated code.
+- **Follow-up (defense-in-depth)**: the sensitive **backend** endpoints (users/billing/settings/
+  integrations) still aren't role-gated — a determined non-admin could hit the API directly. Add
+  server-side role checks next.

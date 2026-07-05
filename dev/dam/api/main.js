@@ -354,6 +354,19 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS mfa_backup_codes JSONB`);
     // MFA is required for all password logins → new accounts default to enabled.
     await client.query(`ALTER TABLE users ALTER COLUMN mfa_enabled SET DEFAULT true`);
+    // Normalize legacy display-label roles → the canonical internal values the RBAC map
+    // uses. (The invite form used to store 'Admin'/'Security Analyst'/… which don't match
+    // 'tenant_admin'/'soc_analyst'/… so those users bypassed the sidebar's role gate.)
+    await client.query(`UPDATE users SET role = CASE role
+        WHEN 'Admin' THEN 'tenant_admin'
+        WHEN 'Security Analyst' THEN 'soc_analyst'
+        WHEN 'DBA' THEN 'db_owner'
+        WHEN 'Compliance Officer' THEN 'compliance'
+        WHEN 'Auditor' THEN 'auditor'
+        WHEN 'Viewer' THEN 'viewer'
+        ELSE role END
+      WHERE role IN ('Admin','Security Analyst','DBA','Compliance Officer','Auditor','Viewer')`);
+
     // Email is unique PER TENANT (a person can belong to multiple workspaces), not global.
     await client.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key`);
     await client.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='users_tenant_email_key') THEN ALTER TABLE users ADD CONSTRAINT users_tenant_email_key UNIQUE (tenant_id, email); END IF; END $$;`);

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { canSee } from './roles';
 import Home from './pages/Home';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
@@ -31,10 +32,12 @@ import ActiveDefense from './pages/ActiveDefense';
 import AccessGovernance from './pages/AccessGovernance';
 import './App.css';
 
-function ProtectedRoute({ children }) {
-  const { authenticated, loading } = useAuth();
+function ProtectedRoute({ children, screen }) {
+  const { authenticated, loading, user } = useAuth();
   if (loading) return <div className="loading-screen"><div className="loading-spinner" /><p>Loading...</p></div>;
   if (!authenticated) return <Navigate to="/login" replace />;
+  // Role gate: a screen the user's role can't see is not reachable even by direct URL.
+  if (screen && !canSee(user?.role, screen)) return <Navigate to="/dashboard" replace />;
   return children;
 }
 
@@ -55,29 +58,29 @@ export default function App() {
           <Route path="/verify-email" element={<VerifyEmail />} />
           <Route path="/accept-invite" element={<AcceptInvite />} />
           <Route path="/" element={<Home />} />
-          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-          <Route path="/databases" element={<ProtectedRoute><Databases /></ProtectedRoute>} />
-          <Route path="/discovery" element={<ProtectedRoute><Discovery /></ProtectedRoute>} />
-          <Route path="/agents" element={<ProtectedRoute><Agents /></ProtectedRoute>} />
-          <Route path="/capture-modes" element={<ProtectedRoute><CaptureModes /></ProtectedRoute>} />
-          <Route path="/alerts" element={<ProtectedRoute><Alerts /></ProtectedRoute>} />
-          <Route path="/policies" element={<ProtectedRoute><Policies /></ProtectedRoute>} />
-          <Route path="/quarantine" element={<ProtectedRoute><Quarantine /></ProtectedRoute>} />
-          <Route path="/classification" element={<ProtectedRoute><Classification /></ProtectedRoute>} />
-          <Route path="/masking" element={<ProtectedRoute><Masking /></ProtectedRoute>} />
-          <Route path="/access" element={<ProtectedRoute><AccessGovernance /></ProtectedRoute>} />
-          <Route path="/compliance" element={<ProtectedRoute><Compliance /></ProtectedRoute>} />
-          <Route path="/dsar" element={<ProtectedRoute><Dsar /></ProtectedRoute>} />
-          <Route path="/audit" element={<ProtectedRoute><AuditTrail /></ProtectedRoute>} />
-          <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
-          <Route path="/llm" element={<ProtectedRoute><LlmMonitoring /></ProtectedRoute>} />
-          <Route path="/active-defense" element={<ProtectedRoute><ActiveDefense /></ProtectedRoute>} />
-          <Route path="/users" element={<ProtectedRoute><Users /></ProtectedRoute>} />
-          <Route path="/integrations" element={<ProtectedRoute><Integrations /></ProtectedRoute>} />
-          <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
-          <Route path="/support" element={<ProtectedRoute><Support /></ProtectedRoute>} />
-          <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
-          <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+          <Route path="/dashboard" element={<ProtectedRoute screen="dashboard"><Dashboard /></ProtectedRoute>} />
+          <Route path="/databases" element={<ProtectedRoute screen="databases"><Databases /></ProtectedRoute>} />
+          <Route path="/discovery" element={<ProtectedRoute screen="discovery"><Discovery /></ProtectedRoute>} />
+          <Route path="/agents" element={<ProtectedRoute screen="agents"><Agents /></ProtectedRoute>} />
+          <Route path="/capture-modes" element={<ProtectedRoute screen="capture-modes"><CaptureModes /></ProtectedRoute>} />
+          <Route path="/alerts" element={<ProtectedRoute screen="alerts"><Alerts /></ProtectedRoute>} />
+          <Route path="/policies" element={<ProtectedRoute screen="policies"><Policies /></ProtectedRoute>} />
+          <Route path="/quarantine" element={<ProtectedRoute screen="quarantine"><Quarantine /></ProtectedRoute>} />
+          <Route path="/classification" element={<ProtectedRoute screen="classification"><Classification /></ProtectedRoute>} />
+          <Route path="/masking" element={<ProtectedRoute screen="masking"><Masking /></ProtectedRoute>} />
+          <Route path="/access" element={<ProtectedRoute screen="access"><AccessGovernance /></ProtectedRoute>} />
+          <Route path="/compliance" element={<ProtectedRoute screen="compliance"><Compliance /></ProtectedRoute>} />
+          <Route path="/dsar" element={<ProtectedRoute screen="dsar"><Dsar /></ProtectedRoute>} />
+          <Route path="/audit" element={<ProtectedRoute screen="audit"><AuditTrail /></ProtectedRoute>} />
+          <Route path="/reports" element={<ProtectedRoute screen="reports"><Reports /></ProtectedRoute>} />
+          <Route path="/llm" element={<ProtectedRoute screen="llm"><LlmMonitoring /></ProtectedRoute>} />
+          <Route path="/active-defense" element={<ProtectedRoute screen="active-defense"><ActiveDefense /></ProtectedRoute>} />
+          <Route path="/users" element={<ProtectedRoute screen="users"><Users /></ProtectedRoute>} />
+          <Route path="/integrations" element={<ProtectedRoute screen="integrations"><Integrations /></ProtectedRoute>} />
+          <Route path="/billing" element={<ProtectedRoute screen="billing"><Billing /></ProtectedRoute>} />
+          <Route path="/support" element={<ProtectedRoute screen="support"><Support /></ProtectedRoute>} />
+          <Route path="/settings" element={<ProtectedRoute screen="settings"><Settings /></ProtectedRoute>} />
+          <Route path="/profile" element={<ProtectedRoute screen="profile"><Profile /></ProtectedRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
