@@ -7754,11 +7754,20 @@ app.post('/api/assistant/chat', authRequired, async (req, res) => {
   if (!cfg) return res.status(400).json({ error: 'The AI assistant is not configured for this workspace. An admin can set it up in the Copilot screen.' });
   const messages = (Array.isArray(req.body?.messages) ? req.body.messages : []).filter(m => m && (m.role === 'user' || m.role === 'assistant') && m.content).slice(-16);
   if (!messages.length) return res.status(400).json({ error: 'No message provided' });
+  // grounded=false → general-purpose assistant (no DAM data snapshot); default true → security Copilot.
+  const grounded = req.body?.grounded !== false;
   try {
-    const context = await buildDamContext(req.user.tenantId);
-    const system = `You are TooVix Copilot, a database-security assistant for the workspace "${req.user.tenantName}". `
-      + `Answer strictly grounded in the environment snapshot below — do not invent data. Be concise, practical, and security-minded; use short bullet points where useful. If asked about something not present in the snapshot, say you don't have that information and suggest where in the product to look.\n\n`
-      + `=== CURRENT ENVIRONMENT (${req.user.tenantName}) ===\n${context}`;
+    let system;
+    if (grounded) {
+      const context = await buildDamContext(req.user.tenantId);
+      system = `You are TooVix Copilot, a database-security assistant for the workspace "${req.user.tenantName}". `
+        + `Answer strictly grounded in the environment snapshot below — do not invent data. Be concise, practical, and security-minded; use short bullet points where useful. If asked about something not present in the snapshot, say you don't have that information and suggest where in the product to look.\n\n`
+        + `=== CURRENT ENVIRONMENT (${req.user.tenantName}) ===\n${context}`;
+    } else {
+      system = `You are TooVix Assistant, a helpful, knowledgeable general-purpose AI assistant for users of the workspace "${req.user.tenantName}". `
+        + `Answer clearly and accurately across any topic. Use short paragraphs or bullet points where useful, and format with light markdown. `
+        + `You are not connected to this workspace's live database-security data — for questions about their specific alerts, policies, databases or risk, point them to the Copilot screen.`;
+    }
     const reply = cfg.provider === 'anthropic'
       ? await callAnthropic(cfg.apiKey, cfg.model, system, messages)
       : await callOpenAI(cfg.apiKey, cfg.model, system, messages);

@@ -113,7 +113,7 @@ export default function Copilot() {
   );
 }
 
-function ConfigModal({ onClose, onSaved }) {
+export function ConfigModal({ onClose, onSaved }) {
   const [cfg, setCfg] = useState(null);
   const [form, setForm] = useState({ provider: 'anthropic', model: '', apiKey: '', enabled: true });
   const [busy, setBusy] = useState(false);

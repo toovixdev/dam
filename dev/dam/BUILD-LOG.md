@@ -1982,3 +1982,18 @@ stored server-side, write-only, never sent to the browser.
   → "invalid x-api-key", proving the full path). Dummy config removed.
 - **Phase-2 ideas**: streaming responses (SSE), tool/function-calling to drill into specific alerts/DBs,
   PII redaction before egress, per-user rate limits.
+
+## 56. AI Assistant — general-purpose Claude/OpenAI chat (separate from the grounded Copilot)
+
+A second, general-purpose chatbot for everyday questions — not tied to the tenant's DAM data. Reuses the
+**same** per-tenant BYO LLM config as the Copilot (one key, two experiences).
+- **Backend** (`main.js`): `POST /api/assistant/chat` now takes an optional `grounded` flag. `grounded:false`
+  skips `buildDamContext` and uses a general assistant system prompt ("TooVix Assistant… answer clearly
+  across any topic… not connected to live DAM data → point to Copilot for that"). Default stays `true`
+  (Copilot behaviour unchanged). Same Anthropic/OpenAI adapters, same audit.
+- **Frontend** [Assistant.jsx](../frontend/src/pages/Assistant.jsx): general chat page — reuses the exported
+  `ConfigModal` from Copilot, general suggestions, sends `grounded:false`. New `/assistant` route + sidebar
+  item ("AI Assistant", under AI & Analytics); `assistant` added to universal screens so every role can use
+  it (config still admin-only). No new config/UI to manage — configure once, both chats light up.
+- Verified: status `ready:true` after config; general chat reached Anthropic (dummy key → "invalid
+  x-api-key", proving the ungrounded path builds its prompt and calls the provider). Dummy config removed.
