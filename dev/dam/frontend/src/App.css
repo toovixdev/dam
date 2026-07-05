@@ -514,6 +514,12 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 .workspace-change { margin-left: auto; background: none; border: none; color: var(--brand, #6366f1); font-size: 11.5px; font-weight: 600; cursor: pointer; padding: 0 0 0 8px; }
 .workspace-change:hover { text-decoration: underline; }
 
+/* Workspace picker (email in >1 workspace) */
+.ws-choice-list { display: flex; flex-direction: column; gap: 8px; margin: 6px 0 16px; }
+.ws-choice { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--surface, #fff); cursor: pointer; font-size: 13.5px; color: var(--ink); transition: border-color .12s, background .12s; }
+.ws-choice:hover { border-color: var(--brand, #6366f1); background: var(--info-soft); }
+.ws-choice-arrow { color: var(--muted); }
+
 /* MFA (login two-factor) */
 .mfa-code-input { letter-spacing: 6px; font-size: 20px; text-align: center; font-family: ui-monospace, Menlo, monospace; }
 .mfa-qr-wrap { display: flex; justify-content: center; margin: 8px 0 14px; }

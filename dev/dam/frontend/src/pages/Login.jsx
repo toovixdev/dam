@@ -9,17 +9,18 @@ export default function Login() {
   const { login: authLogin, authenticated } = useAuth();
   const onLogin = () => navigate('/dashboard', { replace: true });
 
-  // Step 1 = choose workspace; Step 2 = sign in to the resolved workspace.
-  const [workspace, setWorkspace] = useState(null); // { tenantName, slug, sso: [] }
-  const [slugInput, setSlugInput] = useState('');
-  const [wsLoading, setWsLoading] = useState(false);
-
+  // Email-first: enter email → resolve the workspace(s) silently → sign in. The tenant
+  // name is never shown; the resolved `slug` is used internally (login POST + SSO redirect).
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [remember, setRemember] = useState(true);
+
+  const [workspace, setWorkspace] = useState(null); // resolved { slug, sso:[], hasPassword }
+  const [choices, setChoices] = useState([]);       // >1 workspace for this email → pick one
+  const [resolving, setResolving] = useState(false);
 
   // MFA sub-flow (password verified, session not issued yet).
   const [mfaStage, setMfaStage] = useState(null); // null | 'verify' | 'setup' | 'backup'
@@ -50,41 +51,40 @@ export default function Login() {
       onLogin();
       return;
     }
-
-    // Pre-fill the workspace: from an SSO error redirect, or the last one used here.
-    const wsHint = params.get('workspace') || localStorage.getItem('dam_workspace') || '';
     if (params.get('error') || params.get('expired') || params.get('workspace')) window.history.replaceState(null, '', '/login');
-    if (wsHint) { setSlugInput(wsHint); resolveWorkspace(wsHint); }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function resolveWorkspace(slug) {
-    const s = String(slug || '').toLowerCase().trim();
-    if (!s) { setError('Enter your workspace name.'); return; }
-    setWsLoading(true); setError('');
+  async function resolveByEmail(e) {
+    e?.preventDefault?.();
+    const em = email.trim().toLowerCase();
+    if (!em) { setError('Enter your email.'); return; }
+    setResolving(true); setError('');
     try {
-      const res = await fetch(`/api/auth/workspace?slug=${encodeURIComponent(s)}`);
+      const res = await fetch('/api/auth/resolve', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: em }),
+      });
       const data = await res.json();
       if (res.ok && data.found) {
-        setWorkspace(data);
-        localStorage.setItem('dam_workspace', data.slug);
+        if (data.workspaces.length === 1) setWorkspace(data.workspaces[0]);
+        else setChoices(data.workspaces);
       } else {
-        setError(data.error || 'No workspace found with that name.');
+        setError("We couldn't find an account with that email. Check the address or create a workspace.");
       }
     } catch {
       setError('Unable to connect to the server.');
     } finally {
-      setWsLoading(false);
+      setResolving(false);
     }
   }
 
-  function changeWorkspace() {
-    setWorkspace(null); setError(''); setPassword('');
-    localStorage.removeItem('dam_workspace');
+  function useDifferentEmail() {
+    setWorkspace(null); setChoices([]); setPassword(''); setError('');
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (!email || !password) { setError('Please enter your email and password.'); return; }
+    if (!password) { setError('Please enter your password.'); return; }
     setLoading(true); setError('');
     try {
       const res = await fetch('/api/auth/login', {
@@ -162,9 +162,10 @@ export default function Login() {
 
   function handleSSO(providerKey) {
     if (!workspace) return;
-    // All providers use the same /auth/<provider>?tenant=<slug> entry.
     if (['azure', 'okta', 'google'].includes(providerKey)) window.location.href = `/auth/${providerKey}?tenant=${encodeURIComponent(workspace.slug)}`;
   }
+
+  const showPasswordForm = workspace && (workspace.hasPassword || !(workspace.sso && workspace.sso.length));
 
   return (
     <div className="login-page">
@@ -192,29 +193,7 @@ export default function Login() {
         <div className="login-form-box">
           <div className="login-mini-brand"><span className="brand-dot-sm">T</span> TooVix <span className="brand-sub">DAM</span></div>
 
-          {!workspace ? (
-            /* ── Step 1 · choose workspace ── */
-            <>
-              <h1>Sign in to your workspace</h1>
-              <p className="login-sub">Enter your workspace name to continue. Your sign-in options are set by your workspace.</p>
-
-              <form onSubmit={(e) => { e.preventDefault(); resolveWorkspace(slugInput); }}>
-                <div className="form-field">
-                  <label>Workspace</label>
-                  <div className="workspace-input">
-                    <input type="text" value={slugInput} onChange={e => setSlugInput(e.target.value)} placeholder="your-workspace" autoFocus autoCapitalize="none" spellCheck="false" />
-                    <span className="workspace-suffix">.toovix.app</span>
-                  </div>
-                </div>
-                {error && <div className="login-error">{error}</div>}
-                <button type="submit" className="login-submit" disabled={wsLoading}>
-                  {wsLoading ? 'Finding workspace…' : 'Continue'}
-                </button>
-              </form>
-
-              <p className="login-footer" style={{ textAlign: 'center' }}>New to TooVix? <Link to="/signup">Create a workspace</Link></p>
-            </>
-          ) : mfaStage === 'verify' ? (
+          {mfaStage === 'verify' ? (
             /* ── MFA · enter code ── */
             <>
               <h1>Two-factor authentication</h1>
@@ -234,7 +213,7 @@ export default function Login() {
             /* ── MFA · first-time enrolment ── */
             <>
               <h1>Set up two-factor authentication</h1>
-              <p className="login-sub">Your workspace requires MFA. Scan this with Google Authenticator, Authy, 1Password, or any TOTP app.</p>
+              <p className="login-sub">Password sign-in requires MFA. Scan this with Google Authenticator, Authy, 1Password, or any TOTP app.</p>
               {mfaSetup && <div className="mfa-qr-wrap"><img src={mfaSetup.qr} alt="Scan this QR code with your authenticator app" /></div>}
               {mfaSetup && <div className="mfa-secret">Can’t scan? Enter this key manually:<br /><code>{mfaSetup.secret}</code></div>}
               <form onSubmit={submitEnroll}>
@@ -256,15 +235,45 @@ export default function Login() {
               <button type="button" className="login-submit" onClick={() => pendingSession && completeLogin(pendingSession.token, pendingSession.user)}>I’ve saved my codes — continue</button>
               <div className="login-info">⚠️ These won’t be shown again. You can regenerate them later from your profile.</div>
             </>
-          ) : (
-            /* ── Step 2 · sign in to the resolved workspace ── */
+          ) : choices.length > 0 ? (
+            /* ── Pick a workspace (email is in more than one) ── */
+            <>
+              <h1>Choose your workspace</h1>
+              <p className="login-sub"><b>{email}</b> belongs to more than one workspace. Pick one to continue.</p>
+              <div className="ws-choice-list">
+                {choices.map((w) => (
+                  <button key={w.slug} type="button" className="ws-choice" onClick={() => { setChoices([]); setWorkspace(w); }}>
+                    <span className="mono">{w.slug}</span>
+                    <span className="ws-choice-arrow">→</span>
+                  </button>
+                ))}
+              </div>
+              <p className="login-footer" style={{ textAlign: 'center' }}><button type="button" className="pw-toggle" style={{ position: 'static', padding: 0 }} onClick={useDifferentEmail}>Use a different email</button></p>
+            </>
+          ) : !workspace ? (
+            /* ── Step 1 · email ── */
             <>
               <h1>Sign in</h1>
-              <p className="login-sub">Welcome back to <b>{workspace.tenantName}</b>.</p>
+              <p className="login-sub">Enter your work email to continue.</p>
+              <form onSubmit={resolveByEmail}>
+                <div className="form-field">
+                  <label>Work email</label>
+                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="username" autoFocus required />
+                </div>
+                {error && <div className="login-error">{error}</div>}
+                <button type="submit" className="login-submit" disabled={resolving}>{resolving ? 'Checking…' : 'Continue'}</button>
+              </form>
+              <p className="login-footer" style={{ textAlign: 'center' }}>New to TooVix? <Link to="/signup">Create a workspace</Link></p>
+            </>
+          ) : (
+            /* ── Step 2 · credentials for the resolved workspace (no tenant name shown) ── */
+            <>
+              <h1>Sign in</h1>
+              <p className="login-sub">Welcome back.</p>
 
               <div className="login-tenant-chip">
-                🏛 <b>{workspace.tenantName}</b> · <span className="mono">{workspace.slug}</span>
-                <button type="button" className="workspace-change" onClick={changeWorkspace}>Change</button>
+                ✉ <b>{email}</b>
+                <button type="button" className="workspace-change" onClick={useDifferentEmail}>Change</button>
               </div>
 
               {workspace.sso && workspace.sso.length > 0 && (
@@ -276,37 +285,37 @@ export default function Login() {
                       </button>
                     ))}
                   </div>
-                  <div className="login-divider">or sign in with email &amp; password</div>
+                  {showPasswordForm && <div className="login-divider">or sign in with your password</div>}
                 </>
               )}
 
-              <form onSubmit={handleSubmit}>
-                <div className="form-field">
-                  <label>Work email</label>
-                  <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="username" required />
-                </div>
-                <div className="form-field">
-                  <label>Password</label>
-                  <div className="pw-wrap">
-                    <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" required />
-                    <button type="button" className="pw-toggle" onClick={() => setShowPw(!showPw)}>{showPw ? 'Hide' : 'Show'}</button>
+              {showPasswordForm && (
+                <form onSubmit={handleSubmit}>
+                  <div className="form-field">
+                    <label>Password</label>
+                    <div className="pw-wrap">
+                      <input type={showPw ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter your password" autoComplete="current-password" autoFocus required />
+                      <button type="button" className="pw-toggle" onClick={() => setShowPw(!showPw)}>{showPw ? 'Hide' : 'Show'}</button>
+                    </div>
                   </div>
-                </div>
 
-                {error && <div className="login-error">{error}</div>}
+                  {error && <div className="login-error">{error}</div>}
 
-                <div className="login-options">
-                  <label className="remember-label">
-                    <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} /> Remember this device
-                  </label>
-                </div>
+                  <div className="login-options">
+                    <label className="remember-label">
+                      <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} /> Remember this device
+                    </label>
+                  </div>
 
-                <button type="submit" className="login-submit" disabled={loading}>
-                  {loading ? 'Signing in...' : 'Sign in'}
-                </button>
+                  <button type="submit" className="login-submit" disabled={loading}>
+                    {loading ? 'Signing in...' : 'Sign in'}
+                  </button>
 
-                <div className="login-info">🔒 Password login requires two-factor authentication. SSO users use the buttons above — MFA is handled by your identity provider.</div>
-              </form>
+                  <div className="login-info">🔒 Password login requires two-factor authentication. SSO users use the buttons above — MFA is handled by your identity provider.</div>
+                </form>
+              )}
+
+              {!showPasswordForm && error && <div className="login-error">{error}</div>}
 
               <p className="login-footer" style={{ textAlign: 'center' }}>New to TooVix? <Link to="/signup">Create a workspace</Link></p>
             </>

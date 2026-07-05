@@ -1903,6 +1903,23 @@ the product app proxies `/api`, they were reachable unauthenticated on the publi
   **tenant JWT → 401**; bad password → 401.
 - Follow-up option: add TOTP MFA to the super-admin (the TOTP helpers already exist).
 
+## 52. Email-first login (tenant name no longer shown)
+
+Replaced the workspace-first login (which displayed the tenant name/slug chip) with **email-first, silent
+tenant resolution** — the login page never reveals the tenant name.
+- **Backend**: `POST /api/auth/resolve` takes an email and returns `{ found, workspaces:[{ slug, hasPassword,
+  sso[] }] }` — the sign-in options per workspace, **without the tenant name** (only the slug, used
+  internally by the client for the login POST + SSO redirect, never displayed).
+- **Frontend** ([Login.jsx](../frontend/src/pages/Login.jsx)): step 1 = email → resolve. One workspace →
+  straight to credentials (SSO buttons + password, no name). Email in multiple workspaces → a small picker
+  (shows slugs only). SSO-only accounts hide the password form. The old tenant chip is replaced by an email
+  chip with "Change". MFA stages + SSO round-trip unchanged; `/api/auth/login` still scopes by the resolved
+  slug.
+- Verified: resolve returns slugs + sso, **no `tenantName`**; unknown email → `found:false`; multi-workspace
+  email → list of slugs; single → seamless. `dam-react` serves the new page (0 `tenantName` refs).
+- Note: the rare multi-workspace case still shows slugs (unavoidable to let a user pick their own
+  workspace); the common single-workspace case shows nothing tenant-identifying.
+
 ## 9. App entry points
 
 - Dev SPA (HMR): http://localhost:5173  · API: http://localhost:3000

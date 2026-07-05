@@ -1523,6 +1523,30 @@ app.get('/api/auth/workspace', async (req, res) => {
   }
 });
 
+// Email-first login: given an email, return which workspace(s) it belongs to and each
+// one's sign-in options (SSO providers + whether a password is set). Deliberately does
+// NOT return the tenant name — only the slug, which the client uses internally (for the
+// login POST + SSO redirect) and never displays.
+app.post('/api/auth/resolve', async (req, res) => {
+  const email = String(req.body?.email || '').toLowerCase().trim();
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+  try {
+    const rows = (await pgPool.query(
+      `SELECT u.tenant_id, (u.password_hash IS NOT NULL) AS has_password, t.slug
+       FROM users u JOIN tenants t ON u.tenant_id = t.id
+       WHERE u.email = $1 AND u.status IN ('active', 'invited')
+       ORDER BY t.slug`, [email])).rows;
+    const workspaces = [];
+    for (const r of rows) {
+      workspaces.push({ slug: r.slug, hasPassword: r.has_password, sso: await ssoProvidersFor(r.tenant_id) });
+    }
+    res.json({ found: workspaces.length > 0, workspaces });
+  } catch (err) {
+    console.error('[Auth] resolve failed:', err.message);
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
 // Shared password policy: ≥8 chars and at least 3 of {lowercase, uppercase, digit, symbol}.
 function passwordIssue(pw) {
   pw = String(pw || '');
