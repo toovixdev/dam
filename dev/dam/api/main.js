@@ -4847,7 +4847,14 @@ async function postJira(cfg, a) {
   const description = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: alertText(a) }] }] };
   const body = { fields: { project: { key: cfg.project_key }, summary: `[TooVix DAM] ${a.summary || 'Security alert'}`.slice(0, 250), issuetype: { name: cfg.issue_type || 'Incident' }, description } };
   const res = await fetch(`${base}/rest/api/3/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Basic ${auth}` }, body: JSON.stringify(body), signal: TIMEOUT(8000) });
-  return { ok: res.ok, status: res.status };
+  if (res.ok) return { ok: true, status: res.status };
+  // Surface Jira's actual rejection reason (required fields, bad issue type, etc.).
+  let detail = '';
+  try {
+    const j = await res.json();
+    detail = [...(j.errorMessages || []), ...Object.entries(j.errors || {}).map(([k, v]) => `${k}: ${v}`)].join('; ');
+  } catch { /* non-JSON body */ }
+  return { ok: false, status: res.status, error: detail || undefined };
 }
 
 // Microsoft Sentinel — Log Analytics HTTP Data Collector API (HMAC-SHA256 signed).
@@ -5278,7 +5285,7 @@ app.post('/api/integrations/:type/test', authRequired, async (req, res) => {
     const missing = missingRequired(connector, config);
     if (missing.length) return res.status(400).json({ error: `Enter ${missing.join(', ')} first` });
     const r = await connector.send(config, sampleAlert());
-    res.json({ ok: !!(r && r.ok), status: r && r.status, message: (r && r.ok) ? `Test alert delivered to ${connector.name}` : `${connector.name} responded ${r && r.status}` });
+    res.json({ ok: !!(r && r.ok), status: r && r.status, message: (r && r.ok) ? `Test alert delivered to ${connector.name}` : `${connector.name} responded ${r && r.status}${r && r.error ? ' — ' + r.error : ''}` });
   } catch (err) {
     res.status(502).json({ ok: false, error: `Could not reach ${connector.name}: ${err.message}` });
   }
@@ -5521,7 +5528,7 @@ app.post('/api/alerts/:id/escalate', authRequired, async (req, res) => {
     if (ch === 'email' && recipients) cfg = { ...cfg, recipients }; // per-escalation recipient override
     try {
       const r = await CONNECTORS[type].send(cfg, alertObj);
-      results.push({ channel: ch, ok: !!(r && r.ok), error: r && r.ok ? null : (r && r.status) || 'send failed' });
+      results.push({ channel: ch, ok: !!(r && r.ok), error: r && r.ok ? null : ((r && r.error) || (r && r.status) || 'send failed') });
     } catch (e) { results.push({ channel: ch, ok: false, error: e.message }); }
   }
 
