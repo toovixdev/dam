@@ -242,17 +242,34 @@ export default function AlertDetail() {
                   No notification channels are configured yet. An admin can set up <b>Slack</b>, <b>Microsoft Teams</b>, or <b>Email</b> under <b>Integrations</b> — then they'll be selectable here.
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  {[['teams', 'Microsoft Teams'], ['slack', 'Slack'], ['email', 'Email']].map(([k, label]) => {
-                    const available = !!escInfo[k];
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {ESC_CHANNELS.map(({ key, label, letter, color }) => {
+                    const available = !!escInfo[key];
+                    const selected = !!escSel[key];
                     return (
-                      <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: available ? 1 : 0.5, cursor: available ? 'pointer' : 'not-allowed' }}>
-                        <input type="checkbox" disabled={!available} checked={!!escSel[k]} onChange={(e) => setEscSel((s) => ({ ...s, [k]: e.target.checked }))} />
-                        {label}
-                        {!available && <span className="muted" style={{ fontSize: 11 }}>— not configured</span>}
-                      </label>
+                      <button key={key} type="button" disabled={!available}
+                        onClick={() => setEscSel((s) => ({ ...s, [key]: !s[key] }))}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left',
+                          padding: '11px 14px', borderRadius: 10, fontFamily: 'inherit', fontSize: 13.5,
+                          border: `1.5px solid ${selected ? 'var(--primary)' : 'var(--line)'}`,
+                          background: selected ? 'var(--primary-soft)' : 'var(--surface)',
+                          cursor: available ? 'pointer' : 'not-allowed', opacity: available ? 1 : 0.55, transition: '.12s',
+                        }}>
+                        <span style={{ width: 30, height: 30, borderRadius: 8, background: color, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 15, flex: 'none' }}>{letter}</span>
+                        <span style={{ flex: 1 }}>
+                          <div style={{ fontWeight: 600, color: 'var(--ink)' }}>{label}</div>
+                          {!available && <div className="muted" style={{ fontSize: 11 }}>Not configured — set up in Integrations</div>}
+                        </span>
+                        <span style={{
+                          width: 20, height: 20, borderRadius: '50%', flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          border: `1.5px solid ${selected ? 'var(--primary)' : 'var(--line)'}`, background: selected ? 'var(--primary)' : 'transparent',
+                          color: '#fff', fontSize: 12,
+                        }}>{selected ? '✓' : ''}</span>
+                      </button>
                     );
                   })}
+                  <p className="muted" style={{ fontSize: 11.5, margin: '2px 0 0' }}>Pick one or more — the alert is sent to each selected channel.</p>
                 </div>
               )}
             </div>
@@ -344,3 +361,10 @@ export default function AlertDetail() {
 
 const NOTE_LABEL = { ack: 'Acknowledged', resolved: 'Resolved', false_positive: 'False positive', open: 'Reopened', escalate: 'Escalated' };
 const NOTE_BADGE = { resolved: 'green', false_positive: '', ack: 'amber', escalate: 'amber' };
+
+// Escalation channels (brand-tinted icon badges for the selector).
+const ESC_CHANNELS = [
+  { key: 'teams', label: 'Microsoft Teams', letter: 'T', color: '#4b53bc' },
+  { key: 'slack', label: 'Slack', letter: '#', color: '#611f69' },
+  { key: 'email', label: 'Email', letter: '@', color: '#0891b2' },
+];
