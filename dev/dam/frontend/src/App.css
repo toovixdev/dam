@@ -255,6 +255,19 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 .tp-saffron { background: #fffaf2; } .tp-saffron .b1 { background: #e07b1a; } .tp-saffron .b2 { background: #138808; } .tp-saffron .cta { background: #e07b1a; }
 .tp-sunset { background: #fff5ee; } .tp-sunset .b1 { background: #f97316; } .tp-sunset .b2 { background: #fed7aa; } .tp-sunset .cta { background: #f97316; }
 .tp-warm { background: #fdf5ef; } .tp-warm .b1 { background: #d04a02; } .tp-warm .b2 { background: #ffb600; } .tp-warm .cta { background: #d04a02; }
+
+/* ═══ Double-click-to-maximize dashboard tiles ═══ */
+.card-maximize-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.5); z-index: 190; backdrop-filter: blur(2px); }
+.card-maximize-close { position: fixed; top: 18px; right: 22px; z-index: 202; border: none; cursor: pointer; font-family: var(--font);
+  font-size: 13px; font-weight: 700; padding: 8px 14px; border-radius: 9px; background: var(--surface); color: var(--ink); box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+.card.card-maximized { position: fixed !important; inset: 4vh 4vw; z-index: 200; margin: 0 !important;
+  display: flex; flex-direction: column; overflow: auto; box-shadow: 0 24px 70px rgba(0,0,0,.35); }
+.card.card-maximized > .card-body { flex: 1; min-height: 0; }
+/* Hint that dashboard tiles can be expanded (only while not maximized). */
+.dashboard-content .charts-row .card { position: relative; }
+.dashboard-content .charts-row .card:not(.card-maximized) .card-header::after {
+  content: '⤢'; margin-left: auto; color: var(--muted); font-size: 13px; opacity: 0; transition: opacity .15s; }
+.dashboard-content .charts-row .card:not(.card-maximized):hover .card-header::after { opacity: .7; }
 .tp-mono { background: #fafafa; border: 1px solid #e4e4e7; } .tp-mono .b1 { background: #3f3f46; } .tp-mono .b2 { background: #d4d4d8; } .tp-mono .cta { background: #18181b; }
 .tp-signature { background: #fbf5ec; } .tp-signature .b1 { background: #c8102e; } .tp-signature .b2 { background: #b8860b; } .tp-signature .cta { background: #c8102e; }
 .tp-enterprise { background: #f4f7fb; } .tp-enterprise .b1 { background: #0070f2; } .tp-enterprise .b2 { background: #1b90ff; } .tp-enterprise .cta { background: #0070f2; }

@@ -11,6 +11,7 @@ import EventsByDatabase from '../components/EventsByDatabase';
 import SensitiveAccessChart from '../components/SensitiveAccessChart';
 import CompliancePosture from '../components/CompliancePosture';
 import CoverageDonut from '../components/CoverageDonut';
+import CardMaximizer from '../components/CardMaximizer';
 
 function formatNumber(n) {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -61,6 +62,7 @@ export default function Dashboard() {
       </div>
 
       <main className="dashboard-content">
+        <CardMaximizer scope=".dashboard-content" />
         {/* KPI Row 1 — same as mockup */}
         <section className="kpi-grid">
           <KpiCard
