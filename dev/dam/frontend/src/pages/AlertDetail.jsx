@@ -235,18 +235,26 @@ export default function AlertDetail() {
             <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px', lineHeight: 1.5 }}>Notify a channel and record the escalation. The alert stays open.</p>
             <div className="form-field">
               <label>Notify via</label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {[['teams', 'Microsoft Teams'], ['slack', 'Slack'], ['email', 'Email']].map(([k, label]) => {
-                  const available = escInfo ? escInfo[k] : false;
-                  return (
-                    <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: available ? 1 : 0.55 }}>
-                      <input type="checkbox" disabled={!available} checked={!!escSel[k]} onChange={(e) => setEscSel((s) => ({ ...s, [k]: e.target.checked }))} />
-                      {label}
-                      {!available && <span className="muted" style={{ fontSize: 11 }}>— not configured (Integrations)</span>}
-                    </label>
-                  );
-                })}
-              </div>
+              {!escInfo ? (
+                <p className="muted" style={{ fontSize: 12.5, margin: '2px 0' }}>Checking available channels…</p>
+              ) : (!escInfo.teams && !escInfo.slack && !escInfo.email) ? (
+                <div style={{ background: 'var(--amber-soft)', color: 'var(--amber)', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, lineHeight: 1.5 }}>
+                  No notification channels are configured yet. An admin can set up <b>Slack</b>, <b>Microsoft Teams</b>, or <b>Email</b> under <b>Integrations</b> — then they'll be selectable here.
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {[['teams', 'Microsoft Teams'], ['slack', 'Slack'], ['email', 'Email']].map(([k, label]) => {
+                    const available = !!escInfo[k];
+                    return (
+                      <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: available ? 1 : 0.5, cursor: available ? 'pointer' : 'not-allowed' }}>
+                        <input type="checkbox" disabled={!available} checked={!!escSel[k]} onChange={(e) => setEscSel((s) => ({ ...s, [k]: e.target.checked }))} />
+                        {label}
+                        {!available && <span className="muted" style={{ fontSize: 11 }}>— not configured</span>}
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
             </div>
             {escSel.email && (
               <div className="form-field">
@@ -258,7 +266,8 @@ export default function AlertDetail() {
               <label>Note <span className="muted">(optional — e.g. target / why)</span></label>
               <input value={escNote} onChange={(e) => setEscNote(e.target.value)} placeholder="e.g. to on-call — suspected data exfiltration" />
             </div>
-            <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end' }}>
+            <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end', alignItems: 'center', gap: 10 }}>
+              {!Object.values(escSel).some(Boolean) && <span className="muted" style={{ fontSize: 11.5, marginRight: 'auto' }}>Select at least one channel to escalate.</span>}
               <button className="btn-secondary" onClick={() => setPanel(null)} disabled={busy}>Cancel</button>
               <button className="btn-primary" onClick={onEscalate} disabled={busy || !Object.values(escSel).some(Boolean)}>{busy ? 'Escalating…' : '↗ Escalate'}</button>
             </div>
