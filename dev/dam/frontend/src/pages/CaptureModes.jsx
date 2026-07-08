@@ -33,7 +33,7 @@ const APPLIC_ROWS = [
   ['AWS RDS / Aurora', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓ Cloud Push', 'g'], 'Cloud Push (agentless)'],
   ['Azure SQL / Managed Instance', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓', 'g'], 'Cloud Push'],
   ['Google Cloud SQL', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓', 'g'], 'Audit Pull / Push'],
-  ['MongoDB (self-managed)', ['⚠ wire decode', 'a'], ['⚠ host eBPF', 'a'], ['⚠ for blocking', 'a'], ['✓ profiler pull', 'g'], 'Audit Pull (DB profiler)'],
+  ['MongoDB on VM / on-prem', ['⚠ wire decode', 'a'], ['⚠ host eBPF', 'a'], ['⚠ for blocking', 'a'], ['✓ profiler pull', 'g'], 'Audit Pull (DB profiler) — wire-protocol agents N/A yet'],
   ['MongoDB Atlas', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓ webhook', 'g'], 'Cloud Push'],
   ['OCI Autonomous', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓', 'g'], 'Audit Pull / Push'],
 ];
