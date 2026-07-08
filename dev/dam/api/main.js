@@ -4845,7 +4845,7 @@ async function postJira(cfg, a) {
   const base = String(cfg.base_url || '').replace(/\/$/, '');
   const auth = Buffer.from(`${cfg.email}:${cfg.api_token}`).toString('base64');
   const description = { type: 'doc', version: 1, content: [{ type: 'paragraph', content: [{ type: 'text', text: alertText(a) }] }] };
-  const body = { fields: { project: { key: cfg.project_key }, summary: `[TooVix DAM] ${a.summary || 'Security alert'}`.slice(0, 250), issuetype: { name: cfg.issue_type || 'Task' }, description } };
+  const body = { fields: { project: { key: cfg.project_key }, summary: `[TooVix DAM] ${a.summary || 'Security alert'}`.slice(0, 250), issuetype: { name: cfg.issue_type || 'Incident' }, description } };
   const res = await fetch(`${base}/rest/api/3/issue`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', Authorization: `Basic ${auth}` }, body: JSON.stringify(body), signal: TIMEOUT(8000) });
   return { ok: res.ok, status: res.status };
 }
@@ -4925,13 +4925,13 @@ const CONNECTORS = {
       { key: 'username', label: 'Username', type: 'text', required: true },
       { key: 'password', label: 'Password', type: 'password', required: true, secret: true },
     ], send: postServiceNow },
-  jira: { name: 'Jira', kind: 'alert', help: 'Creates an issue per alert. Use your account email + an Atlassian API token (id.atlassian.com → API tokens).',
+  jira: { name: 'Jira Service Management', kind: 'alert', help: 'Creates an Incident (or the chosen issue type) per alert in your Jira Service Management / Service Desk project. Use your Atlassian account email + an API token (id.atlassian.com → API tokens), and your Service Desk project key.',
     fields: [
       { key: 'base_url', label: 'Base URL', type: 'url', required: true, placeholder: 'https://your-org.atlassian.net' },
       { key: 'email', label: 'Account email', type: 'text', required: true },
       { key: 'api_token', label: 'API token', type: 'password', required: true, secret: true },
-      { key: 'project_key', label: 'Project key', type: 'text', required: true, placeholder: 'SEC' },
-      { key: 'issue_type', label: 'Issue type', type: 'text', default: 'Task', placeholder: 'Task / Bug' },
+      { key: 'project_key', label: 'Service Desk project key', type: 'text', required: true, placeholder: 'SD' },
+      { key: 'issue_type', label: 'Issue type', type: 'select', default: 'Incident', options: ['Incident', 'Service Request', 'Problem', 'Change', 'Task', 'Bug'] },
     ], send: postJira },
   sentinel: { name: 'Microsoft Sentinel', kind: 'alert', help: 'Streams events to a Log Analytics workspace (Data Collector API). Use the Workspace ID + Primary key from Agents management.',
     fields: [

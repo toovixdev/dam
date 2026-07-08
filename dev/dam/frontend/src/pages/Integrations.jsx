@@ -21,7 +21,7 @@ const CONNECTORS = [
   { id: 'azure-ad', name: 'Azure AD', category: 'Identity', description: 'SSO sign-in via Azure AD / Entra ID', logo: 'AD', color: '#0078d4', real: true, kind: 'sso', provider: 'azure' },
   { id: 'okta', name: 'Okta', category: 'Identity', description: 'SSO authentication via Okta (OIDC)', logo: 'O', color: '#007dc1', real: true, kind: 'sso', provider: 'okta' },
   { id: 'google', name: 'Google', category: 'Identity', description: 'SSO sign-in via Google (OIDC)', logo: 'G', color: '#ea4335', real: true, kind: 'sso', provider: 'google' },
-  { id: 'jira', name: 'Jira', category: 'ITSM', description: 'Create Jira issues from alerts', logo: 'J', color: '#0052cc', real: true, type: 'jira' },
+  { id: 'jira', name: 'Jira Service Management', category: 'ITSM', description: 'Create incidents from alerts (Service Desk)', logo: 'J', color: '#0052cc', real: true, type: 'jira' },
   { id: 'datadog', name: 'Datadog', category: 'Monitoring', description: 'Send alert events to Datadog', logo: 'DD', color: '#632ca6', real: true, type: 'datadog' },
   { id: 'webhook', name: 'Custom Webhook', category: 'Custom', description: 'POST alert events to any HTTPS endpoint', logo: '{ }', color: '#0ea5e9', real: true, type: 'webhook' },
   { id: 'email', name: 'Email (SMTP)', category: 'Alerting', description: 'Mail-server connection for invitations & notifications', logo: '@', color: '#0891b2', real: true, kind: 'smtp' },
