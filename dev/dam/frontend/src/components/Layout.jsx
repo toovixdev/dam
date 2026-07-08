@@ -2,6 +2,7 @@ import { useState } from 'react';
 import Sidebar from './Sidebar';
 import TopBar from './TopBar';
 import ToastHost from './shared/Toast';
+import AiOnScreen from './AiOnScreen';
 
 export default function Layout({ children, lastRefresh, onRefresh }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -15,6 +16,7 @@ export default function Layout({ children, lastRefresh, onRefresh }) {
           {children}
         </div>
       </div>
+      <AiOnScreen />
       <ToastHost />
     </div>
   );

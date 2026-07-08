@@ -8176,6 +8176,25 @@ app.post('/api/assistant/chat', authRequired, async (req, res) => {
   }
 });
 
+// "AI on this screen" — one short, live, actionable insight most relevant to the screen
+// the user is on, generated from the tenant's real snapshot (never hardcoded/fabricated).
+app.post('/api/assistant/screen-insight', authRequired, async (req, res) => {
+  const cfg = await assistantConfigFor(req.user.tenantId);
+  if (!cfg) return res.status(400).json({ error: 'not configured' });
+  const screen = String(req.body?.screen || 'this screen').replace(/[^\w &/-]/g, '').slice(0, 60);
+  try {
+    const context = await buildDamContext(req.user.tenantId);
+    const system = `You are TooVix Copilot for the workspace "${req.user.tenantName}". Using ONLY the live snapshot below, write ONE short, specific, actionable insight (max 2 sentences, ~30 words) most relevant to a user currently on the "${screen}" screen. Be concrete — cite real names/counts from the snapshot. If the snapshot has nothing notable for this screen, say so briefly. No preamble, no markdown, no bullet points — just the sentence(s).\n\n=== LIVE SNAPSHOT (${req.user.tenantName}) ===\n${context}`;
+    const reply = cfg.provider === 'anthropic'
+      ? await callAnthropic(cfg.apiKey, cfg.model, system, [{ role: 'user', content: `Give me the single most useful insight for the ${screen} screen right now.` }])
+      : await callOpenAI(cfg.apiKey, cfg.model, system, [{ role: 'user', content: `Give me the single most useful insight for the ${screen} screen right now.` }]);
+    res.json({ insight: String(reply || '').trim() });
+  } catch (e) {
+    console.error('[Assistant] screen-insight failed:', e.message);
+    res.status(502).json({ error: 'The AI provider request failed: ' + e.message });
+  }
+});
+
 // ── WebSocket server (live updates) ───────────────────────
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import { useAuth } from '../context/AuthContext';
@@ -46,8 +47,15 @@ export default function Copilot() {
   const [sending, setSending] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const scrollRef = useRef(null);
+  const location = useLocation();
+  const askedRef = useRef(false);
 
   useEffect(() => { apiFetch('/assistant/status').then(setStatus).catch(() => setStatus({ ready: false })); }, []);
+  // Auto-ask a question handed over from the "AI on this screen" widget (grounded mode).
+  useEffect(() => {
+    const q = location.state?.ask;
+    if (q && status?.ready && !askedRef.current) { askedRef.current = true; send(q); }
+  }, [status, location.state]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, sending]);
 
   // Switching mode starts a fresh conversation so grounded/general answers never mix.
