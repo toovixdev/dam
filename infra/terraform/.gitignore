@@ -1,0 +1,13 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Secrets / local vars — keep only the .example
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json

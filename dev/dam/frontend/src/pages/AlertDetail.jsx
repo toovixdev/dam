@@ -367,4 +367,5 @@ const ESC_CHANNELS = [
   { key: 'teams', label: 'Microsoft Teams', letter: 'T', color: '#4b53bc' },
   { key: 'slack', label: 'Slack', letter: '#', color: '#611f69' },
   { key: 'email', label: 'Email', letter: '@', color: '#0891b2' },
+  { key: 'jira', label: 'Jira (create issue)', letter: 'J', color: '#0052cc' },
 ];

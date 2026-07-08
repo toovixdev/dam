@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+project_id = "my-gcp-project-id"
+region     = "us-central1"
+zone       = "us-central1-a"
+
+# Optional overrides:
+# name_prefix         = "dam-db"
+# subnet_cidr         = "10.10.0.0/24"
+# mysql_machine_type  = "e2-medium"
+# oracle_machine_type = "e2-standard-2"
+
+# Restrict who can hit the DB ports (default is subnet-internal only).
+# db_client_source_ranges = ["10.10.0.0/24"]
+
+# If you SSH from a fixed office/VPN IP instead of IAP, add it here
+# (keep the IAP range too if you still want IAP):
+# ssh_source_ranges = ["35.235.240.0/20", "203.0.113.10/32"]

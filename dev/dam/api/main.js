@@ -5409,12 +5409,13 @@ app.get('/api/alerts/summary', authRequired, async (req, res) => {
 app.get('/api/alerts/escalation-channels', authRequired, async (req, res) => {
   const rows = (await pgPool.query(
     `SELECT type, config FROM integrations WHERE tenant_id = $1 AND type = ANY($2) AND status = 'active'`,
-    [req.user.tenantId, ['msteams', 'slack', 'email_alerts']])).rows;
+    [req.user.tenantId, ['msteams', 'slack', 'email_alerts', 'jira']])).rows;
   const byType = {}; rows.forEach((r) => { byType[r.type] = r.config || {}; });
   res.json({
     teams: !!byType['msteams'],
     slack: !!byType['slack'],
     email: !!byType['email_alerts'],
+    jira: !!byType['jira'],
     emailRecipients: (byType['email_alerts'] && byType['email_alerts'].recipients) || '',
   });
 });
@@ -5507,7 +5508,7 @@ app.post('/api/alerts/:id/escalate', authRequired, async (req, res) => {
     ts: new Date().toISOString(),
   };
 
-  const CHANNEL_TYPE = { teams: 'msteams', slack: 'slack', email: 'email_alerts' };
+  const CHANNEL_TYPE = { teams: 'msteams', slack: 'slack', email: 'email_alerts', jira: 'jira' };
   const results = [];
   for (const ch of channels) {
     const type = CHANNEL_TYPE[ch];
