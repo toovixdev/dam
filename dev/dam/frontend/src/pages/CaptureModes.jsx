@@ -6,7 +6,7 @@ const AGENTS = [
   { name: 'Network agent', tag: 'installed · passive', color: 'var(--primary)', desc: 'Sniffs the database’s network traffic (libpcap, protocol decode). No path change, ~0 overhead. Sees every networked connection — including ones that bypass a proxy. Blind to local/IPC; cannot block.' },
   { name: 'Host agent (eBPF)', tag: 'installed · passive', color: 'var(--info)', desc: 'Runs on the DB host kernel. Sees every connection reaching the DB process — including local sockets / shared memory / IPC nothing else can. Deepest visibility; limited local enforcement.' },
   { name: 'Inline proxy', tag: 'installed · inline', color: 'var(--amber)', desc: 'A gateway in the data path — clients connect through it. The only mode that can block / quarantine, and the only one that sees the real end-user behind a pooled connection. Only sees traffic routed through it.' },
-  { name: 'Agentless (Pull / Push)', tag: 'no install', color: 'var(--green)', desc: 'Reads native DB audit logs (Audit Pull) or consumes cloud audit streams (Cloud Push). The fit for managed / PaaS databases where you can’t install anything. After-the-fact; cannot block.' },
+  { name: 'Agentless (Pull / Push)', tag: 'no install', color: 'var(--green)', desc: 'Reads native DB audit logs / the DB profiler (Audit Pull, e.g. MongoDB’s system.profile) or consumes cloud audit streams (Cloud Push). Connects as a client — works for managed/PaaS and self-managed databases where you can’t (or don’t want to) install on the host. After-the-fact; cannot block.' },
 ];
 
 const PATHS = [
@@ -33,6 +33,7 @@ const APPLIC_ROWS = [
   ['AWS RDS / Aurora', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓ Cloud Push', 'g'], 'Cloud Push (agentless)'],
   ['Azure SQL / Managed Instance', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓', 'g'], 'Cloud Push'],
   ['Google Cloud SQL', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓', 'g'], 'Audit Pull / Push'],
+  ['MongoDB (self-managed)', ['⚠ wire decode', 'a'], ['⚠ host eBPF', 'a'], ['⚠ for blocking', 'a'], ['✓ profiler pull', 'g'], 'Audit Pull (DB profiler)'],
   ['MongoDB Atlas', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓ webhook', 'g'], 'Cloud Push'],
   ['OCI Autonomous', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓', 'g'], 'Audit Pull / Push'],
 ];
