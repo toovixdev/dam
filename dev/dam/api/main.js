@@ -4938,7 +4938,7 @@ const CONNECTORS = {
       { key: 'email', label: 'Account email', type: 'text', required: true },
       { key: 'api_token', label: 'API token', type: 'password', required: true, secret: true },
       { key: 'project_key', label: 'Service Desk project key', type: 'text', required: true, placeholder: 'SD' },
-      { key: 'issue_type', label: 'Issue type', type: 'select', default: 'Incident', options: ['Incident', 'Service Request', 'Problem', 'Change', 'Task', 'Bug'] },
+      { key: 'issue_type', label: 'Issue type (exact name from Project settings → Issue types)', type: 'text', default: 'Incident', placeholder: 'e.g. Incident, or "Submit a request or incident"' },
     ], send: postJira },
   sentinel: { name: 'Microsoft Sentinel', kind: 'alert', help: 'Streams events to a Log Analytics workspace (Data Collector API). Use the Workspace ID + Primary key from Agents management.',
     fields: [
