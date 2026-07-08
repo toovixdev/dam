@@ -5414,16 +5414,18 @@ app.get('/api/alerts/summary', authRequired, async (req, res) => {
 // Which notification channels are available to escalate to (tenant-scoped). Backs the
 // Escalate dialog on the alert detail page. Must be declared before '/api/alerts/:id'.
 app.get('/api/alerts/escalation-channels', authRequired, async (req, res) => {
+  // A channel is usable for MANUAL escalation as long as it's CONFIGURED — even if it's
+  // disabled for automatic forwarding. We flag the disabled ones so the UI can note it.
   const rows = (await pgPool.query(
-    `SELECT type, config FROM integrations WHERE tenant_id = $1 AND type = ANY($2) AND status = 'active'`,
+    `SELECT type, config, status FROM integrations WHERE tenant_id = $1 AND type = ANY($2)`,
     [req.user.tenantId, ['msteams', 'slack', 'email_alerts', 'jira']])).rows;
-  const byType = {}; rows.forEach((r) => { byType[r.type] = r.config || {}; });
+  const m = {}; rows.forEach((r) => { m[r.type] = { cfg: r.config || {}, active: r.status === 'active' }; });
+  const conf = (t) => !!m[t];
+  const off = (t) => !!m[t] && !m[t].active;
   res.json({
-    teams: !!byType['msteams'],
-    slack: !!byType['slack'],
-    email: !!byType['email_alerts'],
-    jira: !!byType['jira'],
-    emailRecipients: (byType['email_alerts'] && byType['email_alerts'].recipients) || '',
+    teams: conf('msteams'), slack: conf('slack'), email: conf('email_alerts'), jira: conf('jira'),
+    disabled: { teams: off('msteams'), slack: off('slack'), email: off('email_alerts'), jira: off('jira') },
+    emailRecipients: (m['email_alerts'] && m['email_alerts'].cfg.recipients) || '',
   });
 });
 
@@ -5520,8 +5522,10 @@ app.post('/api/alerts/:id/escalate', authRequired, async (req, res) => {
   for (const ch of channels) {
     const type = CHANNEL_TYPE[ch];
     if (!type || !CONNECTORS[type]) { results.push({ channel: ch, ok: false, error: 'unknown channel' }); continue; }
+    // Configured is enough for a manual escalation (a disabled channel is only "off" for
+    // automatic forwarding). Deliberately not filtering by status here.
     const row = (await pgPool.query(
-      `SELECT config FROM integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active'`,
+      `SELECT config FROM integrations WHERE tenant_id = $1 AND type = $2`,
       [req.user.tenantId, type])).rows[0];
     if (!row || !row.config) { results.push({ channel: ch, ok: false, error: 'not configured' }); continue; }
     let cfg = row.config;

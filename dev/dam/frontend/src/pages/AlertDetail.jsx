@@ -237,7 +237,7 @@ export default function AlertDetail() {
               <label>Notify via</label>
               {!escInfo ? (
                 <p className="muted" style={{ fontSize: 12.5, margin: '2px 0' }}>Checking available channels…</p>
-              ) : (!escInfo.teams && !escInfo.slack && !escInfo.email) ? (
+              ) : (!escInfo.teams && !escInfo.slack && !escInfo.email && !escInfo.jira) ? (
                 <div style={{ background: 'var(--amber-soft)', color: 'var(--amber)', borderRadius: 8, padding: '9px 12px', fontSize: 12.5, lineHeight: 1.5 }}>
                   No notification channels are configured yet. An admin can set up <b>Slack</b>, <b>Microsoft Teams</b>, or <b>Email</b> under <b>Integrations</b> — then they'll be selectable here.
                 </div>
@@ -245,6 +245,7 @@ export default function AlertDetail() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {ESC_CHANNELS.map(({ key, label, letter, color }) => {
                     const available = !!escInfo[key];
+                    const offForAuto = !!(escInfo.disabled && escInfo.disabled[key]);
                     const selected = !!escSel[key];
                     return (
                       <button key={key} type="button" disabled={!available}
@@ -260,6 +261,7 @@ export default function AlertDetail() {
                         <span style={{ flex: 1 }}>
                           <div style={{ fontWeight: 600, color: 'var(--ink)' }}>{label}</div>
                           {!available && <div className="muted" style={{ fontSize: 11 }}>Not configured — set up in Integrations</div>}
+                          {available && offForAuto && <div style={{ fontSize: 11, color: 'var(--amber)' }}>Auto-forward off — still usable for manual escalation</div>}
                         </span>
                         <span style={{
                           width: 20, height: 20, borderRadius: '50%', flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center',
