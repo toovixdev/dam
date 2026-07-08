@@ -50,7 +50,9 @@ export default function Integrations() {
     if (c.kind === 'sso') { const info = { azure, okta, google }[c.provider]; const on = info?.configured && info?.enabledForTenant; return { ...c, status: on ? 'connected' : 'disconnected', sso: info }; }
     if (c.kind === 'smtp') return { ...c, status: smtp?.configured ? 'connected' : 'disconnected', smtp };
     const integ = byType(c.type);
-    return { ...c, status: integ?.status === 'active' ? 'connected' : 'disconnected', cfg: integ?.config };
+    const active = integ?.status === 'active';
+    // Tri-state: connected (active) · disabled (configured but off) · disconnected (not set up).
+    return { ...c, status: active ? 'connected' : (integ ? 'disabled' : 'disconnected'), configured: !!integ, cfg: integ?.config };
   });
 
   const connected = connectors.filter(c => c.status === 'connected').length;
@@ -86,12 +88,15 @@ export default function Integrations() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 14 }}>
         {filtered.map(connector => {
           const connected = connector.status === 'connected';
+          const disabled = connector.status === 'disabled';
           const detail = connector.kind === 'sso' && connected && connector.sso
             ? <><b>{connector.sso.usersProvisioned}</b> users via SSO · {connector.provider === 'okta' ? connector.sso.domain : `tenant ${String(connector.sso.tenantId || '').slice(0, 8)}…`}</>
             : connector.kind === 'smtp' && connected && connector.smtp
             ? <>{connector.smtp.source === 'env' ? 'Via environment' : connector.smtp.saved?.host} · from <b>{connector.smtp.from}</b></>
             : connector.type && connected && connector.cfg
             ? <>Forwarding ≥ <b>{connector.cfg.minSeverity || 'high'}</b> on every alert</>
+            : connector.type && disabled
+            ? <>Configured — currently <b>disabled</b> (not forwarding)</>
             : null;
           return (
             <div className="card" key={connector.id} style={{ display: 'flex', flexDirection: 'column' }}>
@@ -106,16 +111,16 @@ export default function Integrations() {
                 <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 0 10px', lineHeight: 1.5, minHeight: 38 }}>{connector.description}</p>
                 {detail && <p style={{ fontSize: 11.5, color: 'var(--subtle, var(--muted))', margin: '0 0 12px', lineHeight: 1.4, wordBreak: 'break-word' }}>{detail}</p>}
                 <div style={{ marginTop: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingTop: 4 }}>
-                  <span className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: connected ? 'var(--green-soft)' : 'var(--surface-2)', color: connected ? 'var(--green)' : 'var(--muted)', borderColor: 'transparent' }}>
-                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: connected ? 'var(--green)' : 'var(--muted)' }} />
-                    {connected ? 'Connected' : 'Available'}
+                  <span className="badge" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: connected ? 'var(--green-soft)' : disabled ? 'var(--amber-soft)' : 'var(--surface-2)', color: connected ? 'var(--green)' : disabled ? 'var(--amber)' : 'var(--muted)', borderColor: 'transparent' }}>
+                    <span style={{ width: 6, height: 6, borderRadius: '50%', background: connected ? 'var(--green)' : disabled ? 'var(--amber)' : 'var(--muted)' }} />
+                    {connected ? 'Connected' : disabled ? 'Configured · Off' : 'Available'}
                   </span>
                   <button
-                    className={connected ? 'btn-secondary' : 'btn-primary'}
+                    className={connected || disabled ? 'btn-secondary' : 'btn-primary'}
                     style={{ padding: '7px 16px', fontSize: 12.5, borderRadius: 9 }}
                     onClick={() => connector.kind === 'sso' ? setSsoProvider(connector.provider) : connector.kind === 'smtp' ? setSmtpOpen(true) : connector.type ? setConfigType(connector.type) : alert(`${connector.name} configuration coming soon`)}
                   >
-                    {connector.kind === 'sso' ? (connector.provider === 'azure' ? 'View status' : 'Configure') : connected ? 'Configure' : 'Connect'}
+                    {connector.kind === 'sso' ? (connector.provider === 'azure' ? 'View status' : 'Configure') : (connected || disabled) ? 'Configure' : 'Connect'}
                   </button>
                 </div>
               </div>
@@ -423,7 +428,9 @@ function IntegrationModal({ open, type, schema, title, accent, logo, category, c
     for (const f of fields) init[f.key] = f.secret ? '' : (current?.values?.[f.key] ?? f.default ?? '');
     setVals(init);
     setMinSeverity(current?.minSeverity || 'high');
-    setEnabled(connected ? true : true); // default Enabled; existing connected stays enabled
+    // Reflect the stored state: a configured integration keeps its enabled/disabled
+    // status on reopen; a brand-new one defaults to Enabled.
+    setEnabled(current?.configured ? connected : true);
   }, [open, type]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setVal = (k, v) => setVals(p => ({ ...p, [k]: v }));
@@ -456,9 +463,9 @@ function IntegrationModal({ open, type, schema, title, accent, logo, category, c
     <Modal open={open} onClose={onClose} title={title} width={560}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', margin: '0 0 16px', fontSize: 12.5 }}>
         {logo && <span style={{ width: 26, height: 26, flex: 'none', borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: logo.length > 1 ? 11 : 14, fontWeight: 800, color: '#fff', background: accent || 'var(--primary)' }}>{logo}</span>}
-        <span style={{ fontWeight: 600 }}>{connected ? 'Connected' : 'Not connected'}</span>
+        <span style={{ fontWeight: 600 }}>{connected ? 'Connected' : current?.configured ? 'Configured (disabled)' : 'Not connected'}</span>
         {category && <span className="muted">{category}</span>}
-        <span style={{ marginLeft: 'auto' }} className="badge" >{connected ? '● active' : '○ inactive'}</span>
+        <span style={{ marginLeft: 'auto' }} className="badge" >{connected ? '● active' : current?.configured ? '◐ disabled' : '○ inactive'}</span>
       </div>
       {schema?.help && <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>{schema.help}</p>}
       {fields.map(f => {
