@@ -601,6 +601,31 @@ services:
       - client-net
       - dam-net
 
+  # MONGODB agent — agentless "audit pull": enables the DB profiler on client-mongo and
+  # tails system.profile, forwarding each operation as a DAM event. Connects to mongo over
+  # the network (no namespace sharing needed), and reaches the platform on dam-net.
+  dam-agent-mongo:
+    build: ./dam/agent-mongo
+    container_name: dam-agent-mongo
+    environment:
+      TARGET_HOST: client-mongo
+      TARGET_PORT: 27017
+      TARGET_DB: profiles
+      MONGO_USER: admin
+      MONGO_PASSWORD: ${CLIENT_MONGO_PASSWORD}
+      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
+      CONTROL_PLANE: http://dam-api:3000
+      CLICKHOUSE_URL: http://dam-clickhouse:8123
+      CLICKHOUSE_USER: dam_writer
+      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+    depends_on:
+      - dam-api
+      - client-mongo
+      - dam-clickhouse
+    networks:
+      - client-net
+      - dam-net
+
   # NETWORK agent — passive libpcap-style capture. Shares client-mysql's network namespace
   # (the only way to sniff another container's traffic on a switched Docker bridge) and so
   # cannot also join dam-net → it reaches the platform via host-published ports.

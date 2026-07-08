@@ -1,0 +1,10 @@
+{
+  "name": "dam-agent-mongo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TooVix DAM — MongoDB capture agent (database profiler → events)",
+  "main": "agent.js",
+  "dependencies": {
+    "mongodb": "^6.3.0"
+  }
+}
