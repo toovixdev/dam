@@ -5404,6 +5404,21 @@ app.get('/api/alerts/summary', authRequired, async (req, res) => {
   res.json({ open, ack, closed, all });
 });
 
+// Which notification channels are available to escalate to (tenant-scoped). Backs the
+// Escalate dialog on the alert detail page. Must be declared before '/api/alerts/:id'.
+app.get('/api/alerts/escalation-channels', authRequired, async (req, res) => {
+  const rows = (await pgPool.query(
+    `SELECT type, config FROM integrations WHERE tenant_id = $1 AND type = ANY($2) AND status = 'active'`,
+    [req.user.tenantId, ['msteams', 'slack', 'email_alerts']])).rows;
+  const byType = {}; rows.forEach((r) => { byType[r.type] = r.config || {}; });
+  res.json({
+    teams: !!byType['msteams'],
+    slack: !!byType['slack'],
+    email: !!byType['email_alerts'],
+    emailRecipients: (byType['email_alerts'] && byType['email_alerts'].recipients) || '',
+  });
+});
+
 // Single alert by id (tenant-scoped) — backs the full-page alert detail view.
 app.get('/api/alerts/:id', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
@@ -5460,7 +5475,7 @@ app.post('/api/alerts/:id/status', authRequired, async (req, res) => {
   res.json(rows[0]);
 });
 
-// Alert disposition timeline (acknowledge / resolve / false-positive notes).
+// Alert disposition timeline (acknowledge / resolve / false-positive / escalate notes).
 app.get('/api/alerts/:id/notes', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
     `SELECT action, note, actor_email, created_at FROM alert_notes
@@ -5468,6 +5483,54 @@ app.get('/api/alerts/:id/notes', authRequired, async (req, res) => {
     [req.params.id, req.user.tenantId]
   );
   res.json(rows);
+});
+
+// Escalate an alert: notify the chosen channel(s) (Teams / Slack / Email) and record it.
+// The alert stays OPEN — escalation routes it to a human, it doesn't close it.
+app.post('/api/alerts/:id/escalate', authRequired, async (req, res) => {
+  const channels = Array.isArray(req.body?.channels) ? req.body.channels : [];
+  const note = (req.body && typeof req.body.note === 'string') ? req.body.note.trim() : '';
+  const recipients = (req.body && typeof req.body.recipients === 'string') ? req.body.recipients.trim() : '';
+  if (!channels.length) return res.status(400).json({ error: 'Pick at least one channel to escalate to.' });
+  const al = (await pgPool.query(
+    `SELECT a.*, d.name AS database_name FROM alerts a LEFT JOIN databases d ON a.database_id = d.id
+      WHERE a.tenant_id = $1 AND a.id = $2 LIMIT 1`, [req.user.tenantId, req.params.id])).rows[0];
+  if (!al) return res.status(404).json({ error: 'Alert not found' });
+
+  const alertObj = {
+    tenantId: req.user.tenantId,
+    severity: al.severity,
+    summary: `⬆ ESCALATED: ${al.summary}${note ? ` — ${note}` : ''} (by ${req.user.email})`,
+    principal: al.principal,
+    database: al.database_name,
+    raw_sql: al.raw_sql,
+    ts: new Date().toISOString(),
+  };
+
+  const CHANNEL_TYPE = { teams: 'msteams', slack: 'slack', email: 'email_alerts' };
+  const results = [];
+  for (const ch of channels) {
+    const type = CHANNEL_TYPE[ch];
+    if (!type || !CONNECTORS[type]) { results.push({ channel: ch, ok: false, error: 'unknown channel' }); continue; }
+    const row = (await pgPool.query(
+      `SELECT config FROM integrations WHERE tenant_id = $1 AND type = $2 AND status = 'active'`,
+      [req.user.tenantId, type])).rows[0];
+    if (!row || !row.config) { results.push({ channel: ch, ok: false, error: 'not configured' }); continue; }
+    let cfg = row.config;
+    if (ch === 'email' && recipients) cfg = { ...cfg, recipients }; // per-escalation recipient override
+    try {
+      const r = await CONNECTORS[type].send(cfg, alertObj);
+      results.push({ channel: ch, ok: !!(r && r.ok), error: r && r.ok ? null : (r && r.status) || 'send failed' });
+    } catch (e) { results.push({ channel: ch, ok: false, error: e.message }); }
+  }
+
+  const sent = results.filter((r) => r.ok).map((r) => r.channel);
+  const failed = results.filter((r) => !r.ok);
+  await pgPool.query(
+    `INSERT INTO alert_notes (tenant_id, alert_id, action, note, actor_id, actor_email) VALUES ($1,$2,'escalate',$3,$4,$5)`,
+    [req.user.tenantId, al.id, `Escalated via ${sent.join(', ') || '(none delivered)'}${note ? ' — ' + note : ''}`, req.user.userId, req.user.email]);
+  try { await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'alert.escalate', resourceType: 'alert', resourceId: al.id, details: { channels, note, sent, failed } }); } catch (e) { /* audit optional */ }
+  res.json({ ok: sent.length > 0, sent, failed, results });
 });
 
 // Mark an alert as false positive: distinct disposition + create a suppression

@@ -52,6 +52,10 @@ export default function AlertDetail() {
   const [qReason, setQReason] = useState('');
   const [notes, setNotes] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [escInfo, setEscInfo] = useState(null); // {teams,slack,email,emailRecipients}
+  const [escSel, setEscSel] = useState({ teams: false, slack: false, email: false });
+  const [escNote, setEscNote] = useState('');
+  const [escRecipients, setEscRecipients] = useState('');
 
   const loadNotes = () => apiFetch(`/alerts/${id}/notes`).then((d) => setNotes(Array.isArray(d) ? d : [])).catch(() => {});
   const reloadAlert = () => apiFetch(`/alerts/${id}`).then((d) => { if (d && !d.error) setA(d); });
@@ -63,6 +67,7 @@ export default function AlertDetail() {
       .catch(() => live && setNotFound(true))
       .finally(() => live && setLoading(false));
     loadNotes();
+    apiFetch('/alerts/escalation-channels').then((d) => { if (live && d && !d.error) { setEscInfo(d); setEscRecipients(d.emailRecipients || ''); } }).catch(() => {});
     return () => { live = false; };
   }, [id]);
 
@@ -98,6 +103,21 @@ export default function AlertDetail() {
     setBusy(false);
     if (res && res.ok) { toast(`Account "${a.principal}" quarantined — inline block active`, 'ok'); navigate('/quarantine'); }
     else toast(res?.data?.error || 'Quarantine failed', 'err');
+  };
+  const onEscalate = async () => {
+    const channels = Object.keys(escSel).filter((k) => escSel[k]);
+    if (!channels.length) { toast('Pick at least one channel', 'err'); return; }
+    setBusy(true);
+    const res = await apiPost(`/alerts/${id}/escalate`, { channels, note: escNote.trim(), recipients: escRecipients.trim() });
+    setBusy(false);
+    if (res && res.ok && res.data?.sent?.length) {
+      const failed = (res.data.failed || []).map((f) => `${f.channel} (${f.error})`);
+      toast(`Escalated via ${res.data.sent.join(', ')}` + (failed.length ? ` · failed: ${failed.join(', ')}` : ''), failed.length ? 'err' : 'ok');
+      setPanel(null); setEscNote(''); loadNotes();
+    } else {
+      const failed = (res?.data?.failed || []).map((f) => `${f.channel}: ${f.error}`);
+      toast(failed.length ? `Escalation failed — ${failed.join('; ')}` : (res?.data?.error || 'Escalation failed'), 'err');
+    }
   };
   const onAct = (msg) => toast(msg, 'ok');
 
@@ -168,7 +188,7 @@ export default function AlertDetail() {
           <button className="btn-primary" onClick={() => { setNote(''); setPanel('ack'); }}>✓ Acknowledge</button>
           <button className="btn-secondary" onClick={() => { setNote(''); setPanel('resolve'); }}>✓ Resolve</button>
           <button className="btn-secondary" style={{ borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={() => { setQReason(`Quarantined from alert: ${a.rule || a.summary || 'manual'}`); setPanel('quarantine'); }}>⛔ Quarantine &amp; kill</button>
-          <button className="btn-secondary" onClick={() => onAct('Escalated to on-call')}>↗ Escalate</button>
+          <button className="btn-secondary" onClick={() => { setEscNote(''); setEscSel({ teams: false, slack: false, email: false }); setPanel('escalate'); }}>↗ Escalate</button>
           <button className="btn-secondary" onClick={() => setPanel('fp')}>✗ False positive</button>
           <button className="btn-secondary" onClick={() => onAct('Opening session reconstruction')}>⎚ Session timeline</button>
         </div></div>
@@ -203,6 +223,44 @@ export default function AlertDetail() {
             <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end' }}>
               <button className="btn-secondary" onClick={closePanel} disabled={busy}>Cancel</button>
               <button className="btn-primary" onClick={onResolve} disabled={busy || !note.trim()}>{busy ? 'Saving…' : '✓ Confirm resolve'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {panel === 'escalate' && (
+        <div className="card" style={{ background: 'var(--surface-2)' }}>
+          <div className="card-body">
+            <div className="section-label">Escalate alert</div>
+            <p className="muted" style={{ fontSize: 12.5, margin: '0 0 10px', lineHeight: 1.5 }}>Notify a channel and record the escalation. The alert stays open.</p>
+            <div className="form-field">
+              <label>Notify via</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {[['teams', 'Microsoft Teams'], ['slack', 'Slack'], ['email', 'Email']].map(([k, label]) => {
+                  const available = escInfo ? escInfo[k] : false;
+                  return (
+                    <label key={k} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, opacity: available ? 1 : 0.55 }}>
+                      <input type="checkbox" disabled={!available} checked={!!escSel[k]} onChange={(e) => setEscSel((s) => ({ ...s, [k]: e.target.checked }))} />
+                      {label}
+                      {!available && <span className="muted" style={{ fontSize: 11 }}>— not configured (Integrations)</span>}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+            {escSel.email && (
+              <div className="form-field">
+                <label>Email recipients <span className="muted">(comma-separated)</span></label>
+                <input value={escRecipients} onChange={(e) => setEscRecipients(e.target.value)} placeholder="soc@company.com, oncall@company.com" />
+              </div>
+            )}
+            <div className="form-field">
+              <label>Note <span className="muted">(optional — e.g. target / why)</span></label>
+              <input value={escNote} onChange={(e) => setEscNote(e.target.value)} placeholder="e.g. to on-call — suspected data exfiltration" />
+            </div>
+            <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end' }}>
+              <button className="btn-secondary" onClick={() => setPanel(null)} disabled={busy}>Cancel</button>
+              <button className="btn-primary" onClick={onEscalate} disabled={busy || !Object.values(escSel).some(Boolean)}>{busy ? 'Escalating…' : '↗ Escalate'}</button>
             </div>
           </div>
         </div>
@@ -275,5 +333,5 @@ export default function AlertDetail() {
   );
 }
 
-const NOTE_LABEL = { ack: 'Acknowledged', resolved: 'Resolved', false_positive: 'False positive', open: 'Reopened' };
-const NOTE_BADGE = { resolved: 'green', false_positive: '', ack: 'amber' };
+const NOTE_LABEL = { ack: 'Acknowledged', resolved: 'Resolved', false_positive: 'False positive', open: 'Reopened', escalate: 'Escalated' };
+const NOTE_BADGE = { resolved: 'green', false_positive: '', ack: 'amber', escalate: 'amber' };
