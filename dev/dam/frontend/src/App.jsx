@@ -12,6 +12,7 @@ import Databases from './pages/Databases';
 import Agents from './pages/Agents';
 import CaptureModes from './pages/CaptureModes';
 import Alerts from './pages/Alerts';
+import AlertDetail from './pages/AlertDetail';
 import Policies from './pages/Policies';
 import Quarantine from './pages/Quarantine';
 import Classification from './pages/Classification';
@@ -65,6 +66,7 @@ export default function App() {
           <Route path="/agents" element={<ProtectedRoute screen="agents"><Agents /></ProtectedRoute>} />
           <Route path="/capture-modes" element={<ProtectedRoute screen="capture-modes"><CaptureModes /></ProtectedRoute>} />
           <Route path="/alerts" element={<ProtectedRoute screen="alerts"><Alerts /></ProtectedRoute>} />
+          <Route path="/alerts/:id" element={<ProtectedRoute screen="alerts"><AlertDetail /></ProtectedRoute>} />
           <Route path="/policies" element={<ProtectedRoute screen="policies"><Policies /></ProtectedRoute>} />
           <Route path="/quarantine" element={<ProtectedRoute screen="quarantine"><Quarantine /></ProtectedRoute>} />
           <Route path="/classification" element={<ProtectedRoute screen="classification"><Classification /></ProtectedRoute>} />

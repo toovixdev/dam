@@ -33,7 +33,7 @@
   .topbar b{color:var(--ink)}
   .topbar .sub{color:var(--muted);font-size:13px}
   .topbar .spacer{flex:1}
-  .btn-print{border:1px solid var(--line);background:#fff;color:var(--body);padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;font-family:var(--font)}
+  .btn-print{border:1px solid var(--line);background:#fff;color:var(--body);padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;font-family:var(--font);text-decoration:none;display:inline-flex;align-items:center;gap:4px}
   .btn-print:hover{border-color:var(--indigo);color:var(--indigo)}
 
   /* ── Hero ── */
@@ -147,6 +147,7 @@
     <b>TooVix DAM</b> <span class="sub">· Getting Started Tutorial</span>
   </div>
   <div class="spacer"></div>
+  <a class="btn-print" href="/">← Back to home</a>
   <button class="btn-print" onclick="window.print()">🖨 Print / Save as PDF</button>
 </div>
 
@@ -433,7 +434,7 @@
           </ul>
         </li>
         <li>Create your own rule with <span class="ui">New rule</span>.</li>
-        <li>Need to whitelist a known-good pattern? Use <span class="ui g">Add exception</span>; remove one later with <span class="ui g">Revoke</span>. Toggle <span class="ui g">Active</span> / <span class="ui g">All</span> to include revoked/expired items.</li>
+        <li>Need to whitelist a known-good pattern? Use <span class="ui g">Add exception</span>; remove one later with <span class="ui g">Revoke</span>. Toggle <span class="ui g">Active</span> / <span class="ui g">All</span> to include revoked/expired items. <b>Every "false positive" you mark on an alert also shows up here as a suppression</b> — so this is where you revoke it if you want the rule to fire again.</li>
       </ol>
       <div class="tip">Remember the golden rule from Part 2: new rules start in <b>Monitor</b>, graduate to <b>Enable</b> once proven quiet.</div>
     </section>
@@ -453,8 +454,9 @@
           </ul>
         </li>
         <li>If it's a genuine threat, hit <span class="ui g">⛔ Quarantine &amp; kill</span> to block the account and kill its live session immediately.</li>
-        <li>If it's harmless, click <span class="ui g">✗ False positive</span>, then <span class="ui">Confirm false positive</span> to tune it out.</li>
+        <li>If it's harmless, click <span class="ui g">✗ False positive</span>, then <span class="ui">Confirm false positive</span> to tune it out. This creates a <b>suppression</b> so that rule stops firing for the scope you chose (this principal, this object, both, or the whole rule).</li>
       </ol>
+      <div class="tip"><b>Changed your mind about a false positive?</b> You can revoke it. Go to <span class="nav-chip">Policies &amp; Rules</span> → the <span class="ui g">Exceptions</span> tab, find the suppression, and click <span class="ui g">Revoke</span> — the rule starts firing again for that scope. Revoked suppressions are kept in the trail (toggle <span class="ui g">All</span> to see revoked/expired ones), so there's a full history of what was suppressed and when.</div>
       <div class="note">Use <span class="ui g">⤓ Export</span> to pull alerts for a report or ticket, and <span class="ui g">Refresh</span> to fetch the latest.</div>
     </section>
 

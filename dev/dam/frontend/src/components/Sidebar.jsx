@@ -49,11 +49,14 @@ export default function Sidebar({ collapsed, onToggle }) {
   // Live nav-badge counts (authoritative summaries, not capped lists).
   const { data: alertsSummary } = useApiData('/alerts/summary', { poll: 30000 });
   const { data: quarantineSummary } = useApiData('/quarantine/summary', { poll: 30000 });
+  const { data: agentsSummary } = useApiData('/agents/summary', { poll: 30000 });
   const openAlerts = alertsSummary?.open?.total ?? null;
   const heldSessions = quarantineSummary?.held ?? null;
+  const offlineAgents = agentsSummary?.offline ?? null;
   const badgeFor = (item) => {
     if (item.id === 'alerts') return openAlerts > 0 ? String(openAlerts) : null;
     if (item.id === 'quarantine') return heldSessions > 0 ? String(heldSessions) : null;
+    if (item.id === 'agents') return offlineAgents > 0 ? String(offlineAgents) : null;
     return item.ct;
   };
 
@@ -89,7 +92,7 @@ export default function Sidebar({ collapsed, onToggle }) {
             >
               <span className="nav-icon">{item.ic}</span>
               {!collapsed && <span className="nav-label">{item.label}</span>}
-              {!collapsed && badge && <span className="nav-badge">{badge}</span>}
+              {!collapsed && badge && <span className={`nav-badge ${item.id === 'agents' ? 'warn' : ''}`} title={item.id === 'agents' ? `${badge} agent(s) offline` : undefined}>{badge}</span>}
             </NavLink>
           );
         })}

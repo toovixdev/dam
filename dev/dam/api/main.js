@@ -595,6 +595,20 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE alert_suppressions ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ`);
     await client.query(`UPDATE alert_suppressions SET status = 'active' WHERE status IS NULL`);
 
+    // Analyst notes / disposition timeline for an alert (who ack'd/resolved, with notes).
+    // A separate table so the core `alerts` table is untouched.
+    await client.query(`CREATE TABLE IF NOT EXISTS alert_notes (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id   UUID REFERENCES tenants(id),
+      alert_id    UUID,
+      action      VARCHAR(24),
+      note        TEXT,
+      actor_id    UUID,
+      actor_email VARCHAR(200),
+      created_at  TIMESTAMPTZ DEFAULT now()
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_alert_notes_alert ON alert_notes(alert_id, created_at)`);
+
     // ── Classification: split into OBJECTS (tables/collections) + COLUMNS ──
     await client.query(`CREATE TABLE IF NOT EXISTS classified_objects (
       id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -3965,6 +3979,16 @@ app.get('/api/agents', authRequired, async (req, res) => {
   })));
 });
 
+// Agent counts (tenant-scoped) — backs the sidebar "offline agents" badge.
+app.get('/api/agents/summary', authRequired, async (req, res) => {
+  const r = (await pgPool.query(
+    `SELECT COUNT(*)::int AS total,
+            COUNT(*) FILTER (WHERE status = 'online')::int AS online,
+            COUNT(*) FILTER (WHERE status <> 'online')::int AS offline
+       FROM agents WHERE tenant_id = $1`, [req.user.tenantId])).rows[0];
+  res.json(r);
+});
+
 app.post('/api/agents', authRequired, async (req, res) => {
   let { instance_id, database_id, agent_type, host, version, config } = req.body;
   if (!agent_type) return res.status(400).json({ error: 'agent_type is required' });
@@ -5380,25 +5404,70 @@ app.get('/api/alerts/summary', authRequired, async (req, res) => {
   res.json({ open, ack, closed, all });
 });
 
-// Acknowledge all currently-open alerts (bulk triage).
+// Single alert by id (tenant-scoped) — backs the full-page alert detail view.
+app.get('/api/alerts/:id', authRequired, async (req, res) => {
+  const { rows } = await pgPool.query(
+    `SELECT a.*, d.name as database_name FROM alerts a
+     LEFT JOIN databases d ON a.database_id = d.id
+     WHERE a.tenant_id = $1 AND a.id = $2 LIMIT 1`,
+    [req.user.tenantId, req.params.id]
+  );
+  if (!rows.length) return res.status(404).json({ error: 'Alert not found' });
+  res.json(rows[0]);
+});
+
+// Acknowledge all currently-open alerts (bulk triage). Tenant-scoped. An optional
+// comment is logged against every acknowledged alert + a single bulk audit entry.
 app.post('/api/alerts/ack-all', authRequired, async (req, res) => {
-  const { rows } = await pgPool.query(`UPDATE alerts SET status = 'ack' WHERE status = 'open' RETURNING id`);
+  const note = (req.body && typeof req.body.note === 'string') ? req.body.note.trim() : '';
+  let rows;
+  if (note) {
+    rows = (await pgPool.query(
+      `WITH upd AS (UPDATE alerts SET status = 'ack' WHERE status = 'open' AND tenant_id = $1 RETURNING id)
+       INSERT INTO alert_notes (tenant_id, alert_id, action, note, actor_id, actor_email)
+       SELECT $1, id, 'ack', $2, $3, $4 FROM upd RETURNING alert_id`,
+      [req.user.tenantId, note, req.user.userId, req.user.email]
+    )).rows;
+  } else {
+    rows = (await pgPool.query(`UPDATE alerts SET status = 'ack' WHERE status = 'open' AND tenant_id = $1 RETURNING id`, [req.user.tenantId])).rows;
+  }
+  try { await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'alert.ack_all', resourceType: 'alert', details: { count: rows.length, note: note || null } }); } catch (e) { /* audit optional */ }
   try { broadcast({ type: 'alert', alert: { bulk: 'ack', count: rows.length } }); } catch (e) { /* WS optional */ }
   res.json({ acknowledged: rows.length });
 });
 
-// Update an alert's status (acknowledge / resolve).
+// Update an alert's status (acknowledge / resolve). Optional note on acknowledge;
+// a resolution note is REQUIRED on resolve. Notes are logged to the alert timeline + audit.
 app.post('/api/alerts/:id/status', authRequired, async (req, res) => {
   const status = req.body && req.body.status;
   if (!['open', 'ack', 'resolved'].includes(status)) return res.status(400).json({ error: 'invalid status' });
+  const note = (req.body && typeof req.body.note === 'string') ? req.body.note.trim() : '';
+  if (status === 'resolved' && !note) return res.status(400).json({ error: 'A resolution note is required to resolve an alert.' });
   const resolved = status === 'resolved';
   const { rows } = await pgPool.query(
-    `UPDATE alerts SET status = $2, resolved_at = ${resolved ? 'now()' : 'NULL'} WHERE id = $1 RETURNING id, status`,
-    [req.params.id, status]
+    `UPDATE alerts SET status = $2, resolved_at = ${resolved ? 'now()' : 'NULL'} WHERE id = $1 AND tenant_id = $3 RETURNING id, status`,
+    [req.params.id, status, req.user.tenantId]
   );
   if (!rows.length) return res.status(404).json({ error: 'Alert not found' });
+  if (note || status !== 'open') {
+    await pgPool.query(
+      `INSERT INTO alert_notes (tenant_id, alert_id, action, note, actor_id, actor_email) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [req.user.tenantId, rows[0].id, status, note || null, req.user.userId, req.user.email]
+    );
+    try { await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: `alert.${status}`, resourceType: 'alert', resourceId: rows[0].id, details: { note: note || null } }); } catch (e) { /* audit optional */ }
+  }
   try { broadcast({ type: 'alert', alert: { id: rows[0].id, status: rows[0].status } }); } catch (e) { /* WS optional */ }
   res.json(rows[0]);
+});
+
+// Alert disposition timeline (acknowledge / resolve / false-positive notes).
+app.get('/api/alerts/:id/notes', authRequired, async (req, res) => {
+  const { rows } = await pgPool.query(
+    `SELECT action, note, actor_email, created_at FROM alert_notes
+      WHERE alert_id = $1 AND tenant_id = $2 ORDER BY created_at DESC`,
+    [req.params.id, req.user.tenantId]
+  );
+  res.json(rows);
 });
 
 // Mark an alert as false positive: distinct disposition + create a suppression
@@ -5418,6 +5487,12 @@ app.post('/api/alerts/:id/false-positive', authRequired, async (req, res) => {
     `INSERT INTO alert_suppressions (tenant_id, rule, principal, object_name, reason, created_by)
      VALUES ($1,$2,$3,$4,$5,$6)`,
     [req.user.tenantId, a.rule, supPrincipal, supObject, reason, req.user.email]
+  );
+
+  // Disposition timeline entry (unified with ack/resolve notes).
+  await pgPool.query(
+    `INSERT INTO alert_notes (tenant_id, alert_id, action, note, actor_id, actor_email) VALUES ($1,$2,'false_positive',$3,$4,$5)`,
+    [req.user.tenantId, a.id, reason || null, req.user.userId, req.user.email]
   );
 
   // Audit (control plane) — hash-chained.

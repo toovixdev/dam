@@ -149,6 +149,7 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 .nav-icon { width: 20px; text-align: center; font-size: 14px; flex: none; }
 .nav-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .nav-badge { background: var(--danger-soft); color: var(--danger); font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 10px; flex: none; }
+.nav-badge.warn { background: var(--amber-soft); color: var(--amber); }
 .collapsed .nav-item { justify-content: center; padding: 10px; }
 .collapsed .nav-label, .collapsed .nav-badge, .collapsed .nav-section { display: none; }
 
