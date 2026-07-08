@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>TooVix DAM — Getting Started with Database Activity Monitoring</title>
+<style>
+  :root{
+    --indigo:#6366f1; --indigo-d:#4f46e5; --ink:#0f172a; --body:#334155; --muted:#64748b;
+    --line:#e2e8f0; --bg:#f8fafc; --surface:#ffffff; --soft:#eef2ff;
+    --crit:#dc2626; --high:#f59e0b; --med:#3b82f6; --low:#16a34a; --ok:#16a34a;
+    --radius:14px; --shadow:0 1px 3px rgba(15,23,42,.06),0 8px 24px rgba(15,23,42,.05);
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;font-family:var(--font);color:var(--body);background:var(--bg);line-height:1.65;font-size:16px}
+  a{color:var(--indigo-d);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}
+  h1,h2,h3,h4{color:var(--ink);line-height:1.25;font-weight:800}
+  h2{font-size:1.7rem;margin:0 0 .5rem;scroll-margin-top:80px}
+  h3{font-size:1.2rem;margin:1.8rem 0 .4rem}
+  h4{font-size:1rem;margin:1.2rem 0 .3rem;font-weight:700}
+  p{margin:.6rem 0}
+
+  /* ── Progress bar ── */
+  #progress{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--indigo),#8b5cf6);width:0;z-index:100;transition:width .1s}
+
+  /* ── Top bar ── */
+  .topbar{position:sticky;top:0;z-index:40;background:rgba(255,255,255,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:12px 22px;display:flex;align-items:center;gap:12px}
+  .logo{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--indigo),#8b5cf6);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:900;font-size:15px}
+  .topbar b{color:var(--ink)}
+  .topbar .sub{color:var(--muted);font-size:13px}
+  .topbar .spacer{flex:1}
+  .btn-print{border:1px solid var(--line);background:#fff;color:var(--body);padding:6px 12px;border-radius:8px;font-size:13px;cursor:pointer;font-family:var(--font)}
+  .btn-print:hover{border-color:var(--indigo);color:var(--indigo)}
+
+  /* ── Hero ── */
+  .hero{background:linear-gradient(135deg,#111827,#312e81);color:#fff;padding:56px 22px}
+  .hero .wrap{max-width:1180px;margin:0 auto}
+  .hero .kicker{text-transform:uppercase;letter-spacing:.14em;font-size:12px;color:#a5b4fc;font-weight:700}
+  .hero h1{color:#fff;font-size:2.5rem;margin:.4rem 0 .6rem;max-width:760px}
+  .hero p{color:#cbd5e1;font-size:1.12rem;max-width:680px}
+  .hero .meta{margin-top:22px;display:flex;gap:26px;flex-wrap:wrap;color:#e0e7ff;font-size:14px}
+  .hero .meta b{color:#fff;display:block;font-size:20px}
+
+  /* ── Layout ── */
+  .layout{max-width:1180px;margin:0 auto;padding:34px 22px;display:grid;grid-template-columns:250px 1fr;gap:40px;align-items:start}
+  nav.toc{position:sticky;top:70px;font-size:13.5px;max-height:calc(100vh - 90px);overflow-y:auto;padding-right:8px}
+  nav.toc .toc-title{text-transform:uppercase;letter-spacing:.1em;font-size:11px;color:var(--muted);font-weight:700;margin:16px 0 6px}
+  nav.toc a{display:block;color:var(--body);padding:4px 10px;border-left:2px solid transparent;border-radius:0 6px 6px 0}
+  nav.toc a:hover{background:var(--soft);text-decoration:none}
+  nav.toc a.active{border-left-color:var(--indigo);color:var(--indigo-d);background:var(--soft);font-weight:600}
+  main{min-width:0}
+
+  section{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:30px 34px;margin-bottom:26px}
+  section .part-badge{display:inline-block;background:var(--soft);color:var(--indigo-d);font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:20px;margin-bottom:10px}
+  ul,ol{padding-left:22px;margin:.5rem 0}
+  li{margin:.35rem 0}
+
+  /* ── Callouts ── */
+  .note,.tip,.warn{border-radius:10px;padding:14px 16px 14px 46px;position:relative;margin:16px 0;font-size:14.5px}
+  .note{background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a5f}
+  .tip{background:#f0fdf4;border:1px solid #bbf7d0;color:#14532d}
+  .warn{background:#fff7ed;border:1px solid #fed7aa;color:#7c2d12}
+  .note::before,.tip::before,.warn::before{position:absolute;left:14px;top:13px;font-size:18px}
+  .note::before{content:"ℹ️"} .tip::before{content:"💡"} .warn::before{content:"⚠️"}
+  .note b,.tip b,.warn b{color:inherit}
+
+  /* ── UI button chip (real product labels) ── */
+  .ui{display:inline-block;background:#4f46e5;color:#fff;font-size:.82em;font-weight:600;padding:2px 9px;border-radius:7px;white-space:nowrap;box-shadow:0 1px 2px rgba(0,0,0,.15)}
+  .ui.g{background:#e2e8f0;color:#334155}
+  .nav-chip{display:inline-block;background:#0f172a;color:#e2e8f0;font-size:.82em;padding:2px 9px;border-radius:7px;font-weight:600}
+
+  /* ── Steps ── */
+  .steps{counter-reset:step;list-style:none;padding:0;margin:14px 0}
+  .steps>li{position:relative;padding:2px 0 18px 52px;margin:0}
+  .steps>li::before{counter-increment:step;content:counter(step);position:absolute;left:0;top:0;width:34px;height:34px;background:var(--indigo);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px}
+  .steps>li:not(:last-child)::after{content:"";position:absolute;left:16px;top:38px;bottom:2px;width:2px;background:var(--line)}
+  .steps>li b{color:var(--ink)}
+
+  /* ── Concept cards ── */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;margin:16px 0}
+  .card{border:1px solid var(--line);border-radius:12px;padding:16px 18px;background:#fff}
+  .card .ic{font-size:22px}
+  .card h4{margin:8px 0 4px}
+  .card p{font-size:13.5px;color:var(--muted);margin:0}
+
+  /* ── Severity legend ── */
+  .sev{display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:13px;padding:3px 10px;border-radius:20px}
+  .sev.c{background:#fef2f2;color:var(--crit)} .sev.h{background:#fffbeb;color:var(--high)}
+  .sev.m{background:#eff6ff;color:var(--med)} .sev.l{background:#f0fdf4;color:var(--low)}
+
+  /* ── Table ── */
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{background:var(--bg);color:var(--ink);font-weight:700}
+  tr:hover td{background:#fafbff}
+
+  /* ── Pipeline diagram ── */
+  .pipe{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:18px 0;justify-content:center}
+  .pipe .node{background:var(--soft);border:1px solid #c7d2fe;color:var(--indigo-d);border-radius:10px;padding:12px 14px;text-align:center;font-weight:700;font-size:13.5px;min-width:104px}
+  .pipe .node small{display:block;color:var(--muted);font-weight:500;font-size:11.5px;margin-top:2px}
+  .pipe .arr{color:var(--indigo);font-size:20px;font-weight:800}
+
+  /* ── Glossary ── */
+  dl.gloss dt{font-weight:700;color:var(--ink);margin-top:12px}
+  dl.gloss dd{margin:2px 0 0;color:var(--body)}
+
+  /* ── Quiz ── */
+  .quiz .q{border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin:14px 0}
+  .quiz .q p{font-weight:700;color:var(--ink);margin:0 0 10px}
+  .quiz .opt{display:block;width:100%;text-align:left;border:1px solid var(--line);background:#fff;border-radius:9px;padding:10px 13px;margin:7px 0;cursor:pointer;font-family:var(--font);font-size:14px;color:var(--body);transition:.12s}
+  .quiz .opt:hover{border-color:var(--indigo)}
+  .quiz .opt.correct{background:#f0fdf4;border-color:#16a34a;color:#14532d;font-weight:600}
+  .quiz .opt.wrong{background:#fef2f2;border-color:#dc2626;color:#991b1b}
+  .quiz .fb{font-size:13.5px;margin-top:8px;display:none}
+  .quiz .fb.show{display:block}
+
+  .checklist{list-style:none;padding:0}
+  .checklist li{padding:6px 0 6px 30px;position:relative}
+  .checklist li::before{content:"✓";position:absolute;left:0;top:6px;color:var(--ok);font-weight:900;background:#dcfce7;width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px}
+
+  footer{max-width:1180px;margin:0 auto;padding:30px 22px 60px;color:var(--muted);font-size:13px;text-align:center}
+
+  @media(max-width:900px){
+    .layout{grid-template-columns:1fr;gap:0}
+    nav.toc{display:none}
+    .hero h1{font-size:1.9rem}
+    section{padding:22px 20px}
+  }
+  @media print{
+    #progress,.topbar,nav.toc,.btn-print,.quiz .opt{display:none}
+    .layout{display:block;padding:0}
+    section{break-inside:avoid;box-shadow:none;border:1px solid #ddd}
+    .hero{background:#312e81 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
+</style>
+</head>
+<body>
+<div id="progress"></div>
+
+<div class="topbar">
+  <div class="logo">T</div>
+  <div>
+    <b>TooVix DAM</b> <span class="sub">· Getting Started Tutorial</span>
+  </div>
+  <div class="spacer"></div>
+  <button class="btn-print" onclick="window.print()">🖨 Print / Save as PDF</button>
+</div>
+
+<div class="hero">
+  <div class="wrap">
+    <div class="kicker">Database Activity Monitoring · From Zero</div>
+    <h1>A complete beginner's guide to Database Activity Monitoring</h1>
+    <p>No prior security experience needed. By the end you'll understand what DAM is, why it matters, and exactly how to protect your databases using TooVix DAM — step by step.</p>
+    <div class="meta">
+      <div><b>4 parts</b> Concepts → Product</div>
+      <div><b>~25 min</b> read</div>
+      <div><b>Hands-on</b> real screens & buttons</div>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+  <!-- ─────────── TOC ─────────── -->
+  <nav class="toc" id="toc">
+    <div class="toc-title">Part 1 · Foundations</div>
+    <a href="#what">What is DAM?</a>
+    <a href="#why">Why it matters</a>
+    <a href="#terms">Key terms</a>
+    <div class="toc-title">Part 2 · How DAM works</div>
+    <a href="#pipeline">The monitoring pipeline</a>
+    <a href="#capture">Capturing activity</a>
+    <a href="#policies">Policies & detection</a>
+    <a href="#alerts-c">Alerts & severity</a>
+    <a href="#respond">Responding to threats</a>
+    <a href="#classify">Sensitive data & compliance</a>
+    <div class="toc-title">Part 3 · Using TooVix DAM</div>
+    <a href="#tour">The interface</a>
+    <a href="#quickstart">Quick-start walkthrough</a>
+    <a href="#s-register">1 · Register a database</a>
+    <a href="#s-deploy">2 · Deploy monitoring</a>
+    <a href="#s-classify">3 · Classify data</a>
+    <a href="#s-policies">4 · Tune policies</a>
+    <a href="#s-alerts">5 · Triage alerts</a>
+    <a href="#s-quarantine">6 · Quarantine</a>
+    <a href="#s-compliance">7 · Compliance & reports</a>
+    <a href="#s-copilot">8 · The AI Copilot</a>
+    <a href="#admin">Admin: users & setup</a>
+    <div class="toc-title">Part 4 · Wrap-up</div>
+    <a href="#bestpractice">Best practices</a>
+    <a href="#quiz">Knowledge check</a>
+    <a href="#glossary">Glossary</a>
+  </nav>
+
+  <main>
+    <!-- ══════════ PART 1 ══════════ -->
+    <section id="what">
+      <span class="part-badge">Part 1 · Foundations</span>
+      <h2>What is Database Activity Monitoring?</h2>
+      <p><b>Database Activity Monitoring (DAM)</b> is a security practice — and a category of tools — that <b>watches everything happening inside your databases</b> in real time: who connected, what queries they ran, what data they read or changed, and whether any of it looks risky.</p>
+      <p>Think of your database as a bank vault holding your most valuable asset: <b>data</b> — customer records, payment details, health information, intellectual property. A firewall guards the building's front door, but once someone is <em>inside</em>, who is watching what they actually do with the vault? That's DAM. It's the <b>CCTV + alarm system for your data</b>.</p>
+      <div class="grid">
+        <div class="card"><div class="ic">👁️</div><h4>Visibility</h4><p>A complete record of every login, query, and data access across all your databases.</p></div>
+        <div class="card"><div class="ic">🚨</div><h4>Detection</h4><p>Automatic alerts when someone does something unusual or against the rules.</p></div>
+        <div class="card"><div class="ic">🛡️</div><h4>Response</h4><p>The ability to block, kill, or quarantine a risky session before damage is done.</p></div>
+        <div class="card"><div class="ic">📋</div><h4>Compliance</h4><p>Tamper-proof audit trails that prove to regulators you're watching your data.</p></div>
+      </div>
+      <div class="note"><b>In one sentence:</b> DAM answers the question <em>"Who is doing what to my data, right now — and is any of it dangerous?"</em></div>
+    </section>
+
+    <section id="why">
+      <span class="part-badge">Part 1 · Foundations</span>
+      <h2>Why does DAM matter?</h2>
+      <h3>1. The biggest threats are often <em>inside</em> the network</h3>
+      <p>Traditional security (firewalls, VPNs) protects the perimeter. But data breaches frequently come from credentials that are already trusted: a compromised app account, a curious employee, a departing DBA copying the customer list, or an attacker who stole a password. To them the database says "come in." DAM is what notices the <b>bulk download of 2 million customer records at 3 a.m.</b> — because <em>behaviour</em>, not just identity, is being watched.</p>
+      <h3>2. Compliance requires it</h3>
+      <p>Most data-protection regulations legally require you to monitor and log access to sensitive data:</p>
+      <table>
+        <tr><th>Regulation</th><th>Protects</th><th>What it expects of you</th></tr>
+        <tr><td><b>GDPR</b></td><td>EU personal data</td><td>Track access to personal data; support data-subject requests; report breaches fast.</td></tr>
+        <tr><td><b>PCI-DSS</b></td><td>Card / payment data</td><td>Log all access to cardholder data; monitor privileged users.</td></tr>
+        <tr><td><b>HIPAA</b></td><td>US health records</td><td>Audit who viewed patient data and when.</td></tr>
+        <tr><td><b>SOX</b></td><td>Financial reporting</td><td>Prove the integrity and controls around financial data.</td></tr>
+      </table>
+      <h3>3. When something goes wrong, you need the story</h3>
+      <p>After an incident, the first questions are: <em>What was accessed? By whom? How much? When?</em> Without DAM you're guessing. With it, you have a precise, time-stamped, tamper-evident record — the difference between "we contained it" and "we have no idea."</p>
+      <div class="warn"><b>The stakes:</b> the average data breach costs millions and takes months to even <em>detect</em>. DAM's whole purpose is to collapse that detection time from months to minutes.</div>
+    </section>
+
+    <section id="terms">
+      <span class="part-badge">Part 1 · Foundations</span>
+      <h2>Key terms you'll meet</h2>
+      <p>You don't need to memorise these — they'll click as you go — but here's a friendly map. (Full glossary at the end.)</p>
+      <dl class="gloss">
+        <dt>Principal</dt><dd>The "who" — a user or service account that connects to a database (e.g. <code>app_crm</code>, <code>dba_mueller</code>).</dd>
+        <dt>Query</dt><dd>A command sent to the database. <code>SELECT</code> reads data; <code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code> change it; <code>GRANT</code> changes permissions.</dd>
+        <dt>Session</dt><dd>One connection from a principal to a database, from login to logout — the container for all their queries.</dd>
+        <dt>Sensitive data / PII</dt><dd>Data that must be protected — names, emails, card numbers, tax IDs, health records. <b>PII</b> = Personally Identifiable Information.</dd>
+        <dt>Policy / Rule</dt><dd>A condition that defines "risky." E.g. <em>"alert if anyone reads more than 10,000 rows of PII."</em></dd>
+        <dt>Alert</dt><dd>What's raised when activity matches a policy — the thing a security analyst investigates.</dd>
+        <dt>Quarantine</dt><dd>The response: isolating or blocking a risky account/session so it can't do (more) harm.</dd>
+        <dt>Agent</dt><dd>The lightweight software that actually captures the database activity and feeds it to TooVix.</dd>
+      </dl>
+    </section>
+
+    <!-- ══════════ PART 2 ══════════ -->
+    <section id="pipeline">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>The monitoring pipeline</h2>
+      <p>Every DAM system, TooVix included, works as a pipeline. Activity flows left to right, and at each stage it gets a little more useful:</p>
+      <div class="pipe">
+        <div class="node">Capture<small>see the activity</small></div>
+        <div class="arr">→</div>
+        <div class="node">Analyse<small>enrich & understand</small></div>
+        <div class="arr">→</div>
+        <div class="node">Detect<small>match policies</small></div>
+        <div class="arr">→</div>
+        <div class="node">Alert<small>flag the risky</small></div>
+        <div class="arr">→</div>
+        <div class="node">Respond<small>block / quarantine</small></div>
+        <div class="arr">→</div>
+        <div class="node">Report<small>audit & prove</small></div>
+      </div>
+      <p>The rest of Part 2 walks through each stage. When you reach Part 3, you'll see exactly which TooVix screen maps to each one.</p>
+    </section>
+
+    <section id="capture">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Stage 1 — Capturing activity</h2>
+      <p>Before you can monitor anything, you have to <b>see</b> it. DAM tools capture database activity in a few ways; TooVix supports the main ones:</p>
+      <table>
+        <tr><th>Method</th><th>How it works</th><th>Trade-off</th></tr>
+        <tr><td><b>Agent-based</b></td><td>A small agent runs near the database and reads its activity stream.</td><td>Rich detail; needs deployment.</td></tr>
+        <tr><td><b>Inline proxy</b></td><td>Traffic flows <em>through</em> TooVix, so it can <b>block</b> in real time, not just watch.</td><td>Enables active defense; sits in the path.</td></tr>
+        <tr><td><b>Network / logs</b></td><td>Reads network traffic or the database's own audit logs.</td><td>Low touch; less granular.</td></tr>
+      </table>
+      <p>The choice of method is called the <b>capture mode</b>, and how widely you've deployed it is your <b>coverage</b>. More coverage = fewer blind spots.</p>
+      <div class="tip"><b>Beginner takeaway:</b> a database TooVix doesn't capture is a database it can't protect. Step one is always getting monitoring onto your data sources.</div>
+    </section>
+
+    <section id="policies">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Stage 2 & 3 — Analyse and detect with policies</h2>
+      <p>Raw activity is just noise until you decide <b>what counts as risky</b>. That's the job of <b>policies</b> (also called rules). A policy is a plain-language condition, for example:</p>
+      <ul>
+        <li><em>"Bulk read of sensitive data"</em> — someone reads an unusually large number of PII rows.</li>
+        <li><em>"Privileged off-hours access"</em> — a DBA touches personal data at 3 a.m.</li>
+        <li><em>"Credential brute force"</em> — many failed logins from one source.</li>
+        <li><em>"GRANT of DBA / SYSDBA"</em> — someone hands out top-level privileges.</li>
+      </ul>
+      <h4>Enabled vs Monitor vs Disabled</h4>
+      <p>A crucial concept for beginners — every policy has a <b>state</b>:</p>
+      <table>
+        <tr><th>State</th><th>What happens</th><th>When to use</th></tr>
+        <tr><td><b>Enabled</b></td><td>Matches raise real alerts.</td><td>You trust the rule.</td></tr>
+        <tr><td><b>Monitor</b> (shadow)</td><td>Matches are counted but <em>no</em> alert fires.</td><td>Testing a new rule to see if it's noisy before it wakes anyone up.</td></tr>
+        <tr><td><b>Disabled</b></td><td>The rule never runs.</td><td>Not relevant to you.</td></tr>
+      </table>
+      <div class="tip"><b>Best practice:</b> put a brand-new rule in <b>Monitor</b> first. Watch it for a few days. If it only fires on genuinely bad things, promote it to <b>Enabled</b>. This is how you avoid "alert fatigue."</div>
+    </section>
+
+    <section id="alerts-c">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Stage 4 — Alerts and severity</h2>
+      <p>When enabled-policy conditions are met, DAM raises an <b>alert</b>. Not every alert is equally urgent, so each carries a <b>severity</b> that tells your team what to look at first:</p>
+      <p style="display:flex;gap:10px;flex-wrap:wrap;margin:14px 0">
+        <span class="sev c">● Critical</span>
+        <span class="sev h">● High</span>
+        <span class="sev m">● Medium</span>
+        <span class="sev l">● Low</span>
+      </p>
+      <p>A healthy workflow treats alerts like a queue: <b>acknowledge</b> that you've seen it, <b>investigate</b> what happened, then <b>resolve</b> it (or escalate/quarantine if it's real). Alerts you decide are harmless can be marked a <b>false positive</b>, which teaches the system to stop bugging you about that pattern.</p>
+      <div class="note">A <b>false positive</b> is an alert that turned out to be benign. Tuning them down is a normal, healthy part of running DAM — not a failure.</div>
+    </section>
+
+    <section id="respond">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Stage 5 — Responding to threats</h2>
+      <p>Detection without response is just a very good alarm nobody acts on. When an alert is a genuine threat, DAM lets you act:</p>
+      <div class="grid">
+        <div class="card"><div class="ic">⛔</div><h4>Quarantine an account</h4><p>Block a principal so it can't open new sessions.</p></div>
+        <div class="card"><div class="ic">✂️</div><h4>Terminate a session</h4><p>Kill the live connection immediately, mid-query.</p></div>
+        <div class="card"><div class="ic">↗️</div><h4>Escalate</h4><p>Hand it to on-call / senior responders.</p></div>
+        <div class="card"><div class="ic">🎯</div><h4>Active defense</h4><p>Plant <b>decoys</b> (fake data) to catch and study attackers.</p></div>
+      </div>
+      <p>Quarantine has two flavours you'll use often: <b>Terminate</b> ends the live session but keeps the account blocked, while <b>Release</b> lifts a quarantine once you've confirmed things are fine.</p>
+    </section>
+
+    <section id="classify">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Knowing <em>what</em> to protect — classification & compliance</h2>
+      <p>You can't prioritise protecting data if you don't know <b>where the sensitive stuff lives</b>. <b>Classification</b> scans your databases and labels columns that hold PII — emails, card numbers, tax IDs — so policies and reports can focus on what actually matters.</p>
+      <p>Related tools you'll see in TooVix:</p>
+      <ul>
+        <li><b>Masking</b> — hide or scramble sensitive values (e.g. show <code>****1234</code> instead of a full card number) so people can work without seeing raw PII.</li>
+        <li><b>Access Governance</b> — control <em>who</em> is allowed to reach which data, including <b>just-in-time (JIT)</b> access that's granted temporarily and auto-expires.</li>
+        <li><b>Compliance Center, DSAR & Audit Trail</b> — prove you're doing all of the above: posture against GDPR/PCI/HIPAA/SOX, handle "what data do you hold on me?" requests, and keep an immutable log.</li>
+      </ul>
+      <div class="note">The <b>Audit Trail</b> is deliberately tamper-evident — even admins can't quietly rewrite history. That's what makes it trustworthy to a regulator.</div>
+    </section>
+
+    <!-- ══════════ PART 3 ══════════ -->
+    <section id="tour">
+      <span class="part-badge">Part 3 · Using TooVix DAM</span>
+      <h2>The TooVix interface at a glance</h2>
+      <p>Everything is reached from the <b>left sidebar</b>, grouped by purpose. Here's the map — matched to the concepts you just learned:</p>
+      <table>
+        <tr><th>Sidebar group</th><th>Screens</th><th>What you do there</th></tr>
+        <tr><td><b>Monitor</b></td><td><span class="nav-chip">Dashboard</span> <span class="nav-chip">Active Defense</span></td><td>See overall risk; run decoys & live defense.</td></tr>
+        <tr><td><b>Data Sources</b></td><td><span class="nav-chip">Databases</span> <span class="nav-chip">Discovery</span> <span class="nav-chip">Agents &amp; Coverage</span> <span class="nav-chip">Capture Modes</span></td><td>Register databases and get monitoring onto them.</td></tr>
+        <tr><td><b>Threats</b></td><td><span class="nav-chip">Alerts</span> <span class="nav-chip">Policies &amp; Rules</span> <span class="nav-chip">Quarantine</span></td><td>Detect, triage, and respond.</td></tr>
+        <tr><td><b>Data Security</b></td><td><span class="nav-chip">Classification</span> <span class="nav-chip">Masking</span> <span class="nav-chip">Access Governance</span></td><td>Find, hide, and govern sensitive data.</td></tr>
+        <tr><td><b>Compliance</b></td><td><span class="nav-chip">Compliance Center</span> <span class="nav-chip">DSAR Manager</span> <span class="nav-chip">Audit Trail</span> <span class="nav-chip">Reports</span></td><td>Prove and document your controls.</td></tr>
+        <tr><td><b>AI &amp; Analytics</b></td><td><span class="nav-chip">Copilot</span> <span class="nav-chip">LLM Monitoring</span></td><td>Ask the AI assistant; watch LLM/data egress.</td></tr>
+        <tr><td><b>Administration</b></td><td><span class="nav-chip">Users &amp; Roles</span> <span class="nav-chip">Integrations</span> <span class="nav-chip">Billing &amp; Usage</span> <span class="nav-chip">Settings</span></td><td>Manage people, connections, plan, and preferences.</td></tr>
+      </table>
+      <div class="note">Some screens are <b>admin-only</b> (Users &amp; Roles, Integrations, Billing). If you don't see them, you have a non-admin role — that's expected.</div>
+    </section>
+
+    <section id="quickstart">
+      <span class="part-badge">Part 3 · Using TooVix DAM</span>
+      <h2>Your first day: the quick-start path</h2>
+      <p>Here's the shortest sensible path from empty to protected. Each step below has its own detailed section.</p>
+      <ol class="steps">
+        <li><b>Register a database</b> so TooVix knows about your data source.</li>
+        <li><b>Deploy monitoring</b> to start capturing its activity.</li>
+        <li><b>Classify</b> to discover where your sensitive data is.</li>
+        <li><b>Tune policies</b> so the right things raise alerts.</li>
+        <li><b>Triage alerts</b> as they come in.</li>
+        <li><b>Quarantine</b> anything genuinely malicious.</li>
+        <li><b>Report</b> to prove compliance.</li>
+      </ol>
+      <div class="warn">Button labels below in <span class="ui">purple</span> are the <b>exact</b> text you'll click in the app. Grey <span class="ui g">chips</span> are secondary buttons. If a screen looks slightly different, you may be on a newer build — the sidebar names are your reliable anchor.</div>
+    </section>
+
+    <section id="s-register">
+      <span class="part-badge">Step 1</span>
+      <h2>Register your first database</h2>
+      <p>Go to <span class="nav-chip">Databases</span> in the sidebar.</p>
+      <ol class="steps">
+        <li>Click <span class="ui">Register instance</span> at the top right. (An "instance" is a database server — it can hold several databases.)</li>
+        <li>Choose how to add it:
+          <ul>
+            <li><span class="ui">Cloud Discovery</span> — TooVix auto-finds databases in a connected cloud account.</li>
+            <li><span class="ui">Manual</span> — you type the host, port and engine (e.g. PostgreSQL, MySQL, SQL Server, Oracle) yourself.</li>
+          </ul>
+        </li>
+        <li>Complete the form and confirm. Your instance now appears in the list.</li>
+        <li>To add another database <em>under</em> an existing instance, click <span class="ui g">＋ DB</span> on that instance's row.</li>
+      </ol>
+      <div class="tip">Prefer to let TooVix find things for you? Use <span class="nav-chip">Discovery</span> → <span class="ui">Run scan</span>, then <span class="ui g">Approve</span> and <span class="ui g">Register</span> each database it finds. <span class="ui g">View registered</span> jumps back to the Databases list.</div>
+    </section>
+
+    <section id="s-deploy">
+      <span class="part-badge">Step 2</span>
+      <h2>Deploy monitoring</h2>
+      <p>A registered database isn't watched until an <b>agent</b> is monitoring it.</p>
+      <ol class="steps">
+        <li>From <span class="nav-chip">Databases</span>, click <span class="ui g">Deploy monitoring</span> on the instance — or go to <span class="nav-chip">Agents &amp; Coverage</span> and click <span class="ui">Deploy monitoring</span>.</li>
+        <li>Follow the deploy steps for your environment. The agent begins capturing activity.</li>
+        <li>Check <span class="nav-chip">Agents &amp; Coverage</span> to confirm the agent is healthy (use <span class="ui g">Refresh</span> to reload). To remove one, click <span class="ui g">Remove</span>.</li>
+        <li>Review how activity is captured under <span class="nav-chip">Capture Modes</span>.</li>
+      </ol>
+      <div class="note">Once an agent is live, activity starts flowing into the pipeline you learned about in Part 2 — you'll see it show up on the <span class="nav-chip">Dashboard</span> and, if anything's risky, in <span class="nav-chip">Alerts</span>.</div>
+    </section>
+
+    <section id="s-classify">
+      <span class="part-badge">Step 3</span>
+      <h2>Classify your sensitive data</h2>
+      <p>Now find where the PII lives. Go to <span class="nav-chip">Classification</span>.</p>
+      <ol class="steps">
+        <li>Click <span class="ui">Run Scan</span>. TooVix inspects columns and labels sensitive ones (emails, card numbers, tax IDs, etc.).</li>
+        <li>Review the results. Sensitive columns now carry tags that policies and reports can target.</li>
+        <li>Want to hide sensitive values from certain users? Go to <span class="nav-chip">Masking</span> and click <span class="ui g">Add</span> to create a masking rule for a database.</li>
+      </ol>
+      <div class="tip">Classification is what makes a rule like "bulk read of <em>sensitive</em> data" meaningful — the system now knows which data is sensitive.</div>
+    </section>
+
+    <section id="s-policies">
+      <span class="part-badge">Step 4</span>
+      <h2>Tune your detection policies</h2>
+      <p>Go to <span class="nav-chip">Policies &amp; Rules</span>. New workspaces start with a set of sensible default rules, so you're not beginning from scratch.</p>
+      <ol class="steps">
+        <li>Review the list. Each rule shows its current state.</li>
+        <li>Set a rule's state:
+          <ul>
+            <li><span class="ui g">✓ Enable</span> — raise real alerts on matches.</li>
+            <li><span class="ui g">◎ Move to Monitor</span> — shadow mode: count matches silently while you evaluate the rule.</li>
+            <li><span class="ui g">○ Disable</span> — turn the rule off.</li>
+          </ul>
+        </li>
+        <li>Create your own rule with <span class="ui">New rule</span>.</li>
+        <li>Need to whitelist a known-good pattern? Use <span class="ui g">Add exception</span>; remove one later with <span class="ui g">Revoke</span>. Toggle <span class="ui g">Active</span> / <span class="ui g">All</span> to include revoked/expired items.</li>
+      </ol>
+      <div class="tip">Remember the golden rule from Part 2: new rules start in <b>Monitor</b>, graduate to <b>Enable</b> once proven quiet.</div>
+    </section>
+
+    <section id="s-alerts">
+      <span class="part-badge">Step 5</span>
+      <h2>Triage alerts</h2>
+      <p>This is the day-to-day heartbeat of DAM. Go to <span class="nav-chip">Alerts</span>.</p>
+      <ol class="steps">
+        <li>Work top-down by severity (Critical first). Click an alert to see the who / what / where / when.</li>
+        <li>Move it through its lifecycle:
+          <ul>
+            <li><span class="ui g">✓ Acknowledge</span> — "I've seen this, I'm on it." (<span class="ui g">✓ Acknowledge all</span> clears a batch.)</li>
+            <li><span class="ui g">✓ Resolve</span> — investigated and closed.</li>
+            <li><span class="ui g">↗ Escalate</span> — hand to on-call.</li>
+            <li><span class="ui g">⎚ Session timeline</span> — reconstruct the full session behind the alert.</li>
+          </ul>
+        </li>
+        <li>If it's a genuine threat, hit <span class="ui g">⛔ Quarantine &amp; kill</span> to block the account and kill its live session immediately.</li>
+        <li>If it's harmless, click <span class="ui g">✗ False positive</span>, then <span class="ui">Confirm false positive</span> to tune it out.</li>
+      </ol>
+      <div class="note">Use <span class="ui g">⤓ Export</span> to pull alerts for a report or ticket, and <span class="ui g">Refresh</span> to fetch the latest.</div>
+    </section>
+
+    <section id="s-quarantine">
+      <span class="part-badge">Step 6</span>
+      <h2>Quarantine risky accounts</h2>
+      <p>The <span class="nav-chip">Quarantine</span> screen is your containment console — every held or blocked session and account lives here.</p>
+      <ol class="steps">
+        <li>To proactively block a principal, click <span class="ui">⛔ Quarantine account</span>.</li>
+        <li>Set default containment behaviour with <span class="ui g">⛨ Quarantine policy</span>.</li>
+        <li>On a held session you have two choices:
+          <ul>
+            <li><span class="ui g">Terminate</span> — kill the live session <em>and</em> keep the account blocked.</li>
+            <li><span class="ui g">Release</span> — lift the quarantine; the principal may reconnect.</li>
+          </ul>
+        </li>
+      </ol>
+      <div class="warn"><b>Terminate vs Release:</b> Terminate = "stop this now, stay blocked." Release = "all clear, let them back in." When in doubt, Terminate and investigate — you can always Release afterwards.</div>
+    </section>
+
+    <section id="s-compliance">
+      <span class="part-badge">Step 7</span>
+      <h2>Compliance & reports</h2>
+      <p>Turn all that monitoring into proof.</p>
+      <ul>
+        <li><span class="nav-chip">Compliance Center</span> — see your posture against GDPR / PCI-DSS / HIPAA / SOX. Click <span class="ui g">Generate report</span> or grab an <span class="ui g">Evidence pack</span>; <span class="ui g">Mask</span> a flagged column right from here.</li>
+        <li><span class="nav-chip">DSAR Manager</span> — handle "what data do you hold on me?" requests: <span class="ui">New request</span> to log one, <span class="ui g">Open</span> to work it, <span class="ui g">Download evidence</span>.</li>
+        <li><span class="nav-chip">Audit Trail</span> — the immutable, filterable log of everything. Read-only; use the filters to search.</li>
+        <li><span class="nav-chip">Reports</span> — <span class="ui g">Generate</span> a report, build one with <span class="ui">Custom report</span>, set recurring runs with <span class="ui g">Schedule</span>, and export via <span class="ui g">Export CSV</span> or <span class="ui g">Print / PDF</span>.</li>
+      </ul>
+    </section>
+
+    <section id="s-copilot">
+      <span class="part-badge">Step 8</span>
+      <h2>Meet the AI Copilot</h2>
+      <p>Open <span class="nav-chip">Copilot</span> (or the <span class="ui g">✦ Ask TooVix AI</span> button in the top bar). It has two tabs:</p>
+      <div class="grid">
+        <div class="card"><div class="ic">🛡️</div><h4>Security data</h4><p>Grounded in <em>your</em> live environment. Ask "What are my top risks right now?" or "Summarise today's critical alerts."</p></div>
+        <div class="card"><div class="ic">✧</div><h4>Help</h4><p>Product how-to and security/compliance questions. Ask "How do I create a policy?" — it answers using the real screens.</p></div>
+      </div>
+      <p>An admin first connects an AI account (Anthropic Claude or OpenAI) via the Copilot <span class="ui g">⚙ Configure</span> button. After that, anyone in the workspace can chat.</p>
+      <div class="note">The Help tab is scoped on purpose: it helps with TooVix and database-security topics and politely declines unrelated questions.</div>
+    </section>
+
+    <section id="admin">
+      <span class="part-badge">Part 3 · Admins</span>
+      <h2>Admin setup (Tenant Admins only)</h2>
+      <ul>
+        <li><span class="nav-chip">Users &amp; Roles</span> — click <span class="ui">Invite User</span> to add a teammate and pick their role; <span class="ui g">Resend invite</span> for a pending one. Roles decide which screens each person sees (e.g. a SOC analyst sees Threats; a Compliance officer sees Compliance).</li>
+        <li><span class="nav-chip">Integrations</span> — connect <b>SSO</b> (Azure / Okta / Google), <b>alert channels</b> (Slack / Teams), and the <b>AI key</b>. Each has <span class="ui g">Connect</span> / <span class="ui g">Configure</span>, <span class="ui g">Send test</span>, and <span class="ui g">Disconnect</span>.</li>
+        <li><span class="nav-chip">Billing &amp; Usage</span> — plan and invoices: <span class="ui g">Make a payment</span>, <span class="ui g">Connect</span> a method, download a <span class="ui g">PDF</span>.</li>
+        <li><span class="nav-chip">Settings</span> — upload a logo and <span class="ui g">Apply branding</span>, then <span class="ui g">Save changes</span>. Theme and timezone live in the top bar.</li>
+      </ul>
+    </section>
+
+    <!-- ══════════ PART 4 ══════════ -->
+    <section id="bestpractice">
+      <span class="part-badge">Part 4 · Wrap-up</span>
+      <h2>Best practices for beginners</h2>
+      <ul class="checklist">
+        <li><b>Cover everything.</b> Every unmonitored database is a blind spot — register and deploy widely.</li>
+        <li><b>Classify early.</b> You can't protect sensitive data you haven't located.</li>
+        <li><b>Shadow, then enable.</b> New policies go to Monitor first to avoid alert fatigue.</li>
+        <li><b>Work the queue daily.</b> Acknowledge → investigate → resolve. Don't let alerts pile up.</li>
+        <li><b>Tune false positives.</b> Every one you dismiss makes the system sharper.</li>
+        <li><b>Contain fast, ask later.</b> For a real threat, Quarantine &amp; kill first — you can Release if it was fine.</li>
+        <li><b>Report regularly.</b> Scheduled reports keep auditors (and your future self) happy.</li>
+        <li><b>Least privilege.</b> Give people the narrowest role that lets them do their job.</li>
+      </ul>
+    </section>
+
+    <section id="quiz" class="quiz">
+      <span class="part-badge">Part 4 · Wrap-up</span>
+      <h2>Quick knowledge check</h2>
+      <p>Five questions to see what stuck. Click an answer.</p>
+
+      <div class="q" data-correct="1">
+        <p>1. In one line, what does DAM do?</p>
+        <button class="opt">Encrypts the database at rest</button>
+        <button class="opt">Watches who does what to your data and flags anything risky</button>
+        <button class="opt">Backs up your databases nightly</button>
+        <div class="fb"></div>
+      </div>
+
+      <div class="q" data-correct="2">
+        <p>2. You've written a brand-new detection rule. What's the safest first state?</p>
+        <button class="opt">Enabled — start alerting immediately</button>
+        <button class="opt">Disabled — leave it off forever</button>
+        <button class="opt">Monitor (shadow) — count matches silently while you evaluate it</button>
+        <div class="fb"></div>
+      </div>
+
+      <div class="q" data-correct="0">
+        <p>3. On the Databases screen, which button adds a new database server?</p>
+        <button class="opt">Register instance</button>
+        <button class="opt">Add Database</button>
+        <button class="opt">New Server</button>
+        <div class="fb"></div>
+      </div>
+
+      <div class="q" data-correct="2">
+        <p>4. An alert is a real attack in progress. Fastest safe response?</p>
+        <button class="opt">Mark it a false positive</button>
+        <button class="opt">Export it to CSV</button>
+        <button class="opt">Quarantine &amp; kill — block the account and end its session</button>
+        <div class="fb"></div>
+      </div>
+
+      <div class="q" data-correct="1">
+        <p>5. Why run Classification?</p>
+        <button class="opt">To back up sensitive tables</button>
+        <button class="opt">To discover where PII lives so policies & reports can target it</button>
+        <button class="opt">To delete old data automatically</button>
+        <div class="fb"></div>
+      </div>
+
+      <p id="score" style="font-weight:700;color:var(--ink);margin-top:16px"></p>
+    </section>
+
+    <section id="glossary">
+      <span class="part-badge">Part 4 · Wrap-up</span>
+      <h2>Glossary</h2>
+      <dl class="gloss">
+        <dt>Agent</dt><dd>Software that captures a database's activity and feeds it to TooVix.</dd>
+        <dt>Alert</dt><dd>A flagged event raised when activity matches an enabled policy.</dd>
+        <dt>Audit Trail</dt><dd>An immutable, tamper-evident log of actions — evidence for auditors.</dd>
+        <dt>Capture mode</dt><dd>The method used to observe a database (agent, inline proxy, network/logs).</dd>
+        <dt>Classification</dt><dd>Scanning data to label sensitive columns (PII).</dd>
+        <dt>Coverage</dt><dd>How much of your database estate is actually being monitored.</dd>
+        <dt>DAM</dt><dd>Database Activity Monitoring — watching, detecting, and responding to database activity.</dd>
+        <dt>DSAR</dt><dd>Data Subject Access Request — a person asking what data you hold about them.</dd>
+        <dt>False positive</dt><dd>An alert that turned out to be benign.</dd>
+        <dt>Inline proxy</dt><dd>A capture mode where traffic flows through TooVix, enabling real-time blocking.</dd>
+        <dt>JIT access</dt><dd>Just-in-time access — permissions granted temporarily and auto-expiring.</dd>
+        <dt>Masking</dt><dd>Hiding or scrambling sensitive values from users who don't need to see them.</dd>
+        <dt>PII</dt><dd>Personally Identifiable Information — data that identifies a person.</dd>
+        <dt>Policy / Rule</dt><dd>A condition defining risky activity that should raise an alert.</dd>
+        <dt>Principal</dt><dd>The user or service account performing database activity.</dd>
+        <dt>Quarantine</dt><dd>Isolating/blocking a risky account or session to contain a threat.</dd>
+        <dt>Session</dt><dd>A single connection from a principal, from login to logout.</dd>
+        <dt>Severity</dt><dd>How urgent an alert is: Critical, High, Medium, or Low.</dd>
+        <dt>Shadow / Monitor mode</dt><dd>Running a policy silently — it counts matches but raises no alert.</dd>
+      </dl>
+      <div class="tip"><b>Next step:</b> open TooVix, head to <span class="nav-chip">Databases</span>, and register your first instance. Then ask the <span class="nav-chip">Copilot</span> anything you're unsure about — that's what it's there for.</div>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  TooVix DAM — Getting Started Tutorial · This guide reflects the current product screens. Button labels shown in the app are your source of truth.
+</footer>
+
+<script>
+  // Progress bar
+  const bar = document.getElementById('progress');
+  const onScroll = () => {
+    const h = document.documentElement;
+    const pct = (h.scrollTop) / (h.scrollHeight - h.clientHeight) * 100;
+    bar.style.width = pct + '%';
+  };
+  document.addEventListener('scroll', onScroll, {passive:true}); onScroll();
+
+  // Scroll-spy for the TOC
+  const links = [...document.querySelectorAll('nav.toc a')];
+  const map = new Map(links.map(a => [a.getAttribute('href').slice(1), a]));
+  const spy = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const a = map.get(e.target.id); if (a) a.classList.add('active');
+      }
+    });
+  }, {rootMargin:'-45% 0px -50% 0px'});
+  document.querySelectorAll('section[id]').forEach(s => spy.observe(s));
+
+  // Quiz
+  let answered = 0, correct = 0;
+  document.querySelectorAll('.quiz .q').forEach(q => {
+    const right = +q.dataset.correct;
+    const opts = [...q.querySelectorAll('.opt')];
+    const fb = q.querySelector('.fb');
+    opts.forEach((opt, i) => {
+      opt.addEventListener('click', () => {
+        if (q.dataset.done) return;
+        q.dataset.done = '1'; answered++;
+        opts[right].classList.add('correct');
+        if (i === right) { correct++; fb.textContent = '✅ Correct!'; }
+        else { opt.classList.add('wrong'); fb.textContent = '❌ Not quite — the highlighted answer is right.'; }
+        fb.classList.add('show');
+        const s = document.getElementById('score');
+        s.textContent = `Score: ${correct} / 5` + (answered === 5 ? (correct === 5 ? ' — perfect! You’re ready. 🎉' : ' — nice work, revisit any you missed.') : '');
+      });
+    });
+  });
+</script>
+</body>
+</html>

@@ -177,6 +177,7 @@ export default function Home() {
           <a href="#engines">Engines</a>
           <a href="#compliance">Compliance</a>
           <a href="#pricing">Pricing</a>
+          <a href="/tutorial.html" target="_blank" rel="noopener noreferrer">Guide</a>
         </div>
         <Link className="cta-ghost" to="/login">Sign in</Link>
         <Link className="cta" to="/signup">Start free trial</Link>
@@ -191,6 +192,10 @@ export default function Home() {
           <Link className="btn-lg btn-primary" to="/signup">Start 14-day free trial →</Link>
           <Link className="btn-lg btn-outline" to="/login">Live demo ↗</Link>
         </div>
+        <p className="hero-guide">
+          New to Database Activity Monitoring?{' '}
+          <a href="/tutorial.html" target="_blank" rel="noopener noreferrer">Read the beginner’s guide →</a>
+        </p>
         <div className="hero-trust">
           <span>● SOC 2 Type II certified</span>
           <span>● ISO 27001</span>

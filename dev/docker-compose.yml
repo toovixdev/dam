@@ -418,6 +418,7 @@ services:
     volumes:
       - ./dam/frontend/src:/app/src
       - ./dam/frontend/index.html:/app/index.html
+      - ./dam/frontend/public:/app/public
     networks:
       - dam-net
     depends_on:

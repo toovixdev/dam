@@ -90,7 +90,7 @@ export default function TopBar({ lastRefresh, onRefresh }) {
 
       <div className="topbar-spacer" />
 
-      <button className="topbar-btn ai-btn">✦ Ask TooVix AI</button>
+      <Link to="/copilot" className="topbar-btn ai-btn">✦ Ask TooVix AI</Link>
 
       {lastRefresh && (
         <div className="topbar-refresh">

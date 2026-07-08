@@ -29,7 +29,6 @@ const NAV = [
   { id: 'reports',        ic: '◫', label: 'Reports',           to: '/reports' },
   { sec: 'AI & Analytics' },
   { id: 'copilot',        ic: '✦', label: 'Copilot',           to: '/copilot' },
-  { id: 'assistant',      ic: '✧', label: 'AI Assistant',      to: '/assistant' },
   { id: 'llm',            ic: '✦', label: 'LLM Monitoring',    to: '/llm' },
   { sec: 'Administration' },
   { id: 'users',          ic: '☰', label: 'Users & Roles',     to: '/users' },

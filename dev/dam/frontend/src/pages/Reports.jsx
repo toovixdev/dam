@@ -6,6 +6,8 @@ import Modal from '../components/shared/Modal';
 import { toast } from '../components/shared/Toast';
 import { apiFetch, apiPost, apiDelete } from '../api/client';
 import useApiData from '../hooks/useApiData';
+import { useAuth } from '../context/AuthContext';
+import { printReport } from '../reportPrint';
 
 const LIBRARY = [
   { id: 'gdpr', ic: '⚖', n: 'GDPR compliance', d: 'EU data-subject rights, processing logs, retention', c: 'var(--primary)' },
@@ -31,7 +33,7 @@ function downloadReportCsv(report) {
   a.href = url; a.download = `toovix-${report.type}-report.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
-function ReportView({ report }) {
+function ReportView({ report, onPrint }) {
   return (
     <div className="report-print">
       <div className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>
@@ -65,7 +67,7 @@ function ReportView({ report }) {
 
       <div className="modal-footer no-print" style={{ padding: '6px 0 0', justifyContent: 'flex-end', gap: 8 }}>
         <button className="btn-secondary" onClick={() => downloadReportCsv(report)}>⤓ Export CSV</button>
-        <button className="btn-secondary" onClick={() => window.print()}>🖨 Print / PDF</button>
+        <button className="btn-primary" onClick={onPrint}>⤓ Download / Print PDF</button>
       </div>
     </div>
   );
@@ -74,6 +76,7 @@ function ReportView({ report }) {
 const FREQUENCIES = ['Daily', 'Weekly', 'Monthly', 'Quarterly'];
 
 export default function Reports() {
+  const { user } = useAuth();
   const [tab, setTab] = useState('lib');
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [report, setReport] = useState(null);
@@ -90,6 +93,15 @@ export default function Reports() {
     const r = await apiFetch(`/reports/${id}`);
     setBusy(null);
     if (r && !r.error) setReport(r); else toast('Could not generate report', 'err');
+  };
+
+  const handlePrint = () => {
+    if (!report) return;
+    const ok = printReport(report, {
+      tenantName: user?.tenantName || '',
+      generatedBy: user?.fullName || user?.email || '',
+    });
+    if (!ok) toast('Allow pop-ups for this site to download the PDF', 'err');
   };
 
   const openSchedule = (r) => { setScheduleFor(r); setFreq('Monthly'); setRecipients(''); };
@@ -149,7 +161,7 @@ export default function Reports() {
       )}
 
       <Modal open={!!report} onClose={() => setReport(null)} title={report ? report.title : 'Report'} width={780}>
-        {report && <ReportView report={report} />}
+        {report && <ReportView report={report} onPrint={handlePrint} />}
       </Modal>
 
       <Modal open={!!scheduleFor} onClose={() => setScheduleFor(null)} title={scheduleFor ? `Schedule — ${scheduleFor.n}` : ''} width={460}>

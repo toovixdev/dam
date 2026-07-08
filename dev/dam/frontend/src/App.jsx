@@ -29,7 +29,6 @@ import Masking from './pages/Masking';
 import Discovery from './pages/Discovery';
 import LlmMonitoring from './pages/LlmMonitoring';
 import Copilot from './pages/Copilot';
-import Assistant from './pages/Assistant';
 import ActiveDefense from './pages/ActiveDefense';
 import AccessGovernance from './pages/AccessGovernance';
 import './App.css';
@@ -77,7 +76,6 @@ export default function App() {
           <Route path="/reports" element={<ProtectedRoute screen="reports"><Reports /></ProtectedRoute>} />
           <Route path="/llm" element={<ProtectedRoute screen="llm"><LlmMonitoring /></ProtectedRoute>} />
           <Route path="/copilot" element={<ProtectedRoute screen="copilot"><Copilot /></ProtectedRoute>} />
-          <Route path="/assistant" element={<ProtectedRoute screen="assistant"><Assistant /></ProtectedRoute>} />
           <Route path="/active-defense" element={<ProtectedRoute screen="active-defense"><ActiveDefense /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute screen="users"><Users /></ProtectedRoute>} />
           <Route path="/integrations" element={<ProtectedRoute screen="integrations"><Integrations /></ProtectedRoute>} />

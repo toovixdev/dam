@@ -37,6 +37,9 @@
 .hp-page .hero-ctas .btn-primary:hover{background:var(--primary-600)}
 .hp-page .hero-ctas .btn-outline{border:1.5px solid var(--line);color:var(--ink);background:var(--surface)}
 .hp-page .hero-ctas .btn-outline:hover{border-color:var(--primary-ring);background:var(--primary-soft)}
+.hp-page .hero-guide{margin-top:18px;font-size:13.5px;color:var(--muted)}
+.hp-page .hero-guide a{color:var(--primary);font-weight:600;text-decoration:none}
+.hp-page .hero-guide a:hover{text-decoration:underline}
 .hp-page .hero-trust{margin-top:40px;font-size:12.5px;color:var(--subtle);display:flex;gap:20px;justify-content:center;flex-wrap:wrap}
 .hp-page .hero-trust span{display:flex;align-items:center;gap:5px}
 

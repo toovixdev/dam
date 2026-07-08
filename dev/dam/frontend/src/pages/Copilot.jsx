@@ -21,17 +21,26 @@ function renderText(t) {
   });
 }
 
-const SUGGESTIONS = [
-  'What are my top security risks right now?',
-  'Summarize today’s critical alerts.',
-  'Which databases have sensitive data exposure?',
-  'Are any accounts quarantined, and why?',
-];
+const SUGGESTIONS = {
+  security: [
+    'What are my top security risks right now?',
+    'Summarize today’s critical alerts.',
+    'Which databases have sensitive data exposure?',
+    'Are any accounts quarantined, and why?',
+  ],
+  general: [
+    'How do I add a database to monitor?',
+    'How do I create a detection policy?',
+    'What does the Quarantine screen do?',
+    'What are PCI-DSS logging requirements?',
+  ],
+};
 
 export default function Copilot() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'tenant_admin';
   const [status, setStatus] = useState(null); // { ready, provider, model }
+  const [mode, setMode] = useState('security'); // 'security' (grounded) | 'general'
   const [messages, setMessages] = useState([]); // {role, content}
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -41,13 +50,16 @@ export default function Copilot() {
   useEffect(() => { apiFetch('/assistant/status').then(setStatus).catch(() => setStatus({ ready: false })); }, []);
   useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' }); }, [messages, sending]);
 
+  // Switching mode starts a fresh conversation so grounded/general answers never mix.
+  function switchMode(m) { if (m === mode) return; setMode(m); setMessages([]); }
+
   async function send(text) {
     const content = (text ?? input).trim();
     if (!content || sending) return;
     const next = [...messages, { role: 'user', content }];
     setMessages(next); setInput(''); setSending(true);
     try {
-      const res = await apiPost('/assistant/chat', { messages: next });
+      const res = await apiPost('/assistant/chat', { messages: next, grounded: mode === 'security' });
       if (res.ok && res.data?.reply) setMessages([...next, { role: 'assistant', content: res.data.reply }]);
       else setMessages([...next, { role: 'assistant', content: '⚠️ ' + (res.data?.error || 'Something went wrong.') }]);
     } catch { setMessages([...next, { role: 'assistant', content: '⚠️ Unable to reach the server.' }]); }
@@ -55,10 +67,23 @@ export default function Copilot() {
   }
 
   const ready = status?.ready;
+  const seg = (m, label) => (
+    <button onClick={() => switchMode(m)} style={{
+      padding: '5px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: 'none',
+      borderRadius: 7, background: mode === m ? 'var(--primary, #6366f1)' : 'transparent',
+      color: mode === m ? '#fff' : 'var(--muted)',
+    }}>{label}</button>
+  );
 
   return (
     <Layout>
-      <PageHeader title="Copilot" meta={['AI security assistant', ready ? `${status.provider} · ${status.model}` : 'not configured']}>
+      <PageHeader title="Copilot" meta={['AI assistant', ready ? `${status.provider} · ${status.model}` : 'not configured']}>
+        {ready && (
+          <div style={{ display: 'inline-flex', gap: 2, padding: 3, borderRadius: 9, background: 'var(--surface-2, #f1f5f9)', border: '1px solid var(--line)' }}>
+            {seg('security', '🛡 Security data')}
+            {seg('general', '✧ Help')}
+          </div>
+        )}
         {isAdmin && <button className="btn-secondary" onClick={() => setShowConfig(true)}>⚙ Configure</button>}
       </PageHeader>
 
@@ -81,11 +106,15 @@ export default function Copilot() {
           <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: 14 }}>
             {messages.length === 0 && (
               <div style={{ margin: 'auto', textAlign: 'center', maxWidth: 460 }}>
-                <div style={{ fontSize: 30, marginBottom: 6 }}>✦</div>
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>Ask about your database security</div>
-                <p className="muted" style={{ fontSize: 12.5, marginBottom: 16 }}>Grounded in this workspace’s live alerts, policies, databases and risk.</p>
+                <div style={{ fontSize: 30, marginBottom: 6 }}>{mode === 'security' ? '✦' : '✧'}</div>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>{mode === 'security' ? 'Ask about your database security' : 'How can I help you use TooVix DAM?'}</div>
+                <p className="muted" style={{ fontSize: 12.5, marginBottom: 16 }}>
+                  {mode === 'security'
+                    ? 'Grounded in this workspace’s live alerts, policies, databases and risk.'
+                    : 'Product how-to plus database-security & compliance topics. Off-topic questions are politely declined.'}
+                </p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {SUGGESTIONS.map(s => <button key={s} className="btn-secondary" style={{ textAlign: 'left', fontSize: 12.5 }} onClick={() => send(s)}>{s}</button>)}
+                  {SUGGESTIONS[mode].map(s => <button key={s} className="btn-secondary" style={{ textAlign: 'left', fontSize: 12.5 }} onClick={() => send(s)}>{s}</button>)}
                 </div>
               </div>
             )}
@@ -101,7 +130,7 @@ export default function Copilot() {
             {sending && <div style={{ alignSelf: 'flex-start', color: 'var(--muted)', fontSize: 12.5, padding: '4px 8px' }}>Copilot is thinking…</div>}
           </div>
           <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: 'flex', gap: 10, padding: '12px 16px', borderTop: '1px solid var(--line)' }}>
-            <input value={input} onChange={e => setInput(e.target.value)} placeholder="Ask about alerts, risk, policies, PII exposure…" disabled={sending}
+            <input value={input} onChange={e => setInput(e.target.value)} placeholder={mode === 'security' ? 'Ask about alerts, risk, policies, PII exposure…' : 'Ask how to use TooVix DAM, or a security question…'} disabled={sending}
               style={{ flex: 1, padding: '10px 14px', borderRadius: 10, border: '1px solid var(--line)', fontSize: 13.5, background: 'var(--surface)', color: 'var(--ink)' }} />
             <button type="submit" className="btn-primary" disabled={sending || !input.trim()}>Send</button>
           </form>

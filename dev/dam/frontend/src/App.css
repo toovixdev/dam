@@ -124,7 +124,7 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
   font-size: 16px; font-weight: 700; white-space: nowrap; flex-shrink: 0;
 }
 .brand-dot { width: 30px; height: 30px; border-radius: 9px; background: var(--primary); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: 800; flex: none; }
-.brand-logo { width: 30px; height: 30px; border-radius: 8px; object-fit: contain; flex: none; background: #fff; }
+.brand-logo { width: 44px; height: 44px; border-radius: 8px; object-fit: contain; flex: none; background: #fff; }
 .topbar-brand { display: flex; align-items: center; padding-right: 14px; margin-right: 6px; border-right: 1px solid var(--line); flex: none; }
 .topbar-logo { height: 36px; width: auto; max-width: 180px; object-fit: contain; display: block; }
 .brand-label { overflow: hidden; }
@@ -167,7 +167,7 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 .search-icon { flex: none; font-size: 13px; }
 .search-kbd { font-size: 10px; font-weight: 600; color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; flex: none; }
 .topbar-spacer { flex: 1; }
-.topbar-btn { background: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px; color: var(--muted); font-family: var(--font); display: flex; align-items: center; gap: 4px; }
+.topbar-btn { background: none; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; font-size: 13px; color: var(--muted); font-family: var(--font); display: flex; align-items: center; gap: 4px; text-decoration: none; }
 .topbar-btn:hover { background: var(--surface-2); border-color: var(--primary); color: var(--primary); }
 .ai-btn { color: var(--primary); border-color: var(--primary-soft); background: var(--primary-soft); font-weight: 600; }
 .topbar-refresh { display: flex; align-items: center; gap: 6px; }
