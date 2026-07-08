@@ -13,6 +13,7 @@ const THEMES = [
   { id: 'forest',   ic: '🌲', name: 'Forest',   desc: 'Sage + emerald, calm' },
   { id: 'saffron',  ic: '🪔', name: 'Saffron',  desc: 'Warm tones' },
   { id: 'sunset',   ic: '🌇', name: 'Sunset',   desc: 'Cream + coral, cozy' },
+  { id: 'warm',     ic: '🟧', name: 'Warm',     desc: 'PwC-inspired orange on warm cream' },
   { id: 'mono',     ic: '◐', name: 'Mono',     desc: 'Grayscale, minimalist' },
   { id: 'signature', ic: '◆', name: 'Signature', desc: 'Signature red + gold' },
   { id: 'enterprise', ic: '🔷', name: 'Enterprise Blue', desc: 'Crisp enterprise blue' },

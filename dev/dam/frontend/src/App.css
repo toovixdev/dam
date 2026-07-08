@@ -89,6 +89,19 @@
   --info: #a8761f; --info-soft: #f7eedc;
   --shadow: 0 1px 3px rgba(120,16,46,.08), 0 1px 2px rgba(120,16,46,.05);
 }
+/* Warm — PwC-inspired: signature orange on warm cream, Helvetica Neue */
+[data-theme="warm"] {
+  --primary: #d04a02; --primary-soft: #fce7da;
+  --surface: #ffffff; --surface-2: #fdf5ef;
+  --ink: #2b1a10; --muted: #8a6f5f;
+  --line: #f0e2d6; --line-2: #f8efe6;
+  --danger: #d0301e; --danger-soft: #fbe8e4;
+  --amber: #eb8c00; --amber-soft: #fdf0da;
+  --green: #1f8a4c; --green-soft: #e9f6ee;
+  --info: #b5651d; --info-soft: #f7ecdf;
+  --font: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --shadow: 0 1px 3px rgba(208,74,2,.09), 0 1px 2px rgba(208,74,2,.05);
+}
 /* Enterprise Blue — crisp enterprise look on cool white */
 [data-theme="enterprise"] {
   --primary: #0070f2; --primary-soft: #e6f1fe;
@@ -241,6 +254,7 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 .tp-forest { background: #f0fdf4; } .tp-forest .b1 { background: #16a34a; } .tp-forest .b2 { background: #bbf7d0; } .tp-forest .cta { background: #16a34a; }
 .tp-saffron { background: #fffaf2; } .tp-saffron .b1 { background: #e07b1a; } .tp-saffron .b2 { background: #138808; } .tp-saffron .cta { background: #e07b1a; }
 .tp-sunset { background: #fff5ee; } .tp-sunset .b1 { background: #f97316; } .tp-sunset .b2 { background: #fed7aa; } .tp-sunset .cta { background: #f97316; }
+.tp-warm { background: #fdf5ef; } .tp-warm .b1 { background: #d04a02; } .tp-warm .b2 { background: #ffb600; } .tp-warm .cta { background: #d04a02; }
 .tp-mono { background: #fafafa; border: 1px solid #e4e4e7; } .tp-mono .b1 { background: #3f3f46; } .tp-mono .b2 { background: #d4d4d8; } .tp-mono .cta { background: #18181b; }
 .tp-signature { background: #fbf5ec; } .tp-signature .b1 { background: #c8102e; } .tp-signature .b2 { background: #b8860b; } .tp-signature .cta { background: #c8102e; }
 .tp-enterprise { background: #f4f7fb; } .tp-enterprise .b1 { background: #0070f2; } .tp-enterprise .b2 { background: #1b90ff; } .tp-enterprise .cta { background: #0070f2; }
