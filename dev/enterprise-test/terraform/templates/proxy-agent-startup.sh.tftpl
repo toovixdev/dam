@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y ca-certificates curl gnupg
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || true
+echo "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release; echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -y
+apt-get install -y docker-ce docker-ce-cli containerd.io || apt-get install -y docker.io
+systemctl enable --now docker
+
+# Authenticate Docker to Artifact Registry using the VM's service account.
+GCR_VER=2.1.22
+curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v$GCR_VER/docker-credential-gcr_linux_amd64-$GCR_VER.tar.gz" \
+  | tar xz -C /usr/local/bin docker-credential-gcr && chmod +x /usr/local/bin/docker-credential-gcr
+docker-credential-gcr configure-docker --registries='${registry_host}'
+
+# TooVix INLINE PROXY agent: listens on 3307, forwards to Cloud SQL private IP:3306.
+# Apps in the VPC connect to <this-vm>:3307 instead of Cloud SQL directly → capture + block.
+docker rm -f toovix-proxy 2>/dev/null || true
+docker run -d --name toovix-proxy --restart unless-stopped \
+  --network host \
+  -e MODE=proxy \
+  -e DB_ENGINE=mysql \
+  -e TARGET_HOST='${upstream_host}' \
+  -e TARGET_PORT=3306 \
+  -e LISTEN_PORT=3307 \
+  -e UPSTREAM='${upstream_host}:3306' \
+  -e TARGET_DB='${target_db}' \
+  -e AGENT_ENROLL_TOKEN='${enroll_token}' \
+  -e CONTROL_PLANE='${control_plane_url}' \
+  -e CLICKHOUSE_URL='${clickhouse_url}' \
+  -e CLICKHOUSE_USER='${clickhouse_user}' \
+  -e CLICKHOUSE_PASSWORD='${clickhouse_password}' \
+  '${agent_image}'

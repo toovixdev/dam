@@ -1,0 +1,30 @@
+project_id = "my-gcp-project"
+region     = "us-central1"
+zone       = "us-central1-a"
+
+# Where the DB VPCs reach your TooVix DAM platform (public for POC, or peered private IPs).
+dam_control_plane_url   = "https://dam.suchirasoistories.in"   # or http://<dam-ip>:3000
+dam_clickhouse_url      = "https://ch.suchirasoistories.in:8123" # secure this endpoint!
+dam_clickhouse_user     = "dam_writer"
+dam_clickhouse_password = "CHANGE_ME"
+
+# Must equal AGENT_ENROLL_TOKEN on the DAM platform.
+agent_enroll_token = "CHANGE_ME"
+
+# Build + push dev/dam/agent to Artifact Registry first, then set this:
+agent_image = "us-central1-docker.pkg.dev/my-gcp-project/toovix/agent:latest"
+
+vm_databases = {
+  "db-vm-a" = { subnet_cidr = "10.10.0.0/24", db_name = "orders",    machine_type = "e2-small" }
+  "db-vm-b" = { subnet_cidr = "10.20.0.0/24", db_name = "customers", machine_type = "e2-small" }
+}
+
+cloudsql = {
+  name        = "db-paas"
+  tier        = "db-n1-standard-1"
+  db_name     = "billing"
+  subnet_cidr = "10.30.0.0/24"
+  psa_cidr    = "10.30.240.0/24"
+}
+
+enable_paas_proxy = true
