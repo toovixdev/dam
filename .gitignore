@@ -27,3 +27,7 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+
+# Terraform var files (user-specific; keep only *.example)
+*.tfvars
+!*.tfvars.example
