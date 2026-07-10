@@ -45,6 +45,45 @@ resource "google_sql_user" "dam_svc" {
   password = random_password.paas_dam_svc.result
 }
 
+# ── Bastion / jump host in the Cloud SQL VPC so you can reach the PRIVATE-IP Cloud SQL
+#    from your Mac (IAP SSH → this box → Cloud SQL private IP). No public IP, no SSH keys
+#    (OS Login + IAP). Has the mysql client for quick local tests too. ──
+resource "google_compute_instance" "paas_bastion" {
+  name         = "${var.cloudsql.name}-bastion"
+  machine_type = "e2-micro"
+  zone         = var.zone
+  labels       = var.labels
+
+  boot_disk {
+    initialize_params {
+      image = var.vm_image
+      size  = 15
+    }
+  }
+
+  network_interface {
+    subnetwork = google_compute_subnetwork.paas.id
+    # No access_config → no public IP.
+  }
+
+  metadata = {
+    enable-oslogin = "TRUE"
+  }
+
+  metadata_startup_script = <<-EOT
+    #!/usr/bin/env bash
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update -y
+    apt-get install -y mysql-client
+  EOT
+
+  shielded_instance_config {
+    enable_secure_boot = true
+  }
+
+  depends_on = [google_compute_router_nat.paas]
+}
+
 # ── Option 1: inline-proxy agent VM (capture + block). Apps connect to this VM:3307,
 #    which forwards to Cloud SQL's private IP. Enabled by var.enable_paas_proxy. ──
 resource "google_compute_instance" "paas_proxy" {

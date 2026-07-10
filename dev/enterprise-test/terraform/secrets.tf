@@ -33,7 +33,7 @@ locals {
   db_passwords = merge(
     { for k, v in var.vm_databases : "${k}-root" => random_password.vm_root[k].result },
     { for k, v in var.vm_databases : "${k}-dam-svc" => random_password.vm_dam_svc[k].result },
-    { "${var.cloudsql.name}-root"    = random_password.paas_root.result },
+    { "${var.cloudsql.name}-root" = random_password.paas_root.result },
     { "${var.cloudsql.name}-dam-svc" = random_password.paas_dam_svc.result },
   )
 }

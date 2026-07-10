@@ -76,12 +76,12 @@ variable "vm_databases" {
 # ── The Cloud SQL (PaaS) MySQL database, in its own VPC ──
 variable "cloudsql" {
   type = object({
-    name         = optional(string, "db-paas")
-    tier         = optional(string, "db-n1-standard-1")
-    db_version   = optional(string, "MYSQL_8_0")
-    db_name      = optional(string, "billing")
-    subnet_cidr  = optional(string, "10.30.0.0/24")
-    psa_cidr     = optional(string, "10.30.240.0/24") # /24 reserved for Private Service Access
+    name        = optional(string, "db-paas")
+    tier        = optional(string, "db-n1-standard-1")
+    db_version  = optional(string, "MYSQL_8_0")
+    db_name     = optional(string, "billing")
+    subnet_cidr = optional(string, "10.30.0.0/24")
+    psa_cidr    = optional(string, "10.30.240.0/24") # /24 reserved for Private Service Access
   })
   default = {}
 }
