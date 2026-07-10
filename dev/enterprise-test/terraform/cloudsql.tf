@@ -92,6 +92,7 @@ resource "google_compute_instance" "paas_proxy" {
   machine_type = "e2-small"
   zone         = var.zone
   labels       = var.labels
+  tags         = ["mysql-proxy"] # 3307 firewall targets this tag
 
   boot_disk {
     initialize_params {

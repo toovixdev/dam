@@ -47,12 +47,16 @@ resource "google_compute_firewall" "vm_iap_ssh" {
   }
 }
 
+# 3306 is reachable ONLY from the app tier, and ONLY within this VPC. Tags are
+# network-scoped, so this is app-specific AND same-VPC-only (no other virtual net can
+# reach it — the VPCs aren't peered anyway). Give your future app VM the tag "app-tier".
 resource "google_compute_firewall" "vm_mysql_internal" {
-  for_each      = var.vm_databases
-  name          = "${each.key}-allow-mysql-internal"
-  network       = google_compute_network.vm[each.key].id
-  direction     = "INGRESS"
-  source_ranges = [each.value.subnet_cidr]
+  for_each    = var.vm_databases
+  name        = "${each.key}-allow-mysql-internal"
+  network     = google_compute_network.vm[each.key].id
+  direction   = "INGRESS"
+  source_tags = ["app-tier"]
+  target_tags = ["mysql-db"]
   allow {
     protocol = "tcp"
     ports    = ["3306"]
@@ -98,15 +102,17 @@ resource "google_compute_firewall" "paas_iap_ssh" {
   }
 }
 
-# Allow the app/proxy → Cloud SQL and → the inline-proxy listener, inside the VPC.
+# App → the inline-proxy listener (3307), app-tier only. (Cloud SQL itself is reached over
+# the PSA private path, not governed by this VPC ingress rule.)
 resource "google_compute_firewall" "paas_mysql_internal" {
-  name          = "${var.cloudsql.name}-allow-mysql-internal"
-  network       = google_compute_network.paas.id
-  direction     = "INGRESS"
-  source_ranges = [var.cloudsql.subnet_cidr]
+  name        = "${var.cloudsql.name}-allow-mysql-internal"
+  network     = google_compute_network.paas.id
+  direction   = "INGRESS"
+  source_tags = ["app-tier"]
+  target_tags = ["mysql-proxy"]
   allow {
     protocol = "tcp"
-    ports    = ["3306", "3307"] # 3306 Cloud SQL, 3307 inline-proxy listener
+    ports    = ["3307"] # inline-proxy listener (phase 2)
   }
 }
 

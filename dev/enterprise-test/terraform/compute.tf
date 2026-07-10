@@ -7,6 +7,7 @@ resource "google_compute_instance" "vm_db" {
   machine_type = each.value.machine_type
   zone         = var.zone
   labels       = var.labels
+  tags         = ["mysql-db"] # 3306 firewall targets this tag; app VMs get "app-tier"
 
   boot_disk {
     initialize_params {
