@@ -13,37 +13,49 @@ variable "zone" {
   default = "us-central1-a"
 }
 
-# ── TooVix DAM platform endpoints the agents call (reachable from the DB VPCs via NAT) ──
-variable "dam_control_plane_url" {
+# ── Agents / DAM (PHASE 2) — leave off for now; infra applies without any of these. ──
+variable "deploy_agents" {
+  type        = bool
+  default     = false
+  description = "PHASE 2: when true, VMs install the TooVix agent + a proxy VM fronts Cloud SQL. Leave false to build just the databases."
+}
+
+variable "vm_image" {
   type        = string
-  description = "Base URL of the TooVix control-plane API, e.g. https://dam.example.com or http://<ip>:3000"
+  default     = "ubuntu-os-cloud/ubuntu-2204-lts" # MySQL 8 available natively
+  description = "Boot image for the MySQL VMs."
+}
+
+variable "dam_control_plane_url" {
+  type    = string
+  default = ""
 }
 
 variable "dam_clickhouse_url" {
-  type        = string
-  description = "ClickHouse HTTP endpoint the agent writes events to, e.g. https://ch.example.com:8123"
+  type    = string
+  default = ""
 }
 
 variable "dam_clickhouse_user" {
-  type        = string
-  description = "Write-only ClickHouse user for agents (NOT default/admin)."
-  default     = "dam_writer"
+  type    = string
+  default = "dam_writer"
 }
 
 variable "dam_clickhouse_password" {
   type      = string
   sensitive = true
+  default   = ""
 }
 
 variable "agent_enroll_token" {
-  type        = string
-  sensitive   = true
-  description = "Must match AGENT_ENROLL_TOKEN on the DAM platform."
+  type      = string
+  sensitive = true
+  default   = ""
 }
 
 variable "agent_image" {
-  type        = string
-  description = "TooVix agent image in Artifact Registry, e.g. us-central1-docker.pkg.dev/PROJECT/toovix/agent:latest"
+  type    = string
+  default = ""
 }
 
 # ── The two MySQL-on-VM databases (each gets its own VPC + private subnet) ──

@@ -22,7 +22,7 @@ output "cloudsql" {
 
 output "paas_proxy_ip" {
   description = "Inline-proxy agent VM private IP (if enabled) — point apps here on :3307."
-  value       = var.enable_paas_proxy ? google_compute_instance.paas_proxy[0].network_interface[0].network_ip : null
+  value       = (var.enable_paas_proxy && var.deploy_agents) ? google_compute_instance.paas_proxy[0].network_interface[0].network_ip : null
 }
 
 output "nat_egress_note" {

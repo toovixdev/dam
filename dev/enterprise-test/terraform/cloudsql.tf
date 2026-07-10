@@ -48,7 +48,7 @@ resource "google_sql_user" "dam_svc" {
 # ── Option 1: inline-proxy agent VM (capture + block). Apps connect to this VM:3307,
 #    which forwards to Cloud SQL's private IP. Enabled by var.enable_paas_proxy. ──
 resource "google_compute_instance" "paas_proxy" {
-  count        = var.enable_paas_proxy ? 1 : 0
+  count        = (var.enable_paas_proxy && var.deploy_agents) ? 1 : 0
   name         = "${var.cloudsql.name}-proxy"
   machine_type = "e2-small"
   zone         = var.zone

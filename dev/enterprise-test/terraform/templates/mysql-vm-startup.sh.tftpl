@@ -1,54 +1,42 @@
 #!/usr/bin/env bash
 set -euxo pipefail
-
-# ── Install Docker ──
 export DEBIAN_FRONTEND=noninteractive
+
+# ── MySQL 8 installed NATIVELY (no Docker) — like a real DB host ──
 apt-get update -y
+apt-get install -y mysql-server
+
+# Listen on the private NIC (still firewalled to the subnet only).
+sed -i 's/^bind-address.*/bind-address = 0.0.0.0/' /etc/mysql/mysql.conf.d/mysqld.cnf || true
+systemctl enable mysql
+systemctl restart mysql
+for i in $(seq 1 30); do mysqladmin ping --silent 2>/dev/null && break; sleep 2; done
+
+# Root password + the test database + an app user + a least-privilege service user.
+mysql <<'EOSQL'
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '${mysql_root_password}';
+CREATE DATABASE IF NOT EXISTS ${db_name};
+CREATE USER IF NOT EXISTS 'app'@'%' IDENTIFIED BY '${mysql_root_password}';
+GRANT ALL PRIVILEGES ON ${db_name}.* TO 'app'@'%';
+CREATE USER IF NOT EXISTS 'dam_svc'@'%' IDENTIFIED BY '${dam_svc_password}';
+GRANT SELECT, PROCESS ON *.* TO 'dam_svc'@'%';
+FLUSH PRIVILEGES;
+EOSQL
+
+%{ if deploy_agents ~}
+# ── (Later) TooVix network agent — only rendered when deploy_agents = true ──
 apt-get install -y ca-certificates curl gnupg
 install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || true
-echo "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release; echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io || apt-get install -y docker.io
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || true
+echo "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release; echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -y && apt-get install -y docker-ce docker-ce-cli containerd.io || apt-get install -y docker.io
 systemctl enable --now docker
-
-# ── Authenticate Docker to Artifact Registry using the VM's service account ──
-GCR_VER=2.1.22
-curl -fsSL "https://github.com/GoogleCloudPlatform/docker-credential-gcr/releases/download/v$GCR_VER/docker-credential-gcr_linux_amd64-$GCR_VER.tar.gz" \
-  | tar xz -C /usr/local/bin docker-credential-gcr && chmod +x /usr/local/bin/docker-credential-gcr
-docker-credential-gcr configure-docker --registries='${registry_host}'
-
-# ── MySQL 8 (root + a least-privilege service user; NEVER expose root to the platform) ──
-docker rm -f mysql 2>/dev/null || true
-docker run -d --name mysql --restart unless-stopped \
-  -e MYSQL_ROOT_PASSWORD='${mysql_root_password}' \
-  -e MYSQL_DATABASE='${db_name}' \
-  -p 3306:3306 \
-  mysql:8
-
-# Wait for MySQL, then create the least-privilege DAM service account.
-for i in $(seq 1 60); do
-  if docker exec mysql mysqladmin ping -uroot -p'${mysql_root_password}' --silent 2>/dev/null; then break; fi
-  sleep 3
-done
-docker exec mysql mysql -uroot -p'${mysql_root_password}' -e "
-  CREATE USER IF NOT EXISTS 'dam_svc'@'%' IDENTIFIED BY '${dam_svc_password}';
-  GRANT SELECT, PROCESS ON *.* TO 'dam_svc'@'%';
-  FLUSH PRIVILEGES;"
-
-# ── TooVix network agent (passive libpcap capture on the primary NIC) ──
 docker rm -f toovix-agent 2>/dev/null || true
 docker run -d --name toovix-agent --restart unless-stopped \
   --network host --cap-add NET_RAW --cap-add NET_ADMIN \
-  -e MODE=network \
-  -e DB_ENGINE=mysql \
-  -e TARGET_HOST=127.0.0.1 \
-  -e TARGET_PORT=3306 \
-  -e TARGET_DB='${target_db}' \
-  -e CAPTURE_IFACE='${capture_iface}' \
-  -e AGENT_ENROLL_TOKEN='${enroll_token}' \
-  -e CONTROL_PLANE='${control_plane_url}' \
-  -e CLICKHOUSE_URL='${clickhouse_url}' \
-  -e CLICKHOUSE_USER='${clickhouse_user}' \
-  -e CLICKHOUSE_PASSWORD='${clickhouse_password}' \
+  -e MODE=network -e DB_ENGINE=mysql -e TARGET_HOST=127.0.0.1 -e TARGET_PORT=3306 \
+  -e TARGET_DB='${target_db}' -e CAPTURE_IFACE='${capture_iface}' \
+  -e AGENT_ENROLL_TOKEN='${enroll_token}' -e CONTROL_PLANE='${control_plane_url}' \
+  -e CLICKHOUSE_URL='${clickhouse_url}' -e CLICKHOUSE_USER='${clickhouse_user}' -e CLICKHOUSE_PASSWORD='${clickhouse_password}' \
   '${agent_image}'
+%{ endif ~}
