@@ -126,6 +126,13 @@ instances should enroll and show monitored.
 
 `terraform destroy` tears the whole estate down.
 
+**If destroy hangs on the Cloud SQL PSA peering** (`Failed to delete connection; Producer
+services … are still using this connection`), delete the VPC peering directly, then re-run:
+```bash
+gcloud compute networks peerings delete servicenetworking-googleapis-com --network=db-paas-vpc --quiet
+terraform destroy -auto-approve
+```
+
 ---
 
 ## Caveats / notes
