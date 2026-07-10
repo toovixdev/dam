@@ -80,7 +80,7 @@ resource "aws_route_table_association" "vm_private" {
 # SG: no inbound SSH (SSM handles admin). 3306 only from within this VPC (future app).
 resource "aws_security_group" "vm" {
   for_each    = var.vm_databases
-  name        = "sg-${each.key}"
+  name        = "${each.key}-mysql-sg"
   description = "MySQL EC2 - intra-VPC 3306 only"
   vpc_id      = aws_vpc.vm[each.key].id
 
@@ -187,7 +187,7 @@ resource "aws_db_subnet_group" "rds" {
 
 # Seeder EC2 (SSM) reaches RDS; RDS only accepts 3306 from the seeder's SG.
 resource "aws_security_group" "seeder" {
-  name        = "sg-${var.rds.name}-seeder"
+  name        = "${var.rds.name}-seeder-sg"
   description = "Seeder/jump for RDS"
   vpc_id      = aws_vpc.rds.id
   egress {
@@ -200,7 +200,7 @@ resource "aws_security_group" "seeder" {
 }
 
 resource "aws_security_group" "rds" {
-  name        = "sg-${var.rds.name}-rds"
+  name        = "${var.rds.name}-rds-sg"
   description = "RDS MySQL - 3306 from seeder only"
   vpc_id      = aws_vpc.rds.id
   ingress {
