@@ -1,0 +1,24 @@
+# ─── PHASE 1: build just the 3 databases (no DAM/agent needed) ───
+subscription_id = "00000000-0000-0000-0000-000000000000"  # az account show --query id -o tsv
+location        = "centralindia"
+
+# Your SSH public key + your public IP (for jump-box access).
+admin_ssh_public_key = "ssh-ed25519 AAAA... azure-mysql-test"   # or: file("~/.ssh/azure_mysql.pub") in a .tf
+admin_source_ip      = "203.0.113.4/32"                          # curl -s ifconfig.me  (append /32)
+
+# 2 MySQL-on-VM databases, each in its own VNet + subnet.
+vm_databases = {
+  "db-vm-a" = { vnet_cidr = "10.10.0.0/16", subnet_cidr = "10.10.0.0/24", db_name = "orders" }
+  "db-vm-b" = { vnet_cidr = "10.20.0.0/16", subnet_cidr = "10.20.0.0/24", db_name = "customers" }
+}
+
+# 1 Azure Database for MySQL Flexible Server (PaaS), private (VNet-injected).
+mysql_flexible = {
+  name        = "db-paas"
+  sku_name    = "B_Standard_B1ms"
+  db_name     = "billing"
+  vnet_cidr   = "10.30.0.0/16"
+  subnet_cidr = "10.30.1.0/24"
+}
+
+deploy_agents = false
