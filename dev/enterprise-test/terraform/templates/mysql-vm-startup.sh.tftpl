@@ -23,6 +23,12 @@ GRANT SELECT, PROCESS ON *.* TO 'dam_svc'@'%';
 FLUSH PRIVILEGES;
 EOSQL
 
+%{ if seed_b64 != "" ~}
+# ── Seed schema + data for this database ──
+echo '${seed_b64}' | base64 --decode > /tmp/seed.sql
+mysql -uroot -p'${mysql_root_password}' < /tmp/seed.sql
+%{ endif ~}
+
 %{ if deploy_agents ~}
 # ── (Later) TooVix network agent — only rendered when deploy_agents = true ──
 apt-get install -y ca-certificates curl gnupg

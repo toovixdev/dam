@@ -1,5 +1,5 @@
 # ─── PHASE 1: build just the 3 databases (no DAM/agent needed) ───
-project_id = "my-gcp-project"
+project_id = "project-6bd9f529-96ec-4f5f-8b6"
 region     = "us-central1"
 zone       = "us-central1-a"
 

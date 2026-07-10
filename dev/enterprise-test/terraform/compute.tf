@@ -29,6 +29,7 @@ resource "google_compute_instance" "vm_db" {
     deploy_agents       = var.deploy_agents
     db_name             = each.value.db_name
     target_db           = each.key
+    seed_b64            = fileexists("${path.module}/seed/${each.value.db_name}.sql") ? base64encode(file("${path.module}/seed/${each.value.db_name}.sql")) : ""
     registry_host       = var.agent_image != "" ? split("/", var.agent_image)[0] : ""
     mysql_root_password = random_password.vm_root[each.key].result
     dam_svc_password    = random_password.vm_dam_svc[each.key].result

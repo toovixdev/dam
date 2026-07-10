@@ -70,18 +70,18 @@ resource "google_compute_instance" "paas_bastion" {
     enable-oslogin = "TRUE"
   }
 
-  metadata_startup_script = <<-EOT
-    #!/usr/bin/env bash
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update -y
-    apt-get install -y mysql-client
-  EOT
+  metadata_startup_script = templatefile("${path.module}/templates/bastion-startup.sh.tftpl", {
+    cloudsql_host  = google_sql_database_instance.paas.private_ip_address
+    admin_user     = google_sql_user.root.name
+    admin_password = random_password.paas_root.result
+    seed_b64       = fileexists("${path.module}/seed/${var.cloudsql.db_name}.sql") ? base64encode(file("${path.module}/seed/${var.cloudsql.db_name}.sql")) : ""
+  })
 
   shielded_instance_config {
     enable_secure_boot = true
   }
 
-  depends_on = [google_compute_router_nat.paas]
+  depends_on = [google_compute_router_nat.paas, google_sql_database.paas, google_sql_user.root]
 }
 
 # ── Option 1: inline-proxy agent VM (capture + block). Apps connect to this VM:3307,
