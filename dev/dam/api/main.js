@@ -1613,6 +1613,13 @@ app.post('/api/auth/resolve', async (req, res) => {
     for (const r of rows) {
       workspaces.push({ slug: r.slug, hasPassword: r.has_password, sso: await ssoProvidersFor(r.tenant_id) });
     }
+    // Distinguish "no account" from "account exists but not yet verified", so the login
+    // UI can tell the user to verify their email instead of implying no account exists.
+    if (workspaces.length === 0) {
+      const unverified = (await pgPool.query(
+        "SELECT 1 FROM users WHERE email = $1 AND status = 'unverified' LIMIT 1", [email])).rows.length > 0;
+      if (unverified) return res.json({ found: false, unverified: true });
+    }
     res.json({ found: workspaces.length > 0, workspaces });
   } catch (err) {
     console.error('[Auth] resolve failed:', err.message);

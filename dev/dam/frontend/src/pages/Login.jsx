@@ -68,6 +68,8 @@ export default function Login() {
       if (res.ok && data.found) {
         if (data.workspaces.length === 1) setWorkspace(data.workspaces[0]);
         else setChoices(data.workspaces);
+      } else if (data.unverified) {
+        setError('This account isn’t verified yet. Check your email for the activation link to finish setting it up (or ask an admin to resend it).');
       } else {
         setError("We couldn't find an account with that email. Check the address or create a workspace.");
       }
