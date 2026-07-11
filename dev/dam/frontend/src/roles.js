@@ -3,9 +3,9 @@
 export const ROLE_ALLOW = {
   tenant_admin: '*',
   soc_analyst:  ['dashboard', 'active-defense', 'databases', 'discovery', 'agents', 'capture-modes', 'alerts', 'policies', 'quarantine', 'classification', 'llm', 'support'],
-  db_owner:     ['dashboard', 'databases', 'agents', 'capture-modes', 'alerts', 'classification', 'access', 'reports', 'support'],
-  compliance:   ['dashboard', 'databases', 'classification', 'masking', 'access', 'compliance', 'dsar', 'audit', 'reports', 'llm', 'support'],
-  auditor:      ['dashboard', 'compliance', 'audit', 'reports', 'support'],
+  db_owner:     ['dashboard', 'databases', 'agents', 'capture-modes', 'alerts', 'classification', 'access', 'reports', 'change-log', 'support'],
+  compliance:   ['dashboard', 'databases', 'classification', 'masking', 'access', 'compliance', 'dsar', 'audit', 'change-log', 'reports', 'llm', 'support'],
+  auditor:      ['dashboard', 'compliance', 'audit', 'change-log', 'reports', 'support'],
   viewer:       ['dashboard', 'access', 'reports'],
 };
 

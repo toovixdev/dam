@@ -19,6 +19,7 @@ import Classification from './pages/Classification';
 import Compliance from './pages/Compliance';
 import Dsar from './pages/Dsar';
 import AuditTrail from './pages/AuditTrail';
+import ChangeLog from './pages/ChangeLog';
 import Users from './pages/Users';
 import Integrations from './pages/Integrations';
 import Billing from './pages/Billing';
@@ -75,6 +76,7 @@ export default function App() {
           <Route path="/compliance" element={<ProtectedRoute screen="compliance"><Compliance /></ProtectedRoute>} />
           <Route path="/dsar" element={<ProtectedRoute screen="dsar"><Dsar /></ProtectedRoute>} />
           <Route path="/audit" element={<ProtectedRoute screen="audit"><AuditTrail /></ProtectedRoute>} />
+          <Route path="/change-log" element={<ProtectedRoute screen="change-log"><ChangeLog /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute screen="reports"><Reports /></ProtectedRoute>} />
           <Route path="/llm" element={<ProtectedRoute screen="llm"><LlmMonitoring /></ProtectedRoute>} />
           <Route path="/copilot" element={<ProtectedRoute screen="copilot"><Copilot /></ProtectedRoute>} />

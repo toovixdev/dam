@@ -26,6 +26,7 @@ const NAV = [
   { id: 'compliance',     ic: '⚖', label: 'Compliance Center', to: '/compliance', ct: '2' },
   { id: 'dsar',           ic: '◔', label: 'DSAR Manager',      to: '/dsar', ct: '1' },
   { id: 'audit',          ic: '⛓', label: 'Audit Trail',       to: '/audit' },
+  { id: 'change-log',     ic: '⛭', label: 'Change Log',        to: '/change-log' },
   { id: 'reports',        ic: '◫', label: 'Reports',           to: '/reports' },
   { sec: 'AI & Analytics' },
   { id: 'copilot',        ic: '✦', label: 'Copilot',           to: '/copilot' },

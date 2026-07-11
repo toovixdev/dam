@@ -791,6 +791,27 @@ async function runAuthMigration() {
     )`);
     await client.query(`ALTER TABLE quarantine_sessions ADD COLUMN IF NOT EXISTS engine VARCHAR(40)`);
     await client.query(`ALTER TABLE quarantine_sessions ADD COLUMN IF NOT EXISTS db_host VARCHAR(200)`);
+    // Captured schema/privilege changes (DDL/GRANT), for change-attestation: app teams
+    // provide the CR# each change was carried out under.
+    await client.query(`CREATE TABLE IF NOT EXISTS ddl_changes (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID,
+      event_key VARCHAR(80),
+      event_ts TIMESTAMPTZ,
+      principal VARCHAR(160),
+      database_name VARCHAR(200),
+      object_name VARCHAR(300),
+      operation VARCHAR(20),
+      statement TEXT,
+      in_window BOOLEAN DEFAULT false,
+      cr_number VARCHAR(60),
+      status VARCHAR(20) DEFAULT 'pending',
+      notes TEXT,
+      attested_by VARCHAR(160),
+      attested_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      UNIQUE(tenant_id, event_key)
+    )`);
     await client.query(`ALTER TABLE quarantine_sessions ADD COLUMN IF NOT EXISTS db_port INT`);
     await client.query(`ALTER TABLE quarantine_sessions ADD COLUMN IF NOT EXISTS exec_result TEXT`);
     const qCount = await client.query('SELECT COUNT(*) AS n FROM quarantine_sessions');
@@ -6271,6 +6292,126 @@ app.put('/api/settings/change-window', authRequired, async (req, res) => {
   await pgPool.query('UPDATE tenants SET change_window = $2 WHERE id = $1', [req.user.tenantId, JSON.stringify(cw)]);
   res.json(cw);
 });
+
+// ── DDL Change Log (schema/privilege-change attestation) ──────────────────────
+// Best-effort extraction of the target object from a DDL statement.
+function parseDdlObject(sql) {
+  const m = String(sql || '').match(/\b(?:TABLE|VIEW|INDEX|DATABASE|SCHEMA|PROCEDURE|FUNCTION|TRIGGER)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?[`"]?([\w.]+)[`"]?/i);
+  return m ? m[1] : null;
+}
+// Pull captured DDL/GRANT events from the data plane into the durable, annotatable log.
+// Idempotent (keyed by a stable event hash); computes in/out of the change window in CH.
+async function syncDdlChanges(tenantId, days = 90) {
+  const evDb = await eventsDbFor(tenantId);
+  const outside = outsideWindowClause(await changeWindowFor(tenantId));
+  let rows;
+  try {
+    rows = await chQuery(`SELECT toString(timestamp) AS ts, principal, database_name, operation, sql_text,
+        (NOT ${outside}) AS in_window,
+        toString(cityHash64(sql_text, toString(timestamp), principal)) AS ekey
+      FROM ${evDb}.events
+      WHERE tenant_id = '${chEsc(tenantId)}' AND operation IN ('DDL','GRANT') AND timestamp >= now() - INTERVAL ${parseInt(days, 10)} DAY
+      ORDER BY timestamp DESC LIMIT 5000`);
+  } catch (e) { return; }
+  for (const r of rows) {
+    await pgPool.query(
+      `INSERT INTO ddl_changes (tenant_id, event_key, event_ts, principal, database_name, object_name, operation, statement, in_window)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (tenant_id, event_key) DO NOTHING`,
+      [tenantId, r.ekey, r.ts, r.principal || 'unknown', r.database_name || '', parseDdlObject(r.sql_text), r.operation, r.sql_text, +r.in_window === 1]
+    );
+  }
+}
+
+app.get('/api/ddl-changes', authRequired, async (req, res) => {
+  const days = Math.min(parseInt(req.query.days, 10) || 30, 365);
+  await syncDdlChanges(req.user.tenantId, days).catch(() => {});
+  const params = [req.user.tenantId, days];
+  let sql = `SELECT * FROM ddl_changes WHERE tenant_id = $1 AND event_ts >= now() - make_interval(days => $2::int)`;
+  if (req.query.status) { params.push(req.query.status); sql += ` AND status = $${params.length}`; }
+  sql += ' ORDER BY event_ts DESC LIMIT 2000';
+  const rows = (await pgPool.query(sql, params)).rows;
+  const all = (await pgPool.query(`SELECT status, in_window FROM ddl_changes WHERE tenant_id = $1 AND event_ts >= now() - make_interval(days => $2::int)`, [req.user.tenantId, days])).rows;
+  res.json({
+    changes: rows,
+    summary: {
+      total: all.length,
+      pending: all.filter((r) => r.status === 'pending').length,
+      attested: all.filter((r) => r.status === 'attested').length,
+      unauthorized: all.filter((r) => r.status === 'unauthorized').length,
+      outOfWindow: all.filter((r) => !r.in_window).length,
+    },
+  });
+});
+
+app.put('/api/ddl-changes/:id', authRequired, async (req, res) => {
+  const { cr_number, status, notes } = req.body || {};
+  const st = ['pending', 'attested', 'unauthorized', 'exempt'].includes(status) ? status : null;
+  // Recording a CR# auto-attests unless the caller set a different status.
+  const finalStatus = st || (cr_number ? 'attested' : null);
+  const r = (await pgPool.query(
+    `UPDATE ddl_changes SET
+        cr_number = CASE WHEN $3::text IS NULL THEN cr_number ELSE $3 END,
+        status    = COALESCE($4, status),
+        notes     = CASE WHEN $5::text IS NULL THEN notes ELSE $5 END,
+        attested_by = $6, attested_at = now()
+     WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+    [req.params.id, req.user.tenantId, cr_number === undefined ? null : cr_number, finalStatus, notes === undefined ? null : notes, req.user.email]
+  )).rows[0];
+  if (!r) return res.status(404).json({ error: 'Change not found' });
+  res.json(r);
+});
+
+function ddlCsv(rows) {
+  const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const head = ['Timestamp (UTC)', 'Principal', 'Database', 'Object', 'Operation', 'In change window', 'CR#', 'Status', 'Statement'];
+  const lines = [head.join(',')];
+  for (const r of rows) lines.push([r.event_ts, r.principal, r.database_name, r.object_name, r.operation, r.in_window ? 'yes' : 'no', r.cr_number, r.status, r.statement].map(esc).join(','));
+  return lines.join('\n');
+}
+
+app.get('/api/ddl-changes/export', authRequired, async (req, res) => {
+  await syncDdlChanges(req.user.tenantId, 90).catch(() => {});
+  const rows = (await pgPool.query(`SELECT event_ts, principal, database_name, object_name, operation, in_window, cr_number, status, statement FROM ddl_changes WHERE tenant_id = $1 ORDER BY event_ts DESC LIMIT 5000`, [req.user.tenantId])).rows;
+  res.setHeader('Content-Type', 'text/csv');
+  res.setHeader('Content-Disposition', 'attachment; filename="ddl-change-log.csv"');
+  res.send(ddlCsv(rows));
+});
+
+// Email the pending (un-attested) DDL log to application teams so they can supply CR#s.
+app.post('/api/ddl-changes/email', authRequired, async (req, res) => {
+  const recipients = String((req.body && req.body.recipients) || '').split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
+  if (!recipients.length) return res.status(400).json({ error: 'At least one recipient is required' });
+  if (!platformConfigured()) return res.status(400).json({ error: 'Platform email is not configured (set it in the admin console).' });
+  await syncDdlChanges(req.user.tenantId, 30).catch(() => {});
+  const rows = (await pgPool.query(`SELECT event_ts, principal, database_name, object_name, operation, in_window, cr_number, status, statement FROM ddl_changes WHERE tenant_id = $1 AND status = 'pending' ORDER BY event_ts DESC LIMIT 500`, [req.user.tenantId])).rows;
+  const tenantName = (await pgPool.query('SELECT name FROM tenants WHERE id = $1', [req.user.tenantId])).rows[0]?.name || 'your workspace';
+  const trs = rows.slice(0, 100).map((r) => `<tr>
+      <td style="padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:12px">${new Date(r.event_ts).toISOString().slice(0, 16).replace('T', ' ')}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:12px">${r.principal || ''}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:12px">${r.database_name || ''}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:12px">${r.object_name || '—'}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:12px">${r.operation}${r.in_window ? '' : ' <b style="color:#dc2626">(off-window)</b>'}</td>
+      <td style="padding:6px 10px;border-bottom:1px solid #e2e8f0;font-family:monospace;font-size:11px">${String(r.statement || '').replace(/</g, '&lt;').slice(0, 120)}</td>
+    </tr>`).join('');
+  const html = `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a">
+    <h2 style="margin:0 0 4px">DDL change attestation — ${tenantName}</h2>
+    <p style="font-size:13px;color:#475569;margin:0 0 14px">${rows.length} schema/privilege change(s) captured need a Change Request (CR#) recorded. Please reply with the CR# for each (full log attached as CSV).</p>
+    <table style="border-collapse:collapse;width:100%"><thead><tr>
+      ${['When (UTC)', 'Principal', 'Database', 'Object', 'Operation', 'Statement'].map((h) => `<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #cbd5e1;font-size:11px;color:#475569">${h}</th>`).join('')}
+    </tr></thead><tbody>${trs || '<tr><td style="padding:10px">No pending changes 🎉</td></tr>'}</tbody></table>
+    ${rows.length > 100 ? `<p style="font-size:12px;color:#475569">…and ${rows.length - 100} more in the attached CSV.</p>` : ''}
+  </div>`;
+  try {
+    await getPlatformMailer().sendMail({
+      from: platformFrom(), to: recipients.join(','),
+      subject: `[TooVix DAM] DDL change attestation — ${rows.length} pending`,
+      html, attachments: [{ filename: 'ddl-change-log.csv', content: ddlCsv(rows) }],
+    });
+  } catch (e) { return res.status(502).json({ error: 'Email send failed: ' + e.message }); }
+  await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'ddl.attestation.email', resourceType: 'ddl_changes', details: { recipients, pending: rows.length } });
+  res.json({ sent: recipients.length, pending: rows.length });
+});
+
 function policyToClickhouse(def, ctx = {}) {
   const where = [];
   const ignored = [];
