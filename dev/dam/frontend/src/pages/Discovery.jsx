@@ -6,7 +6,7 @@ import KpiCard from '../components/KpiCard';
 import Modal from '../components/shared/Modal';
 import { toast } from '../components/shared/Toast';
 import useApiData from '../hooks/useApiData';
-import { apiPost } from '../api/client';
+import { apiPost, apiDelete } from '../api/client';
 
 // Port-set presets — mirrors dev/dam/discovery/portsets.js so the UI can preview
 // how many ports/host a scan will probe. The scanner identifies engines by
@@ -88,8 +88,12 @@ export default function Discovery() {
       if (!(cfg.providers || []).length) { toast('Pick at least one cloud to enumerate', 'err'); return; }
       const res = await apiPost('/discovery/scan', { scan_type: 'cloud_api', scope: cfg.providers.join(', '), providers: cfg.providers });
       setScanCfg(null);
-      if (res && res.ok) { toast(`Cloud discovery queued for ${cfg.providers.map((p) => p.toUpperCase()).join(', ')}`, 'ok'); refetchJobs(); setTimeout(refetchCands, 1500); }
-      else toast(res?.data?.error || 'Could not start cloud discovery', 'err');
+      if (res && res.ok) {
+        const { found = 0, errors = [] } = res.data || {};
+        if (errors.length) toast(`Cloud discovery: ${found} found · ${errors.join('; ')}`, found ? 'ok' : 'err');
+        else toast(`Cloud discovery complete — ${found} instance(s) found`, 'ok');
+        refetchJobs(); setTimeout(refetchCands, 1000);
+      } else toast(res?.data?.error || 'Could not start cloud discovery', 'err');
       return;
     }
     const ports_count = cfg.preset === 'custom' ? countCustomPorts(cfg.customPorts) : PORT_PRESETS[cfg.preset].count;
@@ -140,6 +144,8 @@ export default function Discovery() {
         <KpiCard icon="⚠" iconBg="var(--danger-soft)" iconColor="var(--danger)" label="Unmonitored sensitive" value={sensitiveCount} detail="PII detected" detailType="down" />
         <KpiCard icon="☁" iconBg="var(--info-soft)" iconColor="var(--info)" label="Clouds covered" value={cloudsScanned} detail="across discovered candidates" />
       </section>
+
+      <CloudConnectors tenantClouds={tenantClouds} cloudLabel={cloudLabel} onChanged={() => { refetchJobs(); refetchCands(); }} />
 
       <div className="card">
         <div className="card-header"><span className="card-title">Discovery candidates</span><span className="card-sub">approve to register · deploy agents from Agent Fleet</span></div>
@@ -280,5 +286,126 @@ export default function Discovery() {
         )}
       </Modal>
     </Layout>
+  );
+}
+
+// ── Cloud connectors — the READ-ONLY credential per cloud that agentless discovery uses ──
+function CloudConnectors({ tenantClouds, cloudLabel, onChanged }) {
+  const { data, refetch } = useApiData('/discovery/connectors', { poll: 0 });
+  const [adding, setAdding] = useState(false);
+  const [busy, setBusy] = useState(null);
+  const connectors = Array.isArray(data) ? data : [];
+
+  const test = async (id) => {
+    setBusy(id);
+    const res = await apiPost(`/discovery/connectors/${id}/test`, {});
+    setBusy(null);
+    if (res?.ok && res.data.ok) toast(`Connector OK — ${res.data.count} instance(s) visible`, 'ok');
+    else toast(res?.data?.error || 'Connector test failed', 'err');
+    refetch();
+  };
+  const remove = async (id) => {
+    setBusy(id);
+    const res = await apiDelete(`/discovery/connectors/${id}`);
+    setBusy(null);
+    if (res?.ok) { toast('Connector removed', 'ok'); refetch(); onChanged?.(); }
+    else toast('Could not remove', 'err');
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-header">
+        <span className="card-title">Cloud connectors</span>
+        <span className="card-sub">read-only credentials for agentless (cloud-API) discovery</span>
+        <button className="btn-secondary" style={{ marginLeft: 'auto', padding: '5px 12px', fontSize: 12.5 }} onClick={() => setAdding(true)}>＋ Connect a cloud</button>
+      </div>
+      <div className="card-body no-pad">
+        <table className="data-table">
+          <thead><tr><th>Cloud</th><th>Project / account</th><th>Identity</th><th>Status</th><th>Last run</th><th /></tr></thead>
+          <tbody>
+            {connectors.length === 0 && <tr><td colSpan={6} className="chart-empty">No cloud connectors. Add one to enumerate managed databases (Cloud SQL, RDS…) without a network scan.</td></tr>}
+            {connectors.map((c) => (
+              <tr key={c.id}>
+                <td><b style={{ textTransform: 'uppercase' }}>{c.provider}</b></td>
+                <td className="mono" style={{ fontSize: 12 }}>{c.project || '—'}</td>
+                <td className="mono" style={{ fontSize: 11.5 }}>{c.identity || '—'}</td>
+                <td>{c.status === 'ok' ? <span className="badge green dot">ok</span> : c.status === 'error' ? <span className="badge red dot" title={c.last_result}>error</span> : <span className="badge">configured</span>}</td>
+                <td style={{ fontSize: 12 }} title={c.last_result || ''}>{c.last_run_at ? new Date(c.last_run_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} disabled={busy === c.id} onClick={() => test(c.id)}>Test</button>{' '}
+                  <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }} disabled={busy === c.id} onClick={() => remove(c.id)}>Remove</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <Modal open={adding} onClose={() => setAdding(false)} title="Connect a cloud (read-only)" width={640}>
+        <AddConnector tenantClouds={tenantClouds} cloudLabel={cloudLabel} onClose={() => setAdding(false)} onSaved={() => { setAdding(false); refetch(); }} />
+      </Modal>
+    </div>
+  );
+}
+
+const GCP_SETUP = `# Create a READ-ONLY service account for Cloud SQL discovery (run in your GCP project):
+export PROJECT=YOUR_PROJECT_ID
+gcloud iam service-accounts create toovix-dam-discovery \\
+  --project=$PROJECT --display-name="TooVix DAM discovery (read-only)"
+gcloud projects add-iam-policy-binding $PROJECT \\
+  --member="serviceAccount:toovix-dam-discovery@$PROJECT.iam.gserviceaccount.com" \\
+  --role="roles/cloudsql.viewer"
+# Generate a key to paste below (or use Workload Identity Federation for keyless):
+gcloud iam service-accounts keys create sa.json \\
+  --iam-account=toovix-dam-discovery@$PROJECT.iam.gserviceaccount.com
+cat sa.json   # paste the JSON contents into the field`;
+
+function AddConnector({ tenantClouds, cloudLabel, onClose, onSaved }) {
+  const clouds = tenantClouds?.length ? tenantClouds : ['gcp'];
+  const [provider, setProvider] = useState(clouds[0]);
+  const [project, setProject] = useState('');
+  const [credential, setCredential] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const save = async () => {
+    if (!credential.trim()) return toast('Paste the read-only credential (key JSON)', 'err');
+    setBusy(true);
+    const res = await apiPost('/discovery/connectors', { provider, project: project.trim() || undefined, credential });
+    setBusy(false);
+    if (res?.ok) { toast('Cloud connector saved', 'ok'); onSaved(); }
+    else toast(res?.data?.error || 'Could not save connector', 'err');
+  };
+
+  return (
+    <>
+      <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>
+        Provide a <b>read-only</b> credential you create in your cloud (the DAM never creates identities).
+        It calls the provider's control-plane API to list managed databases — it never connects to the DB
+        or your network. The credential is stored write-only (never shown again).
+      </p>
+      <div className="form-row" style={{ display: 'flex', gap: 12 }}>
+        <div className="form-field" style={{ flex: 1 }}><label>Cloud</label>
+          <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+            {clouds.map((id) => <option key={id} value={id}>{id.toUpperCase()} — {cloudLabel(id)}</option>)}
+          </select>
+        </div>
+        <div className="form-field" style={{ flex: 1 }}><label>Project / account id</label>
+          <input value={project} onChange={(e) => setProject(e.target.value)} placeholder="my-gcp-project (optional — read from key)" />
+        </div>
+      </div>
+      {provider === 'gcp' && (
+        <div className="form-field">
+          <label>How to create the read-only service account</label>
+          <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{GCP_SETUP}</pre>
+        </div>
+      )}
+      <div className="form-field"><label>{provider === 'gcp' ? 'Service-account key (JSON)' : 'Read-only credential (JSON)'}</label>
+        <textarea className="mono" value={credential} onChange={(e) => setCredential(e.target.value)} rows={7} style={{ width: '100%', fontSize: 11 }} placeholder='{ "type": "service_account", "project_id": "…", "client_email": "…", "private_key": "-----BEGIN PRIVATE KEY-----\\n…" }' />
+        <span className="muted" style={{ fontSize: 11 }}>Paste the key file contents. Stored write-only; used read-only against the cloud API.</span>
+      </div>
+      <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end', gap: 8 }}>
+        <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save connector'}</button>
+      </div>
+    </>
   );
 }

@@ -553,6 +553,21 @@ async function runAuthMigration() {
       discovered_at   TIMESTAMPTZ DEFAULT now(),
       UNIQUE (tenant_id, endpoint)
     )`);
+    // Cloud discovery connectors — a customer-provisioned READ-ONLY credential per
+    // cloud account. The credential is write-only (never returned to the browser).
+    await client.query(`CREATE TABLE IF NOT EXISTS cloud_connectors (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     UUID REFERENCES tenants(id),
+      provider      VARCHAR(20) NOT NULL,
+      project       VARCHAR(200),
+      identity      VARCHAR(300),
+      credential    JSONB,
+      status        VARCHAR(20) DEFAULT 'configured',
+      last_run_at   TIMESTAMPTZ,
+      last_result   VARCHAR(400),
+      created_at    TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (tenant_id, provider, project)
+    )`);
     // Reachability tracking: when a scan no longer sees a known candidate, we flag
     // it unreachable rather than re-discovering or silently keeping it as "new".
     await client.query(`ALTER TABLE discovery_candidates ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ`);
@@ -6101,13 +6116,21 @@ app.post('/api/discovery/candidates', async (req, res) => {
 
 // Record a scan request (the agent picks it up / runs it). Captures the port-set.
 app.post('/api/discovery/scan', authRequired, async (req, res) => {
-  const { scan_type, scope, port_set, ports_count } = req.body;
+  const { scan_type, scope, port_set, ports_count, providers } = req.body;
   const id = 'scan-' + Date.now().toString(36);
   await pgPool.query(
     `INSERT INTO discovery_jobs (id, tenant_id, scan_type, scope, port_set, ports_count, status)
      VALUES ($1,$2,$3,$4,$5,$6,'running')`,
     [id, req.user.tenantId, scan_type || 'network', scope || null, port_set || null, ports_count || 0]
   );
+  // Cloud API discovery runs centrally right here (outbound to the provider's API).
+  if (scan_type === 'cloud_api') {
+    const picks = (Array.isArray(providers) && providers.length ? providers : await cloudProvidersFor(req.user.tenantId))
+      .filter((p) => CLOUD_PROVIDER_IDS.has(p));
+    const result = await runCloudDiscovery(req.user.tenantId, picks, id);
+    const row = (await pgPool.query('SELECT * FROM discovery_jobs WHERE id = $1', [id])).rows[0];
+    return res.status(201).json({ ...row, found: result.found, errors: result.errors });
+  }
   const { rows } = await pgPool.query('SELECT * FROM discovery_jobs WHERE id = $1', [id]);
   res.status(201).json(rows[0]);
 });
@@ -6319,6 +6342,141 @@ app.put('/api/settings/cloud-providers', authRequired, async (req, res) => {
     : [];
   await pgPool.query('UPDATE tenants SET cloud_providers = $2 WHERE id = $1', [req.user.tenantId, JSON.stringify(list)]);
   res.json({ providers: list });
+});
+
+// ── Cloud discovery: provider adapters (agentless enumeration of managed DBs) ──
+const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+// GCP: sign a JWT with the service-account key → exchange for an access token (no SDK).
+async function gcpAccessToken(sa) {
+  if (!sa || !sa.client_email || !sa.private_key) throw new Error('Invalid service-account key (need client_email + private_key)');
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const claims = b64url(JSON.stringify({
+    iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform.read-only',
+    aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
+  }));
+  const sig = require('crypto').createSign('RSA-SHA256').update(`${header}.${claims}`).sign(sa.private_key);
+  const jwt = `${header}.${claims}.${b64url(sig)}`;
+  const resp = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
+  });
+  const j = await resp.json().catch(() => ({}));
+  if (!j.access_token) throw new Error(j.error_description || j.error || 'Google token exchange failed');
+  return j.access_token;
+}
+function gcpEngine(v) {
+  const s = String(v || '').toUpperCase();
+  if (s.startsWith('MYSQL')) return { engine: 'mysql', port: 3306 };
+  if (s.startsWith('POSTGRES')) return { engine: 'postgresql', port: 5432 };
+  if (s.startsWith('SQLSERVER')) return { engine: 'mssql', port: 1433 };
+  return { engine: 'unknown', port: null };
+}
+async function gcpEnumerate(connector) {
+  const sa = connector.credential;
+  const project = connector.project || sa.project_id;
+  if (!project) throw new Error('No GCP project id');
+  const token = await gcpAccessToken(sa);
+  const resp = await fetch(`https://sqladmin.googleapis.com/v1/projects/${encodeURIComponent(project)}/instances`, { headers: { Authorization: `Bearer ${token}` } });
+  const j = await resp.json().catch(() => ({}));
+  if (j.error) throw new Error(j.error.message || 'Cloud SQL list failed');
+  return (j.items || []).map((i) => {
+    const { engine, port } = gcpEngine(i.databaseVersion);
+    const ips = i.ipAddresses || [];
+    const ip = (ips.find((a) => a.type === 'PRIVATE') || ips.find((a) => a.type === 'PRIMARY') || ips[0] || {}).ipAddress;
+    return {
+      endpoint: i.connectionName || `${project}:${i.region}:${i.name}`,
+      host: ip || i.name, port, engine, version: i.databaseVersion,
+      region: i.region, cloud_provider: 'gcp', deployment_type: 'cloudsql', source: 'cloud_api',
+      confidence: 'high', signal: 'clean',
+    };
+  });
+}
+const CLOUD_ADAPTERS = { gcp: gcpEnumerate };
+
+// Upsert a cloud-discovered candidate (skips endpoints already registered as instances).
+async function upsertCloudCandidate(tenantId, c, jobId) {
+  if (!c.endpoint) return false;
+  const known = await pgPool.query(`SELECT 1 FROM db_instances WHERE tenant_id = $1 AND host = $2 AND port IS NOT DISTINCT FROM $3 LIMIT 1`, [tenantId, c.host, c.port]);
+  if (known.rows.length) return false;
+  const r = await pgPool.query(
+    `INSERT INTO discovery_candidates (tenant_id, endpoint, host, port, engine, version, source, deployment_type, cloud_provider, region, signal, confidence, job_id, last_seen, reachable)
+     VALUES ($1,$2,$3,$4,$5,$6,'cloud_api',$7,$8,$9,$10,'high',$11, now(), true)
+     ON CONFLICT (tenant_id, endpoint) DO UPDATE SET engine = EXCLUDED.engine, version = EXCLUDED.version, host = EXCLUDED.host, region = EXCLUDED.region, last_seen = now(), reachable = true
+     RETURNING (xmax = 0) AS created`,
+    [tenantId, c.endpoint, c.host, c.port, c.engine, c.version, c.deployment_type, c.cloud_provider, c.region, c.signal || 'clean', jobId || null]
+  );
+  return r.rows[0].created;
+}
+
+// Run cloud enumeration for the selected providers (uses each provider's connector).
+async function runCloudDiscovery(tenantId, providers, jobId) {
+  let found = 0, errors = [];
+  for (const pid of providers) {
+    const adapter = CLOUD_ADAPTERS[pid];
+    if (!adapter) { errors.push(`${pid}: no adapter yet`); continue; }
+    const conns = (await pgPool.query('SELECT * FROM cloud_connectors WHERE tenant_id = $1 AND provider = $2', [tenantId, pid])).rows;
+    if (!conns.length) { errors.push(`${pid}: no connector configured`); continue; }
+    for (const conn of conns) {
+      try {
+        const cands = await adapter(conn);
+        for (const c of cands) if (await upsertCloudCandidate(tenantId, c, jobId)) found++;
+        await pgPool.query(`UPDATE cloud_connectors SET last_run_at = now(), last_result = $2, status = 'ok' WHERE id = $1`, [conn.id, `${cands.length} instance(s)`]);
+      } catch (e) {
+        errors.push(`${pid}: ${e.message}`);
+        await pgPool.query(`UPDATE cloud_connectors SET last_run_at = now(), last_result = $2, status = 'error' WHERE id = $1`, [conn.id, e.message.slice(0, 380)]);
+      }
+    }
+  }
+  if (jobId) await pgPool.query(`UPDATE discovery_jobs SET status = 'complete', found = $2 WHERE id = $1`, [jobId, found]).catch(() => {});
+  return { found, errors };
+}
+
+// ── Cloud connectors CRUD (credential is write-only) ──
+app.get('/api/discovery/connectors', authRequired, async (req, res) => {
+  const rows = (await pgPool.query(
+    `SELECT id, provider, project, identity, status, last_run_at, last_result, created_at FROM cloud_connectors WHERE tenant_id = $1 ORDER BY created_at DESC`,
+    [req.user.tenantId]
+  )).rows;
+  res.json(rows);
+});
+app.post('/api/discovery/connectors', authRequired, async (req, res) => {
+  const { provider, project } = req.body || {};
+  if (!CLOUD_PROVIDER_IDS.has(provider)) return res.status(400).json({ error: 'Unsupported provider' });
+  let cred = req.body.credential;
+  if (typeof cred === 'string') { try { cred = JSON.parse(cred); } catch { return res.status(400).json({ error: 'Credential must be valid JSON (the service-account key file)' }); } }
+  if (!cred || typeof cred !== 'object') return res.status(400).json({ error: 'Credential (read-only key) is required' });
+  const identity = cred.client_email || cred.clientId || null;
+  const proj = project || cred.project_id || null;
+  if (!proj) return res.status(400).json({ error: 'Project id is required' });
+  const row = (await pgPool.query(
+    `INSERT INTO cloud_connectors (tenant_id, provider, project, identity, credential, status)
+     VALUES ($1,$2,$3,$4,$5,'configured')
+     ON CONFLICT (tenant_id, provider, project) DO UPDATE SET identity = EXCLUDED.identity, credential = EXCLUDED.credential, status = 'configured'
+     RETURNING id, provider, project, identity, status, created_at`,
+    [req.user.tenantId, provider, proj, identity, JSON.stringify(cred)]
+  )).rows[0];
+  res.status(201).json(row);
+});
+app.post('/api/discovery/connectors/:id/test', authRequired, async (req, res) => {
+  const conn = (await pgPool.query('SELECT * FROM cloud_connectors WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
+  if (!conn) return res.status(404).json({ error: 'Connector not found' });
+  const adapter = CLOUD_ADAPTERS[conn.provider];
+  if (!adapter) return res.status(400).json({ error: `No adapter for ${conn.provider} yet` });
+  try {
+    const cands = await adapter(conn);
+    await pgPool.query(`UPDATE cloud_connectors SET last_run_at = now(), last_result = $2, status = 'ok' WHERE id = $1`, [conn.id, `${cands.length} instance(s)`]);
+    res.json({ ok: true, count: cands.length, sample: cands.slice(0, 5).map((c) => ({ name: c.endpoint, engine: c.engine, region: c.region })) });
+  } catch (e) {
+    await pgPool.query(`UPDATE cloud_connectors SET last_run_at = now(), last_result = $2, status = 'error' WHERE id = $1`, [conn.id, e.message.slice(0, 380)]);
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+app.delete('/api/discovery/connectors/:id', authRequired, async (req, res) => {
+  const { rowCount } = await pgPool.query('DELETE FROM cloud_connectors WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
+  if (!rowCount) return res.status(404).json({ error: 'Connector not found' });
+  res.json({ ok: true });
 });
 
 // ── DDL Change Log (schema/privilege-change attestation) ──────────────────────
