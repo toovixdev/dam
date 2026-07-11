@@ -218,17 +218,18 @@ export default function Databases() {
   );
 }
 
-const DISCOVERY = [
-  { name: 'aurora-mysql-billing-2', meta: 'AWS RDS · us-east-1 · MySQL 8.0', engine: 'mysql', version: '8.0', deployment_type: 'rds', cloud_provider: 'aws', region: 'us-east-1' },
-  { name: 'azuresql-analytics', meta: 'Azure SQL · westeurope · SQL Server', engine: 'mssql', version: 'Azure SQL', deployment_type: 'azuresql', cloud_provider: 'azure', region: 'westeurope' },
-  { name: 'ocidb-hr-prod', meta: 'OCI · us-ashburn-1 · Oracle Autonomous', engine: 'oracle', version: 'Autonomous', deployment_type: 'oci', cloud_provider: 'oci', region: 'us-ashburn-1' },
-];
+// Managed/PaaS deployment types that come from cloud-API discovery (not network scans).
+const PAAS_TYPES = ['rds', 'aurora', 'azuresql', 'cloudsql', 'atlas', 'oci', 'cosmos'];
 
 function RegisterInstanceForm({ onClose, onDone }) {
   const [mode, setMode] = useState('manual');
   const [done, setDone] = useState([]);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: '', engine: 'oracle', host: '', deployment_type: 'onprem', environment: 'prod', initial_database: '' });
+  // Real cloud-discovered candidates (populated by cloud-API discovery), not a demo list.
+  const { data: candData } = useApiData('/discovery/candidates', { poll: mode === 'auto' ? 15000 : 0 });
+  const cloudCandidates = (Array.isArray(candData) ? candData : []).filter(
+    (c) => c.source === 'cloud_api' || PAAS_TYPES.includes((c.deployment_type || '').toLowerCase()));
 
   const register = async (payload, label) => {
     const res = await apiPost('/instances', payload);
@@ -236,9 +237,10 @@ function RegisterInstanceForm({ onClose, onDone }) {
     toast((res && res.data && res.data.error) || 'Registration failed', 'err'); return false;
   };
 
-  const registerDiscovery = async (d) => {
-    const ok = await register({ name: d.name, engine: d.engine, version: d.version, host: d.name, deployment_type: d.deployment_type, cloud_provider: d.cloud_provider, region: d.region }, d.name);
-    if (ok) setDone((x) => [...x, d.name]);
+  const registerDiscovery = async (c) => {
+    const label = c.name || c.endpoint || c.host;
+    const ok = await register({ name: c.name || c.endpoint, engine: c.engine, version: c.version, host: c.host || c.endpoint, port: c.port || undefined, deployment_type: c.deployment_type, cloud_provider: c.cloud_provider, region: c.region }, label);
+    if (ok) setDone((x) => [...x, c.id || label]);
   };
 
   const saveManual = async () => {
@@ -291,13 +293,27 @@ function RegisterInstanceForm({ onClose, onDone }) {
 
       {mode === 'auto' && (
         <div>
-          <p className="muted" style={{ fontSize: 13, margin: '0 0 12px' }}>Managed instances discovered from your cloud accounts.</p>
-          {DISCOVERY.map((d) => (
-            <div className="scanrow" key={d.name}>
-              <span className="badge green">found</span> <b>{d.name}</b> <span className="muted">{d.meta}</span>
-              {done.includes(d.name) ? <span className="badge green" style={{ marginLeft: 'auto' }}>registered</span> : <button className="btn-secondary" style={{ marginLeft: 'auto', padding: '6px 14px' }} onClick={() => registerDiscovery(d)}>Register</button>}
+          <p className="muted" style={{ fontSize: 13, margin: '0 0 12px' }}>Managed (PaaS) instances discovered from your cloud accounts via the provider control-plane API.</p>
+          {cloudCandidates.length === 0 ? (
+            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '16px 18px', fontSize: 13, lineHeight: 1.55 }}>
+              <b>No cloud-discovered instances yet.</b>
+              <div className="muted" style={{ marginTop: 6 }}>
+                Cloud-API discovery enumerates managed databases (Cloud SQL, RDS, Azure SQL, Atlas…) from your
+                accounts using a read-only IAM credential — no network scan. Run a <b>Cloud API</b> discovery
+                from the <a href="/discovery">Discovery</a> page (or connect a cloud account), then managed
+                instances appear here to register. Self-managed DBs on VMs are found by the network scanner instead.
+              </div>
             </div>
-          ))}
+          ) : cloudCandidates.map((c) => {
+            const key = c.id || c.endpoint || c.host;
+            const meta = [c.cloud_provider && c.cloud_provider.toUpperCase(), c.deployment_type, c.region, c.engine, c.version].filter(Boolean).join(' · ');
+            return (
+              <div className="scanrow" key={key}>
+                <span className="badge green">found</span> <b>{c.name || c.endpoint || c.host}</b> <span className="muted">{meta}</span>
+                {done.includes(key) ? <span className="badge green" style={{ marginLeft: 'auto' }}>registered</span> : <button className="btn-secondary" style={{ marginLeft: 'auto', padding: '6px 14px' }} onClick={() => registerDiscovery(c)}>Register</button>}
+              </div>
+            );
+          })}
         </div>
       )}
     </>
