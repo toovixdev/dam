@@ -38,10 +38,24 @@ export default function ChangeLog() {
   };
 
   const onExport = () => {
+    // "Change ID" first — keep it in the CSV so the returned file can be bulk-imported.
     exportCsv('toovix-ddl-change-log.csv',
-      ['When (UTC)', 'Principal', 'Database', 'Object', 'Operation', 'In change window', 'CR#', 'Status', 'Statement'],
-      changes.map((c) => [c.event_ts, c.principal, c.database_name, c.object_name, c.operation, c.in_window ? 'yes' : 'no', c.cr_number, c.status, c.statement]));
+      ['Change ID', 'When (UTC)', 'Principal', 'Database', 'Object', 'Operation', 'In change window', 'CR#', 'Status', 'Statement'],
+      changes.map((c) => [c.id, c.event_ts, c.principal, c.database_name, c.object_name, c.operation, c.in_window ? 'yes' : 'no', c.cr_number, c.status, c.statement]));
     toast(`Exported ${changes.length} changes`, 'ok');
+  };
+
+  const onImport = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (!file) return;
+    const text = await file.text();
+    const res = await apiPost('/ddl-changes/import', { csv: text });
+    if (res?.ok) {
+      const { updated, skipped, notFound } = res.data;
+      toast(`Imported: ${updated} updated${skipped ? `, ${skipped} skipped (no CR#)` : ''}${notFound ? `, ${notFound} not matched` : ''}`, updated ? 'ok' : 'err');
+      refetch();
+    } else toast(res?.data?.error || 'Import failed', 'err');
   };
 
   const tabs = [
@@ -58,6 +72,10 @@ export default function ChangeLog() {
           <option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option>
         </select>
         <button className="btn-secondary" onClick={onExport}>⤓ Export CSV</button>
+        <label className="btn-secondary" style={{ cursor: 'pointer', margin: 0 }}>
+          ⤒ Import CSV
+          <input type="file" accept=".csv,text/csv" onChange={onImport} style={{ display: 'none' }} />
+        </label>
         <button className="btn-primary" onClick={() => setEmailOpen(true)}>✉ Email to app teams</button>
       </PageHeader>
 

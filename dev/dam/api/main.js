@@ -6363,18 +6363,67 @@ app.put('/api/ddl-changes/:id', authRequired, async (req, res) => {
 
 function ddlCsv(rows) {
   const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
-  const head = ['Timestamp (UTC)', 'Principal', 'Database', 'Object', 'Operation', 'In change window', 'CR#', 'Status', 'Statement'];
+  // "Change ID" is first so a returned CSV can be matched back exactly on import.
+  const head = ['Change ID', 'Timestamp (UTC)', 'Principal', 'Database', 'Object', 'Operation', 'In change window', 'CR#', 'Status', 'Statement'];
   const lines = [head.join(',')];
-  for (const r of rows) lines.push([r.event_ts, r.principal, r.database_name, r.object_name, r.operation, r.in_window ? 'yes' : 'no', r.cr_number, r.status, r.statement].map(esc).join(','));
+  for (const r of rows) lines.push([r.id, r.event_ts, r.principal, r.database_name, r.object_name, r.operation, r.in_window ? 'yes' : 'no', r.cr_number, r.status, r.statement].map(esc).join(','));
   return lines.join('\n');
 }
 
 app.get('/api/ddl-changes/export', authRequired, async (req, res) => {
   await syncDdlChanges(req.user.tenantId, 90).catch(() => {});
-  const rows = (await pgPool.query(`SELECT event_ts, principal, database_name, object_name, operation, in_window, cr_number, status, statement FROM ddl_changes WHERE tenant_id = $1 ORDER BY event_ts DESC LIMIT 5000`, [req.user.tenantId])).rows;
+  const rows = (await pgPool.query(`SELECT id, event_ts, principal, database_name, object_name, operation, in_window, cr_number, status, statement FROM ddl_changes WHERE tenant_id = $1 ORDER BY event_ts DESC LIMIT 5000`, [req.user.tenantId])).rows;
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename="ddl-change-log.csv"');
   res.send(ddlCsv(rows));
+});
+
+// Minimal RFC-4180-ish CSV parser (handles quoted fields, embedded commas/newlines).
+function parseCsvRows(text) {
+  const s = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const rows = []; let row = [], field = '', inQ = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQ) {
+      if (c === '"') { if (s[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(field); field = ''; }
+    else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+    else field += c;
+  }
+  if (field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+// Bulk-apply CR#s from a returned CSV (matched on the "Change ID" column).
+app.post('/api/ddl-changes/import', authRequired, async (req, res) => {
+  const csv = req.body && req.body.csv;
+  if (!csv || typeof csv !== 'string') return res.status(400).json({ error: 'CSV text is required' });
+  const rows = parseCsvRows(csv).filter((r) => r.some((c) => (c || '').trim() !== ''));
+  if (rows.length < 2) return res.status(400).json({ error: 'CSV has a header but no data rows' });
+  const header = rows[0].map((h) => h.trim().toLowerCase());
+  const idIdx = header.findIndex((h) => h === 'change id' || h === 'id');
+  const crIdx = header.findIndex((h) => h === 'cr#' || h === 'cr' || h === 'cr number' || h === 'cr_number');
+  const stIdx = header.findIndex((h) => h === 'status');
+  if (idIdx < 0 || crIdx < 0) return res.status(400).json({ error: 'CSV must contain "Change ID" and "CR#" columns (re-export from here, fill CR#, and import).' });
+  let updated = 0, skipped = 0, notFound = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const id = (r[idIdx] || '').trim();
+    const cr = (r[crIdx] || '').trim();
+    const stRaw = stIdx >= 0 ? (r[stIdx] || '').trim().toLowerCase() : '';
+    if (!id || !cr) { skipped++; continue; }
+    if (!/^[0-9a-f-]{36}$/i.test(id)) { skipped++; continue; }
+    const status = ['pending', 'attested', 'unauthorized', 'exempt'].includes(stRaw) ? stRaw : 'attested';
+    const upd = await pgPool.query(
+      `UPDATE ddl_changes SET cr_number = $3, status = $4, attested_by = $5, attested_at = now() WHERE id = $1 AND tenant_id = $2`,
+      [id, req.user.tenantId, cr, status, `${req.user.email} (CSV import)`]
+    );
+    if (upd.rowCount) updated++; else notFound++;
+  }
+  await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'ddl.attestation.import', resourceType: 'ddl_changes', details: { updated, skipped, notFound } });
+  res.json({ updated, skipped, notFound });
 });
 
 // Email the pending (un-attested) DDL log to application teams so they can supply CR#s.
@@ -6383,7 +6432,7 @@ app.post('/api/ddl-changes/email', authRequired, async (req, res) => {
   if (!recipients.length) return res.status(400).json({ error: 'At least one recipient is required' });
   if (!platformConfigured()) return res.status(400).json({ error: 'Platform email is not configured (set it in the admin console).' });
   await syncDdlChanges(req.user.tenantId, 30).catch(() => {});
-  const rows = (await pgPool.query(`SELECT event_ts, principal, database_name, object_name, operation, in_window, cr_number, status, statement FROM ddl_changes WHERE tenant_id = $1 AND status = 'pending' ORDER BY event_ts DESC LIMIT 500`, [req.user.tenantId])).rows;
+  const rows = (await pgPool.query(`SELECT id, event_ts, principal, database_name, object_name, operation, in_window, cr_number, status, statement FROM ddl_changes WHERE tenant_id = $1 AND status = 'pending' ORDER BY event_ts DESC LIMIT 500`, [req.user.tenantId])).rows;
   const tenantName = (await pgPool.query('SELECT name FROM tenants WHERE id = $1', [req.user.tenantId])).rows[0]?.name || 'your workspace';
   const trs = rows.slice(0, 100).map((r) => `<tr>
       <td style="padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:12px">${new Date(r.event_ts).toISOString().slice(0, 16).replace('T', ' ')}</td>
@@ -6395,7 +6444,7 @@ app.post('/api/ddl-changes/email', authRequired, async (req, res) => {
     </tr>`).join('');
   const html = `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a">
     <h2 style="margin:0 0 4px">DDL change attestation — ${tenantName}</h2>
-    <p style="font-size:13px;color:#475569;margin:0 0 14px">${rows.length} schema/privilege change(s) captured need a Change Request (CR#) recorded. Please reply with the CR# for each (full log attached as CSV).</p>
+    <p style="font-size:13px;color:#475569;margin:0 0 14px">${rows.length} schema/privilege change(s) captured need a Change Request (CR#) recorded. <b>Fill the CR# column in the attached CSV and return it</b> — keep the <b>Change ID</b> column intact so it can be bulk-imported. (Or reply with the CR# per change.)</p>
     <table style="border-collapse:collapse;width:100%"><thead><tr>
       ${['When (UTC)', 'Principal', 'Database', 'Object', 'Operation', 'Statement'].map((h) => `<th style="text-align:left;padding:6px 10px;border-bottom:2px solid #cbd5e1;font-size:11px;color:#475569">${h}</th>`).join('')}
     </tr></thead><tbody>${trs || '<tr><td style="padding:10px">No pending changes 🎉</td></tr>'}</tbody></table>
