@@ -336,11 +336,17 @@ function buildInstall(format, mode, target, token, cp, engine) {
   ];
 
   if (format === 'docker') {
+    // Network/host capture uses AF_PACKET raw sockets → needs host networking +
+    // NET_RAW/NET_ADMIN, and must run as root (the image's non-root user can't hold the caps).
+    const needsCap = (m === 'network' || m === 'host');
+    const flags = needsCap ? ' --network host --user 0 --cap-add NET_RAW --cap-add NET_ADMIN' : '';
+    const envLines = env.map((e) => `  -e ${e}`);
+    if (needsCap) envLines.push("  -e CAPTURE_IFACE=$(ip -o -4 route show to default | awk '{print $5; exit}')");
     return `# Prerequisite: Docker must be installed on the VM / bare-metal host.
 #   Debian/Ubuntu:  curl -fsSL https://get.docker.com | sudo sh
 #   RHEL/Rocky:     sudo dnf install -y docker && sudo systemctl enable --now docker
-docker run -d --name toovix-agent-${m} --restart unless-stopped \\
-${env.map((e) => `  -e ${e}`).join(' \\\n')} \\
+docker run -d --name toovix-agent-${m} --restart unless-stopped${flags} \\
+${envLines.join(' \\\n')} \\
   registry.toovix.security/dam-agent:latest   # or your own registry`;
   }
 

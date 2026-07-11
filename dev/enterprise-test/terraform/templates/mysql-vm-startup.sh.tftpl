@@ -43,7 +43,7 @@ systemctl enable --now docker
 # ── (Optional) auto-run the TooVix network agent — only when deploy_agents = true ──
 docker rm -f toovix-agent 2>/dev/null || true
 docker run -d --name toovix-agent --restart unless-stopped \
-  --network host --cap-add NET_RAW --cap-add NET_ADMIN \
+  --network host --user 0 --cap-add NET_RAW --cap-add NET_ADMIN \
   -e MODE=network -e DB_ENGINE=mysql -e TARGET_HOST=127.0.0.1 -e TARGET_PORT=3306 \
   -e TARGET_DB='${target_db}' -e CAPTURE_IFACE='${capture_iface}' \
   -e AGENT_ENROLL_TOKEN='${enroll_token}' -e CONTROL_PLANE='${control_plane_url}' \
