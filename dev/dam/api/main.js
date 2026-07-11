@@ -6160,6 +6160,29 @@ app.post('/api/policies', authRequired, async (req, res) => {
   res.status(201).json(rows[0]);
 });
 
+// Edit an existing rule (tenant-scoped). Only provided fields change; snapshots a version.
+app.put('/api/policies/:id', authRequired, async (req, res) => {
+  const existing = (await pgPool.query('SELECT * FROM policies WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
+  if (!existing) return res.status(404).json({ error: 'Rule not found' });
+  const { name, description, rule_type, category, severity, scope, actions, status, rule_definition } = req.body;
+  let def = existing.rule_definition;
+  if (rule_definition !== undefined) {
+    try { def = typeof rule_definition === 'string' ? JSON.parse(rule_definition) : rule_definition; }
+    catch { return res.status(400).json({ error: 'rule_definition must be valid JSON' }); }
+  }
+  const { rows } = await pgPool.query(
+    `UPDATE policies SET name=$1, description=$2, rule_type=$3, category=$4, severity=$5, scope=$6,
+            actions=$7, status=$8, rule_definition=$9, updated_at=now()
+     WHERE id=$10 AND tenant_id=$11 RETURNING *`,
+    [name ?? existing.name, description ?? existing.description, rule_type ?? existing.rule_type,
+     category ?? existing.category, severity ?? existing.severity, scope ?? existing.scope,
+     actions ?? existing.actions, status ?? existing.status, JSON.stringify(def),
+     req.params.id, req.user.tenantId]
+  );
+  await recordPolicyVersion(rows[0].id, 'Edited', req.user.email);
+  res.json(rows[0]);
+});
+
 // Change a rule's status (enabled / monitor / disabled).
 app.post('/api/policies/:id/status', authRequired, async (req, res) => {
   const status = req.body && req.body.status;

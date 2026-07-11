@@ -7,7 +7,7 @@ import DataTable from '../components/shared/DataTable';
 import Modal from '../components/shared/Modal';
 import { SeverityBadge } from '../components/shared/Badge';
 import useApiData from '../hooks/useApiData';
-import { apiPost, apiDelete } from '../api/client';
+import { apiPost, apiPut, apiDelete } from '../api/client';
 import { toast } from '../components/shared/Toast';
 
 const ACTION_CLR = { block: 'var(--danger)', alert: 'var(--info)', webhook: 'var(--muted)', email: 'var(--muted)' };
@@ -29,6 +29,7 @@ export default function Policies() {
   const [tab, setTab] = useState('all');
   const [selected, setSelected] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState(null);
 
   const handleRefresh = () => { refetch(); setLastRefresh(new Date()); };
 
@@ -108,17 +109,21 @@ export default function Policies() {
       )}
 
       <Modal open={!!selected} onClose={() => setSelected(null)} title={selected ? selected.name : ''} width={680}>
-        {selected && <PolicyDetail p={selected} onStatus={setStatus} />}
+        {selected && <PolicyDetail p={selected} onStatus={setStatus} onEdit={(p) => { setSelected(null); setEditing(p); }} />}
       </Modal>
 
       <Modal open={creating} onClose={() => setCreating(false)} title="Create new rule" width={620}>
-        <NewRule onClose={() => setCreating(false)} onCreated={() => { refetch(); setCreating(false); }} />
+        <RuleForm onClose={() => setCreating(false)} onSaved={() => { refetch(); setCreating(false); }} />
+      </Modal>
+
+      <Modal open={!!editing} onClose={() => setEditing(null)} title={editing ? `Edit rule — ${editing.name}` : ''} width={620}>
+        {editing && <RuleForm initial={editing} onClose={() => setEditing(null)} onSaved={() => { refetch(); setEditing(null); }} />}
       </Modal>
     </Layout>
   );
 }
 
-function PolicyDetail({ p, onStatus }) {
+function PolicyDetail({ p, onStatus, onEdit }) {
   const dsl = typeof p.rule_definition === 'string' ? p.rule_definition : JSON.stringify(p.rule_definition || {}, null, 2);
   const { data: versionData } = useApiData(`/policies/${p.id}/versions`);
   const versions = Array.isArray(versionData) ? versionData : [];
@@ -168,6 +173,7 @@ function PolicyDetail({ p, onStatus }) {
       )}
 
       <div className="modal-footer" style={{ padding: '4px 0 0', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+        <button className="btn-secondary" style={{ marginRight: 'auto' }} onClick={() => onEdit(p)}>✎ Edit rule</button>
         {p.status !== 'enabled' && <button className="btn-primary" onClick={() => onStatus(p.id, 'enabled')}>✓ Enable</button>}
         {p.status !== 'monitor' && <button className="btn-secondary" onClick={() => onStatus(p.id, 'monitor')}>◎ Move to Monitor</button>}
         {p.status !== 'disabled' && <button className="btn-secondary" onClick={() => onStatus(p.id, 'disabled')}>○ Disable</button>}
@@ -197,16 +203,20 @@ function PolicyDetail({ p, onStatus }) {
 const RULE_TYPES = ['threshold', 'pattern', 'anomaly', 'first_time', 'privileged'];
 const ALL_ACTIONS = ['alert', 'block', 'webhook', 'email'];
 
-function NewRule({ onClose, onCreated }) {
-  const [name, setName] = useState('');
-  const [ruleType, setRuleType] = useState('threshold');
-  const [category, setCategory] = useState('alert');
-  const [severity, setSeverity] = useState('high');
-  const [scope, setScope] = useState('all');
-  const [actions, setActions] = useState(['alert']);
-  const [status, setStatus] = useState('monitor');
-  const [description, setDescription] = useState('');
-  const [dsl, setDsl] = useState('{\n  "action_type": "READ",\n  "rows_affected": { "gte": 10000 }\n}');
+function RuleForm({ initial = null, onClose, onSaved }) {
+  const isEdit = !!(initial && initial.id);
+  const initDsl = initial
+    ? (typeof initial.rule_definition === 'string' ? initial.rule_definition : JSON.stringify(initial.rule_definition || {}, null, 2))
+    : '{\n  "action_type": "READ",\n  "rows_affected": { "gte": 10000 }\n}';
+  const [name, setName] = useState(initial?.name || '');
+  const [ruleType, setRuleType] = useState(initial?.rule_type || 'threshold');
+  const [category, setCategory] = useState(initial?.category || 'alert');
+  const [severity, setSeverity] = useState(initial?.severity || 'high');
+  const [scope, setScope] = useState(initial?.scope || 'all');
+  const [actions, setActions] = useState(Array.isArray(initial?.actions) ? initial.actions : ['alert']);
+  const [status, setStatus] = useState(initial?.status || 'monitor');
+  const [description, setDescription] = useState(initial?.description || '');
+  const [dsl, setDsl] = useState(initDsl);
   const [saving, setSaving] = useState(false);
 
   const toggleAction = (a) => setActions((p) => (p.includes(a) ? p.filter((x) => x !== a) : [...p, a]));
@@ -215,10 +225,11 @@ function NewRule({ onClose, onCreated }) {
     if (!name.trim()) { toast('Name is required', 'err'); return; }
     try { JSON.parse(dsl); } catch { toast('Rule condition must be valid JSON', 'err'); return; }
     setSaving(true);
-    const res = await apiPost('/policies', { name, description, rule_type: ruleType, category, severity, scope, actions, status, rule_definition: dsl });
+    const body = { name, description, rule_type: ruleType, category, severity, scope, actions, status, rule_definition: dsl };
+    const res = isEdit ? await apiPut(`/policies/${initial.id}`, body) : await apiPost('/policies', body);
     setSaving(false);
-    if (res && res.ok) { toast(`Rule "${name}" created`, 'ok'); onCreated(); }
-    else toast('Could not create rule', 'err');
+    if (res && res.ok) { toast(`Rule "${name}" ${isEdit ? 'updated' : 'created'}`, 'ok'); onSaved(); }
+    else toast(res?.data?.error || `Could not ${isEdit ? 'update' : 'create'} rule`, 'err');
   };
 
   return (
@@ -246,12 +257,12 @@ function NewRule({ onClose, onCreated }) {
         <textarea className="mono" value={dsl} onChange={(e) => setDsl(e.target.value)} rows={6} style={{ width: '100%', fontSize: 12 }} />
         <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>Canonical actions: READ / WRITE / DELETE / DDL / GRANT / LOGIN / ADMIN. One rule fires across all engines.</div>
       </div>
-      <div className="form-field"><label>Initial status</label>
-        <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="monitor">Monitor (shadow)</option><option value="enabled">Enabled</option></select>
+      <div className="form-field"><label>Status</label>
+        <select value={status} onChange={(e) => setStatus(e.target.value)}><option value="monitor">Monitor (shadow)</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select>
       </div>
       <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end' }}>
         <button className="btn-secondary" onClick={onClose}>Cancel</button>
-        <button className="btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : status === 'enabled' ? 'Save & Enable' : 'Save as Monitor'}</button>
+        <button className="btn-primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : isEdit ? 'Save changes' : status === 'enabled' ? 'Save & Enable' : 'Save as Monitor'}</button>
       </div>
     </>
   );
