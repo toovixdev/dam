@@ -146,6 +146,12 @@ func runNetwork(cfg Config) {
 		log.Fatalf("AF_PACKET socket failed: %v (needs CAP_NET_RAW / root)", err)
 	}
 	defer syscall.Close(fd)
+	// Large receive buffer so a burst (e.g. a big result set flooding loopback) doesn't
+	// overflow the socket and drop frames — dropped frames desync the packet framer.
+	// SO_RCVBUFFORCE (33) bypasses net.core.rmem_max (we hold CAP_NET_ADMIN).
+	if e := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, 33, 64*1024*1024); e != nil {
+		syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 64*1024*1024)
+	}
 	if err := syscall.Bind(fd, &syscall.SockaddrLinklayer{Protocol: htons(0x0003), Ifindex: ifIndex}); err != nil {
 		log.Fatalf("bind to %s failed: %v", iface, err)
 	}
