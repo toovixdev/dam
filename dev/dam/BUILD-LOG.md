@@ -2146,3 +2146,7 @@ CR# each captured schema change was carried out under.
 - Verified: synced the test `CREATE TABLE` (+GRANTs); recording `CHG…` auto-attested (pending 5→4).
 - Future path: swap manual CR# entry for the ServiceNow correlation (parse `CHG…` from the DDL + validate
   via API + write-back) discussed but deferred.
+- **Bulk CSV import** (§64a): exports/email CSV now carry a `Change ID` first column; `POST
+  /api/ddl-changes/import` parses a returned CSV, matches rows on Change ID (tenant-scoped), and
+  bulk-applies `cr_number` + status (auto-attest). "Import CSV" button on the Change Log page. Verified:
+  2-row CSV → `{updated:2}`, both attested (a blank-status row auto-attested).
