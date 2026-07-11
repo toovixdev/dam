@@ -189,7 +189,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const seeded = initialModes.filter((m) => VALID_MODES.includes(m));
   const [instId, setInstId] = useState(initialInstanceId || instances[0]?.id || '');
   const [modes, setModes] = useState(seeded.length ? seeded : ['network', 'host']);
-  const [platform, setPlatform] = useState('vm');
+  const [platform, setPlatform] = useState('binary');
   const [instructions, setInstructions] = useState(null);
 
   const instance = instances.find((i) => i.id === instId);
@@ -216,7 +216,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
     const res = await apiFetch('/agents/enroll-token');
     const token = (res && res.token) || ('tvx_enroll_' + Math.random().toString(36).slice(2, 14));
     const cp = (res && res.control_plane) || 'meridian.toovix.security';
-    setInstructions({ token, cp, modes: [...modes], platform, target: instance?.instance || instance?.name });
+    setInstructions({ token, cp, modes: [...modes], platform, target: instance?.instance || instance?.name, engine: instance?.engine });
   };
   const done = () => { onDeployed(); onClose(); };
 
@@ -284,11 +284,12 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
 
       {!isPaas && (
         <>
-          <div className="section-label">Deployment platform</div>
+          <div className="section-label">Deployment format</div>
           <select value={platform} onChange={(e) => { setPlatform(e.target.value); setInstructions(null); }} style={{ marginBottom: 14 }}>
-            <option value="vm">VM / Bare metal (curl + systemd)</option>
+            <option value="binary">Static binary + systemd (no Docker)</option>
+            <option value="docker">Docker image</option>
+            <option value="package">OS package (.deb / .rpm)</option>
             <option value="kubernetes">Kubernetes (Helm)</option>
-            <option value="serverless">Serverless (Terraform)</option>
           </select>
         </>
       )}
@@ -302,7 +303,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
           {instructions.modes.map((m) => (
             <div key={m} style={{ marginBottom: 10 }}>
               <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{MODES.find((x) => x.id === m)?.name}</div>
-              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp)}</pre>
+              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine)}</pre>
             </div>
           ))}
         </div>
@@ -318,32 +319,67 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   );
 }
 
-// Build the install artifact an operator runs in their own environment.
-function buildInstall(platform, mode, target, token, cp) {
+// Build the install artifact an operator runs where the DB lives. Emits the REAL agent
+// env vars (MODE / DB_ENGINE / TARGET_HOST / TARGET_PORT / AGENT_ENROLL_TOKEN /
+// CONTROL_PLANE) for the chosen deployment format.
+function buildInstall(format, mode, target, token, cp, engine) {
   const m = mode === 'host' ? 'host' : mode === 'proxy' ? 'proxy' : 'network';
-  if (platform === 'kubernetes') {
+  const [host, port] = String(target || '').split(':');
+  const eng = engine || 'mysql';
+  const env = [
+    `MODE=${m}`,
+    `DB_ENGINE=${eng}`,
+    `TARGET_HOST=${host || target}`,
+    `TARGET_PORT=${port || '3306'}`,
+    `AGENT_ENROLL_TOKEN=${token}`,
+    `CONTROL_PLANE=${cp}`,
+  ];
+
+  if (format === 'docker') {
+    return `docker run -d --name toovix-agent-${m} --restart unless-stopped \\
+${env.map((e) => `  -e ${e}`).join(' \\\n')} \\
+  registry.toovix.security/dam-agent:latest   # or your own registry`;
+  }
+
+  if (format === 'kubernetes') {
     return `helm repo add toovix oci://registry.toovix.security/charts
 helm install dam-${m} toovix/dam-agent \\
   --namespace toovix-dam --create-namespace \\
-  --set token=${token} \\
-  --set endpoint=${cp} \\
-  --set mode=${m} \\
-  --set targetDb=${target}`;
+  --set token=${token} --set endpoint=${cp} \\
+  --set mode=${m} --set engine=${eng} \\
+  --set targetHost=${host || target} --set targetPort=${port || 3306}`;
   }
-  if (platform === 'serverless') {
-    return `module "dam_${m}" {
-  source    = "toovix/dam-agent/aws"
-  token     = "${token}"
-  endpoint  = "${cp}"
-  mode      = "${m}"
-  target_db = "${target}"
-}
 
-terraform init && terraform apply`;
+  if (format === 'package') {
+    return `# Debian/Ubuntu (.deb) — RHEL/rpm is analogous
+curl -fsSL ${cp}/download/dam-agent.deb -o dam-agent.deb
+sudo dpkg -i dam-agent.deb
+sudo tee /etc/toovix/agent.env >/dev/null <<'EOF'
+${env.join('\n')}
+EOF
+sudo systemctl enable --now toovix-agent`;
   }
-  return `curl -fsSL https://get.toovix.security/agent | \\
-  sudo TOOVIX_TOKEN=${token} \\
-  TOOVIX_ENDPOINT=${cp} \\
-  TOOVIX_DB=${target} \\
-  bash -s -- --mode=${m}`;
+
+  // Default: static binary (no Docker, no dependencies) — run directly or as a service.
+  return `# 1) Download the static binary (Linux x86_64 — no Docker, no deps)
+curl -fsSL ${cp}/download/dam-agent-linux-amd64 -o /usr/local/bin/dam-agent
+chmod +x /usr/local/bin/dam-agent
+
+# 2a) Run it directly:
+sudo ${env.join(' \\\n  ')} \\
+  /usr/local/bin/dam-agent
+
+# 2b) …or install as a systemd service:
+sudo tee /etc/systemd/system/toovix-agent-${m}.service >/dev/null <<'EOF'
+[Unit]
+Description=TooVix DAM agent (${m})
+After=network.target
+[Service]
+${env.map((e) => `Environment=${e}`).join('\n')}
+ExecStart=/usr/local/bin/dam-agent
+Restart=always
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now toovix-agent-${m}`;
 }
