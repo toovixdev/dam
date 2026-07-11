@@ -6373,11 +6373,20 @@ function gcpEngine(v) {
   if (s.startsWith('SQLSERVER')) return { engine: 'mssql', port: 1433 };
   return { engine: 'unknown', port: null };
 }
+// Keyless: use the control-plane VM's attached service account via the metadata server
+// (works when the DAM runs on GCP; the required path when org policy disables SA keys).
+async function gcpTokenFromMetadata() {
+  const resp = await fetch('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', { headers: { 'Metadata-Flavor': 'Google' } }).catch(() => null);
+  const j = resp ? await resp.json().catch(() => ({})) : {};
+  if (!j.access_token) throw new Error('Keyless (ADC) token failed — the control plane needs a GCP service account with roles/cloudsql.viewer');
+  return j.access_token;
+}
 async function gcpEnumerate(connector) {
-  const sa = connector.credential;
+  const sa = connector.credential || {};
+  const useAdc = sa.mode === 'adc' || (!sa.client_email && !sa.private_key);
   const project = connector.project || sa.project_id;
   if (!project) throw new Error('No GCP project id');
-  const token = await gcpAccessToken(sa);
+  const token = useAdc ? await gcpTokenFromMetadata() : await gcpAccessToken(sa);
   const resp = await fetch(`https://sqladmin.googleapis.com/v1/projects/${encodeURIComponent(project)}/instances`, { headers: { Authorization: `Bearer ${token}` } });
   const j = await resp.json().catch(() => ({}));
   if (j.error) throw new Error(j.error.message || 'Cloud SQL list failed');
@@ -6446,8 +6455,10 @@ app.post('/api/discovery/connectors', authRequired, async (req, res) => {
   if (!CLOUD_PROVIDER_IDS.has(provider)) return res.status(400).json({ error: 'Unsupported provider' });
   let cred = req.body.credential;
   if (typeof cred === 'string') { try { cred = JSON.parse(cred); } catch { return res.status(400).json({ error: 'Credential must be valid JSON (the service-account key file)' }); } }
-  if (!cred || typeof cred !== 'object') return res.status(400).json({ error: 'Credential (read-only key) is required' });
-  const identity = cred.client_email || cred.clientId || null;
+  const keyless = !!req.body.keyless || (cred && cred.mode === 'adc');
+  if (keyless) cred = { mode: 'adc' };
+  else if (!cred || typeof cred !== 'object' || !cred.private_key) return res.status(400).json({ error: 'Paste the read-only key JSON, or enable keyless (control-plane identity).' });
+  const identity = keyless ? 'control-plane identity (keyless)' : (cred.client_email || cred.clientId || null);
   const proj = project || cred.project_id || null;
   if (!proj) return res.status(400).json({ error: 'Project id is required' });
   const row = (await pgPool.query(

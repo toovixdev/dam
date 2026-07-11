@@ -364,12 +364,14 @@ function AddConnector({ tenantClouds, cloudLabel, onClose, onSaved }) {
   const [provider, setProvider] = useState(clouds[0]);
   const [project, setProject] = useState('');
   const [credential, setCredential] = useState('');
+  const [keyless, setKeyless] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
-    if (!credential.trim()) return toast('Paste the read-only credential (key JSON)', 'err');
+    if (!keyless && !credential.trim()) return toast('Paste the read-only credential (key JSON) or enable keyless', 'err');
+    if (keyless && !project.trim()) return toast('Project id is required for keyless', 'err');
     setBusy(true);
-    const res = await apiPost('/discovery/connectors', { provider, project: project.trim() || undefined, credential });
+    const res = await apiPost('/discovery/connectors', { provider, project: project.trim() || undefined, keyless, credential: keyless ? undefined : credential });
     setBusy(false);
     if (res?.ok) { toast('Cloud connector saved', 'ok'); onSaved(); }
     else toast(res?.data?.error || 'Could not save connector', 'err');
@@ -393,15 +395,23 @@ function AddConnector({ tenantClouds, cloudLabel, onClose, onSaved }) {
         </div>
       </div>
       {provider === 'gcp' && (
+        <label className="form-field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+          <input type="checkbox" checked={keyless} onChange={(e) => setKeyless(e.target.checked)} style={{ marginTop: 3 }} />
+          <span style={{ fontSize: 12.5, lineHeight: 1.5 }}><b>Keyless</b> — use the control-plane's own GCP identity (no key to paste). Recommended, and required if your org disables service-account keys. Grant that identity <code>roles/cloudsql.viewer</code> on the project.</span>
+        </label>
+      )}
+      {!keyless && provider === 'gcp' && (
         <div className="form-field">
           <label>How to create the read-only service account</label>
           <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{GCP_SETUP}</pre>
         </div>
       )}
-      <div className="form-field"><label>{provider === 'gcp' ? 'Service-account key (JSON)' : 'Read-only credential (JSON)'}</label>
-        <textarea className="mono" value={credential} onChange={(e) => setCredential(e.target.value)} rows={7} style={{ width: '100%', fontSize: 11 }} placeholder='{ "type": "service_account", "project_id": "…", "client_email": "…", "private_key": "-----BEGIN PRIVATE KEY-----\\n…" }' />
-        <span className="muted" style={{ fontSize: 11 }}>Paste the key file contents. Stored write-only; used read-only against the cloud API.</span>
-      </div>
+      {!keyless && (
+        <div className="form-field"><label>{provider === 'gcp' ? 'Service-account key (JSON)' : 'Read-only credential (JSON)'}</label>
+          <textarea className="mono" value={credential} onChange={(e) => setCredential(e.target.value)} rows={7} style={{ width: '100%', fontSize: 11 }} placeholder='{ "type": "service_account", "project_id": "…", "client_email": "…", "private_key": "-----BEGIN PRIVATE KEY-----\\n…" }' />
+          <span className="muted" style={{ fontSize: 11 }}>Paste the key file contents. Stored write-only; used read-only against the cloud API.</span>
+        </div>
+      )}
       <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end', gap: 8 }}>
         <button className="btn-secondary" onClick={onClose}>Cancel</button>
         <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save connector'}</button>
