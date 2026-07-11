@@ -336,7 +336,10 @@ function buildInstall(format, mode, target, token, cp, engine) {
   ];
 
   if (format === 'docker') {
-    return `docker run -d --name toovix-agent-${m} --restart unless-stopped \\
+    return `# Prerequisite: Docker must be installed on the VM / bare-metal host.
+#   Debian/Ubuntu:  curl -fsSL https://get.docker.com | sudo sh
+#   RHEL/Rocky:     sudo dnf install -y docker && sudo systemctl enable --now docker
+docker run -d --name toovix-agent-${m} --restart unless-stopped \\
 ${env.map((e) => `  -e ${e}`).join(' \\\n')} \\
   registry.toovix.security/dam-agent:latest   # or your own registry`;
   }
