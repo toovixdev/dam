@@ -127,6 +127,8 @@ func main() {
 // ── Network agent (passive libpcap-style capture via AF_PACKET) ──────
 // Shares the DB container's network namespace and sniffs its interface, decoding the MySQL
 // wire protocol on the client→server direction. Passive — observes, never blocks.
+var capDebug bool
+
 func runNetwork(cfg Config) {
 	iface := env("CAPTURE_IFACE", "eth0")
 	// "any" (ifindex 0) sniffs ALL interfaces incl. loopback — handy when SQL is run
@@ -148,14 +150,20 @@ func runNetwork(cfg Config) {
 		log.Fatalf("bind to %s failed: %v", iface, err)
 	}
 	targetPort := uint16(atoiDefault(cfg.TargetPort, 3306))
-	log.Printf("network agent sniffing %s for tcp/%d (passive capture)", iface, targetPort)
+	capDebug = env("CAPTURE_DEBUG", "false") == "true"
+	log.Printf("network agent sniffing %s for tcp/%d (passive capture, debug=%v)", iface, targetPort, capDebug)
 
 	conns := map[string]*connState{}
 	frame := make([]byte, 65536)
+	var frames uint64
 	for {
 		n, _, err := syscall.Recvfrom(fd, frame, 0)
 		if err != nil || n < 14 {
 			continue
+		}
+		frames++
+		if capDebug && frames%50 == 0 {
+			log.Printf("[net-dbg] %d frames seen on %s", frames, iface)
 		}
 		handleFrame(cfg, frame[:n], targetPort, conns)
 	}
@@ -188,6 +196,9 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 	payload := tcp[dataOff:]
 	if len(payload) == 0 {
 		return
+	}
+	if capDebug {
+		log.Printf("[net-dbg] c->s %s:%d payload=%dB first=0x%02x", srcIP, srcPort, len(payload), payload[0])
 	}
 	key := fmt.Sprintf("%s:%d", srcIP, srcPort)
 	st := conns[key]
