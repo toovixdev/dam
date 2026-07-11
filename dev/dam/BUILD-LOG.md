@@ -2099,3 +2099,21 @@ and closed the gaps for volume-threshold policies.
 - **Capture requirement (unchanged):** clients must connect `--ssl-mode=DISABLED` (passive agent can't
   decode TLS). On-host SQL is captured via `CAPTURE_IFACE=lo`.
 - Follow-ups: proxy-mode row counting; dedup identical alerts within a short window; TLS-aware capture.
+
+## 62. Privileged-access & off-hours policies + customer-configurable business hours
+
+Made two more default policies fire from real captured SQL, and turned off-hours into a real setting.
+- **GRANT of DBA/SYSDBA:** the agent's `detectOp` now classifies `GRANT`/`REVOKE` as operation `GRANT`
+  (was `OTHER`, so the policy never matched). A `GRANT DBA TO …` (even when the server denies it — the
+  wire query is captured) → **high alert**. The rule greps `sql_text` for DBA/SYSDBA (Oracle terms); widen
+  `grants_role.in` via the policy editor for MySQL (`ALL PRIVILEGES`, `SUPER`, `GRANT OPTION`).
+- **Privileged off-hours access** was **skipped** (behavioral/Phase-2). Implemented `unusual_access_time`
+  in `policyToClickhouse`: matches events outside the business window or on a non-working day, evaluated
+  in the tenant's timezone (`toHour(ts,tz)`, `toDayOfWeek(ts,0,tz)`).
+- **Customer-configurable business hours:** `tenants.business_hours` JSONB (timezone, start, end, working
+  days) + `GET/PUT /api/settings/business-hours` (validated, curated TZ allow-list) + a **Settings →
+  General → Business hours** card. The detection engine, backtest, and shadow-hit eval all use it; a
+  per-policy `business_hours` still overrides. Verified: 24/7 window → 0 off-hours matches; 09:00–10:00
+  window → 27 matches (backtest).
+- Caveat: `principal_user_type: 'dba'` is still benign-ignorable (matches any principal) — true
+  privileged-user detection is a later enhancement, so the rule is effectively "sensitive access off-hours".
