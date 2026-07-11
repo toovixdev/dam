@@ -282,7 +282,9 @@ services:
       - dam-net
 
   dam-api:
-    build: ./dam/api
+    build:
+      context: ./dam
+      dockerfile: api/Dockerfile
     container_name: dam-api
     ports:
       - "3000:3000"

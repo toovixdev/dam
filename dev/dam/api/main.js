@@ -4118,6 +4118,17 @@ app.delete('/api/agents/:id', authRequired, async (req, res) => {
   res.json({ message: 'Agent removed' });
 });
 
+// Serve installable agent artifacts (public — customers curl these during install).
+// The static Linux binary is built into the image (see api/Dockerfile). Allow-listed.
+app.get('/api/download/:file', (req, res) => {
+  const ALLOWED = new Set(['dam-agent-linux-amd64']);
+  const file = req.params.file;
+  if (!ALLOWED.has(file)) return res.status(404).json({ error: 'Unknown artifact' });
+  res.download(`${__dirname}/artifacts/${file}`, file, (err) => {
+    if (err && !res.headersSent) res.status(404).json({ error: 'Artifact not available on this control plane' });
+  });
+});
+
 // Issue an enrollment token + endpoint for an operator to install an agent.
 // The agent (run by the customer) enrolls with this token and then appears in
 // the fleet — we do NOT create an agent row here. (Dev: returns the shared token;

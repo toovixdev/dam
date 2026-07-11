@@ -1,0 +1,16 @@
+# Build context for dam-api is ./dam, but only api/ and agent/ are needed.
+# Exclude the big / irrelevant sibling dirs so the context stays small & fast.
+**/node_modules
+frontend
+admin-frontend
+mockups
+collector
+discovery
+agent-mongo
+clickhouse
+nginx
+vault
+control-plane
+approval-signer
+docs
+*.md

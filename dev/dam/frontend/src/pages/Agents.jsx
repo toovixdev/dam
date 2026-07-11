@@ -352,7 +352,7 @@ helm install dam-${m} toovix/dam-agent \\
 
   if (format === 'package') {
     return `# Debian/Ubuntu (.deb) — RHEL/rpm is analogous
-curl -fsSL ${cp}/download/dam-agent.deb -o dam-agent.deb
+curl -fsSL ${cp}/api/download/dam-agent.deb -o dam-agent.deb
 sudo dpkg -i dam-agent.deb
 sudo tee /etc/toovix/agent.env >/dev/null <<'EOF'
 ${env.join('\n')}
@@ -362,7 +362,7 @@ sudo systemctl enable --now toovix-agent`;
 
   // Default: static binary (no Docker, no dependencies) — run directly or as a service.
   return `# 1) Download the static binary (Linux x86_64 — no Docker, no deps)
-curl -fsSL ${cp}/download/dam-agent-linux-amd64 -o /usr/local/bin/dam-agent
+curl -fsSL ${cp}/api/download/dam-agent-linux-amd64 -o /usr/local/bin/dam-agent
 chmod +x /usr/local/bin/dam-agent
 
 # 2a) Run it directly:
