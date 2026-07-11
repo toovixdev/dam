@@ -2131,3 +2131,18 @@ DDL **outside** it is the violation.
   **high alert "DDL change control"**.
 - Caveat: the policy's "…with no linked change ticket" clause isn't implemented (no change/ITSM ticket
   integration yet) — currently it's purely "DDL outside the approved window".
+
+## 64. DDL Change Log — schema-change attestation report
+
+Instead of a live ServiceNow hookup (deferred), a lightweight attestation report: app teams provide the
+CR# each captured schema change was carried out under.
+- `ddl_changes` table; `syncDdlChanges()` pulls DDL/GRANT events from the data plane (idempotent, keyed by
+  a stable event hash), parses the target object, and flags in/out of the change window.
+- `GET /api/ddl-changes` (list + summary), `PUT /api/ddl-changes/:id` (record CR#/status — a CR#
+  auto-attests), `GET /api/ddl-changes/export` (CSV), `POST /api/ddl-changes/email` (send the pending
+  list to app-team recipients with a CSV attached, via the platform mailer; audited).
+- New **Change Log** page (Compliance section) — filter by status/period, inline CR# entry, Export CSV,
+  Email to app teams. Route + sidebar + RBAC (admin/compliance/auditor/db_owner).
+- Verified: synced the test `CREATE TABLE` (+GRANTs); recording `CHG…` auto-attested (pending 5→4).
+- Future path: swap manual CR# entry for the ServiceNow correlation (parse `CHG…` from the DDL + validate
+  via API + write-back) discussed but deferred.
