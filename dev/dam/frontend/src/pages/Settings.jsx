@@ -127,7 +127,18 @@ export default function Settings() {
           </div>
         </div>
 
-        <BusinessHours />
+        <WindowCard
+          endpoint="/settings/business-hours"
+          title="Business hours"
+          sub="drives off-hours / after-hours detection"
+          desc={<>Access outside these hours (in your timezone) is treated as <b>off-hours</b> by policies such as <b>“Privileged off-hours access.”</b> Set your organisation’s working window and days.</>}
+        />
+        <WindowCard
+          endpoint="/settings/change-window"
+          title="DDL change window"
+          sub="approved maintenance window for schema changes"
+          desc={<>Schema changes (<b>DDL</b>) <b>outside</b> this approved window are flagged by <b>“DDL change control.”</b> Set the window and days your team is allowed to make changes.</>}
+        />
         </>
       )}
 
@@ -183,11 +194,11 @@ export default function Settings() {
   );
 }
 
-// ── Business hours — customer-configurable, drives off-hours detection ────────
+// ── Reusable time-window editor (business hours + DDL change window) ───────────
 const DOW = [{ v: 1, l: 'Mon' }, { v: 2, l: 'Tue' }, { v: 3, l: 'Wed' }, { v: 4, l: 'Thu' }, { v: 5, l: 'Fri' }, { v: 6, l: 'Sat' }, { v: 7, l: 'Sun' }];
 const hhLabel = (h) => `${String(h).padStart(2, '0')}:00`;
-function BusinessHours() {
-  const { data, refetch } = useApiData('/settings/business-hours', { poll: 0 });
+function WindowCard({ endpoint, title, sub, desc }) {
+  const { data, refetch } = useApiData(endpoint, { poll: 0 });
   const [tz, setTz] = useState('UTC');
   const [start, setStart] = useState(8);
   const [end, setEnd] = useState(18);
@@ -207,25 +218,22 @@ function BusinessHours() {
 
   const save = async () => {
     if (end <= start) return toast('End hour must be after start hour', 'err');
-    if (!days.length) return toast('Pick at least one working day', 'err');
+    if (!days.length) return toast('Pick at least one day', 'err');
     setBusy(true);
-    const res = await apiPut('/settings/business-hours', { timezone: tz, start: Number(start), end: Number(end), days });
+    const res = await apiPut(endpoint, { timezone: tz, start: Number(start), end: Number(end), days });
     setBusy(false);
-    if (res?.ok) { toast('Business hours saved', 'ok'); refetch(); }
+    if (res?.ok) { toast(`${title} saved`, 'ok'); refetch(); }
     else toast(res?.data?.error || 'Could not save', 'err');
   };
 
   return (
     <div className="card" style={{ marginTop: 14 }}>
       <div className="card-header">
-        <span className="card-title">Business hours</span>
-        <span className="card-sub">drives off-hours / after-hours detection</span>
+        <span className="card-title">{title}</span>
+        <span className="card-sub">{sub}</span>
       </div>
       <div className="card-body">
-        <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>
-          Access outside these hours (in your timezone) is treated as <b>off-hours</b> by policies such as
-          <b> “Privileged off-hours access.”</b> Set your organisation’s working window and days.
-        </p>
+        <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>{desc}</p>
         <div className="form-row" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <div className="form-field" style={{ flex: 2, minWidth: 180 }}><label>Timezone</label>
             <select value={tz} onChange={(e) => setTz(e.target.value)}>
@@ -243,7 +251,7 @@ function BusinessHours() {
             </select>
           </div>
         </div>
-        <div className="form-field"><label>Working days</label>
+        <div className="form-field"><label>Days</label>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
             {DOW.map((d) => (
               <button key={d.v} type="button" onClick={() => toggleDay(d.v)}
@@ -253,10 +261,10 @@ function BusinessHours() {
           </div>
         </div>
         <div style={{ fontSize: 12, color: 'var(--muted)', marginBottom: 12 }}>
-          Business window: <b style={{ color: 'var(--ink)' }}>{hhLabel(start)}–{hhLabel(end)} {tz}</b> · {days.map((d) => DOW.find((x) => x.v === d)?.l).join(', ') || '—'}
+          Window: <b style={{ color: 'var(--ink)' }}>{hhLabel(start)}–{hhLabel(end)} {tz}</b> · {days.map((d) => DOW.find((x) => x.v === d)?.l).join(', ') || '—'}
         </div>
         <div style={{ display: 'flex', gap: 8, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
-          <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save business hours'}</button>
+          <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : `Save ${title.toLowerCase()}`}</button>
         </div>
       </div>
     </div>
