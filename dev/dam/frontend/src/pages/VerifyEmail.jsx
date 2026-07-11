@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
 
 export default function VerifyEmail() {
   const navigate = useNavigate();
-  const { login: authLogin } = useAuth();
   const [state, setState] = useState('verifying'); // verifying | ok | error
   const [error, setError] = useState('');
 
@@ -18,11 +16,12 @@ export default function VerifyEmail() {
           body: JSON.stringify({ token }),
         });
         const data = await res.json();
-        if (res.ok && data.token) {
+        if (res.ok && data.verified) {
           if (data.slug) localStorage.setItem('dam_workspace', data.slug); // remember workspace for next sign-in
-          authLogin(data.token, data.user);
+          if (data.email) localStorage.setItem('dam_remember_email', data.email); // prefill on the login page
           setState('ok');
-          setTimeout(() => navigate('/dashboard', { replace: true }), 1200);
+          // No auto-login: sign in next so the MFA-setup gate runs before any session.
+          setTimeout(() => navigate('/login', { replace: true }), 1600);
         } else {
           setState('error'); setError(data.error || 'Verification failed.');
         }
@@ -45,7 +44,7 @@ export default function VerifyEmail() {
         <div className="login-form-box" style={{ textAlign: 'center' }}>
           <div className="login-mini-brand" style={{ justifyContent: 'center' }}><span className="brand-dot-sm">T</span> TooVix <span className="brand-sub">DAM</span></div>
           {state === 'verifying' && <><h1>Verifying…</h1><p className="login-sub">Activating your workspace.</p></>}
-          {state === 'ok' && <><h1>✓ Verified</h1><p className="login-sub">Your workspace is active — taking you to the console…</p></>}
+          {state === 'ok' && <><h1>✓ Verified</h1><p className="login-sub">Your workspace is active — sign in to set up multi-factor authentication and finish…</p></>}
           {state === 'error' && (
             <>
               <h1>Couldn't verify</h1>

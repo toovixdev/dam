@@ -53,6 +53,82 @@ function Cell({ v }) {
   return <span style={{ color: COLOR[tone] || 'var(--ink)', fontWeight: tone === 'g' || tone === 'n' ? 600 : 500, fontSize: 12.5 }}>{text}</span>;
 }
 
+const V = {
+  line: 'var(--line)', ink: 'var(--ink)', muted: 'var(--muted)', surf: 'var(--surface-2)',
+  net: 'var(--primary)', host: 'var(--info)', proxy: 'var(--amber)', agentless: 'var(--green)',
+};
+const T = (x, y, text, color = V.ink, size = 11.5, weight = 600, anchor = 'middle') =>
+  <text x={x} y={y} textAnchor={anchor} style={{ fill: color, fontSize: size, fontWeight: weight }}>{text}</text>;
+
+function LegendItem({ c, t }) {
+  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><span style={{ width: 10, height: 10, borderRadius: 3, background: c, flex: 'none' }} />{t}</span>;
+}
+
+// Visual "at a glance" of where each capture mode sits and what it can do.
+function CaptureDiagram() {
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-header"><span className="card-title">At a glance — the four capture modes</span><span className="card-sub">where each sits · what it can do</span></div>
+      <div className="card-body">
+        <svg viewBox="0 0 900 262" width="100%" style={{ maxHeight: 300 }} role="img" aria-label="Capture modes architecture diagram">
+          <defs>
+            <marker id="cmArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+              <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
+            </marker>
+          </defs>
+
+          {/* DAM control plane */}
+          <rect x="30" y="8" width="840" height="32" rx="8" style={{ fill: V.surf, stroke: V.line }} />
+          {T(450, 28, '🛡  TooVix DAM — Control Plane   ·   events in → alerts out', V.ink, 12.5, 700)}
+
+          {/* telemetry (dashed, agent-initiated outbound) — every agent dials out */}
+          <line x1="530" y1="146" x2="530" y2="42" style={{ stroke: V.net }} strokeDasharray="4 3" markerEnd="url(#cmArrow)" />
+          <line x1="302" y1="166" x2="302" y2="42" style={{ stroke: V.proxy }} strokeDasharray="4 3" markerEnd="url(#cmArrow)" />
+          <line x1="575" y1="204" x2="575" y2="42" style={{ stroke: V.host }} strokeDasharray="4 3" markerEnd="url(#cmArrow)" />
+          <line x1="806" y1="168" x2="806" y2="42" style={{ stroke: V.agentless }} strokeDasharray="4 3" markerEnd="url(#cmArrow)" />
+
+          {/* data path: App → proxy → DB host (wire at y=190) */}
+          <rect x="30" y="170" width="96" height="40" rx="8" style={{ fill: V.surf, stroke: V.line }} />
+          {T(78, 187, 'App /', V.ink, 11, 600)}{T(78, 201, 'Clients', V.ink, 11, 600)}
+          <line x1="126" y1="190" x2="248" y2="190" style={{ stroke: V.ink }} markerEnd="url(#cmArrow)" />
+
+          <rect x="250" y="166" width="104" height="48" rx="8" style={{ fill: V.surf, stroke: V.proxy, strokeWidth: 2 }} />
+          {T(302, 186, '③ Inline proxy', V.proxy, 11, 700)}{T(302, 202, 'GATE · blocks', V.proxy, 9.5, 600)}
+          <line x1="354" y1="190" x2="594" y2="190" style={{ stroke: V.ink }} markerEnd="url(#cmArrow)" />
+
+          {/* DB host — BOTH the network and host agents run ON the host (different capture layers) */}
+          <rect x="438" y="118" width="300" height="124" rx="10" style={{ fill: 'none', stroke: V.host }} strokeDasharray="5 4" />
+          {T(446, 135, 'DB host (e.g. db-vm-a)', V.muted, 9.5, 600, 'start')}
+          <rect x="452" y="146" width="106" height="30" rx="6" style={{ fill: V.surf, stroke: V.net, strokeWidth: 1.5 }} />
+          {T(505, 160, '① Network agent', V.net, 10, 700)}{T(505, 171, 'NIC / pcap layer', V.muted, 8.5, 500)}
+          <rect x="452" y="204" width="106" height="30" rx="6" style={{ fill: V.surf, stroke: V.host, strokeWidth: 1.5 }} />
+          {T(505, 218, '② Host eBPF', V.host, 10, 700)}{T(505, 229, 'kernel syscalls', V.muted, 8.5, 500)}
+          <rect x="594" y="168" width="126" height="46" rx="6" style={{ fill: V.surf, stroke: V.line }} />
+          {T(657, 195, 'DB', V.ink, 12, 700)}
+          <line x1="505" y1="176" x2="505" y2="190" style={{ stroke: V.net }} strokeDasharray="3 3" />
+          <line x1="505" y1="204" x2="505" y2="190" style={{ stroke: V.host }} strokeDasharray="3 3" />
+
+          {/* ④ Agentless (reads audit logs — no install; off-host) */}
+          <line x1="720" y1="191" x2="740" y2="191" style={{ stroke: V.agentless }} markerEnd="url(#cmArrow)" />
+          {T(730, 184, 'audit', V.muted, 8.5, 500)}
+          <rect x="742" y="168" width="128" height="46" rx="6" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
+          {T(806, 187, '④ Agentless', V.agentless, 11, 700)}{T(806, 202, 'Pull / Cloud Push', V.agentless, 9.5, 500)}
+        </svg>
+
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 8, fontSize: 12 }}>
+          <LegendItem c="var(--primary)" t="① Network — on-host NIC sniff (pcap); or off-host SPAN/tap · observe" />
+          <LegendItem c="var(--info)" t="② Host eBPF — on the DB host, kernel layer · observe (local + IPC)" />
+          <LegendItem c="var(--amber)" t="③ Inline proxy — in the path · observe + BLOCK" />
+          <LegendItem c="var(--green)" t="④ Agentless — native audit logs, off-host · observe (PaaS)" />
+        </div>
+        <p className="muted" style={{ fontSize: 11.5, margin: '10px 2px 0', lineHeight: 1.5 }}>
+          The <b style={{ color: 'var(--primary)' }}>network</b> and <b style={{ color: 'var(--info)' }}>host</b> agents both run <b>on the DB host</b> — they differ by capture layer (NIC/pcap vs kernel), not location. The network agent can alternatively run off-host as a <b>SPAN port / traffic mirror</b>. Dashed lines = telemetry each agent sends <b>outbound</b> to the DAM (the control plane never connects into your DB network — which is why this works for private, no-public-IP databases). Only the <b style={{ color: 'var(--amber)' }}>inline proxy</b> sits in the traffic path, so it’s the only mode that can block in real time.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function CaptureModes() {
   const navigate = useNavigate();
 
@@ -61,6 +137,9 @@ export default function CaptureModes() {
       <PageHeader title="Capture Modes &amp; Coverage" meta={['understand the trade-offs', 'then deploy from Agents & Coverage']}>
         <button className="btn-primary" onClick={() => navigate('/agents?deploy=1')}>Go to deploy →</button>
       </PageHeader>
+
+      {/* Visual overview */}
+      <CaptureDiagram />
 
       {/* Mode primer */}
       <div className="grid2" style={{ marginBottom: 14 }}>

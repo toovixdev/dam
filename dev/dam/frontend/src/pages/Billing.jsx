@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -25,14 +26,6 @@ function loadRazorpay() {
 
 const RATES = { USD: 1, EUR: 0.92, GBP: 0.79, INR: 83.5, CAD: 1.36, SGD: 1.34, JPY: 157.2 };
 const SYM = { USD: '$', EUR: '€', GBP: '£', INR: '₹', CAD: 'C$', SGD: 'S$', JPY: '¥' };
-const GATEWAYS = [
-  { id: 'Stripe', desc: 'Global — cards, ACH, SEPA, wire. 135+ currencies.', regions: 'US, EU, UK, CA, AU', fee: '2.9% + $0.30', currency: 'USD' },
-  { id: 'Razorpay', desc: 'India — UPI, net banking, cards, wallets.', regions: 'India', fee: '2% domestic', currency: 'INR' },
-  { id: 'PayU', desc: 'India — UPI, cards, net banking, EMI.', regions: 'India', fee: '2% domestic', currency: 'INR' },
-  { id: 'PayPal', desc: 'Global — PayPal balance, cards, bank. 200+ markets.', regions: '200+ countries', fee: '2.9% + fixed', currency: 'USD' },
-  { id: 'Adyen', desc: 'Enterprise — global acquiring, 250+ methods.', regions: 'Global', fee: 'Custom', currency: 'USD' },
-];
-
 function fmtBytes(gb) {
   if (gb >= 1024) return `${(gb / 1024).toFixed(2)} TB`;
   if (gb >= 1) return `${gb.toFixed(2)} GB`;
@@ -59,14 +52,13 @@ function UsageBar({ label, used, limitText, pct, note, color }) {
 }
 
 export default function Billing() {
+  const navigate = useNavigate();
+  const goToPayments = () => navigate('/settings?tab=pay'); // real credentials live in Settings → Payments
   const { data, loading, error, refetch } = useApiData('/billing');
   const { data: payCfg } = useApiData('/billing/payment-config', { poll: 0 });
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [currency, setCurrency] = useState('USD');
   const [payOpen, setPayOpen] = useState(false);
-  const [gwOpen, setGwOpen] = useState(false);
-  const [gw, setGw] = useState('Stripe');
-  const [selGw, setSelGw] = useState(null);
   const [busy, setBusy] = useState(false);
 
   // Handle the redirect back from PayU's hosted page (?payu=success|failed|invalid).
@@ -87,10 +79,15 @@ export default function Billing() {
   if (loading) return <Layout activePage="billing"><div className="loading-screen"><div className="loading-spinner" /><p>Loading billing…</p></div></Layout>;
   if (error || !data) return <Layout activePage="billing"><div className="card" style={{ padding: 16, color: 'var(--danger)' }}>Error loading billing: {error || 'no data'}</div></Layout>;
 
-  const { plan, account, usage, currentInvoice, balance, paymentMethods, invoices } = data;
+  const { plan, account, usage, currentInvoice, balance, invoices } = data;
   const items = currentInvoice?.items || [];
-  // Razorpay & PayU have real-UI buttons, so keep them out of the simulated list.
-  const simMethods = paymentMethods.filter((m) => !['Razorpay', 'PayU'].includes(m.provider));
+  // A "payment method" = a gateway THIS workspace configured with real credentials
+  // in Settings → Payments (payment-config.configured === true). No credential-less rows.
+  const gateways = [
+    payCfg?.razorpay?.configured && { key: 'razorpay', name: 'Razorpay', detail: `India · UPI, cards, net banking · ${payCfg.razorpay.mode === 'live' ? 'Live' : 'Test'} keys` },
+    payCfg?.payu?.configured && { key: 'payu', name: 'PayU', detail: `India · UPI, cards, EMI · ${payCfg.payu.mode === 'live' ? 'Live' : 'Test'} keys` },
+  ].filter(Boolean);
+  const hasPaymentMethod = gateways.length > 0;
 
   // Download a single invoice as a PDF (auth-gated, so fetch as a blob then save).
   const downloadInvoice = async (ref) => {
@@ -105,15 +102,6 @@ export default function Billing() {
       URL.revokeObjectURL(url);
       toast(`Downloaded ${ref}.pdf`, 'ok');
     } catch { toast('Could not download invoice', 'err'); }
-  };
-
-  // Simulated fallback (Stripe/PayPal, or any gateway with no live keys).
-  const pay = async () => {
-    setBusy(true);
-    const res = await apiPost('/billing/pay', { reference: currentInvoice?.reference, gateway: gw });
-    setBusy(false);
-    if (res && res.ok) { toast(`Payment processed via ${res.data.gateway} · ${res.data.txn}`, 'ok'); setPayOpen(false); refetch(); }
-    else toast('Payment failed', 'err');
   };
 
   // Razorpay — open the in-page Checkout widget. Live mode uses a server order +
@@ -174,15 +162,6 @@ export default function Billing() {
     document.body.appendChild(form);
     form.submit(); // leaves the app → returns to /billing?payu=... via the callback
   };
-  const connectGateway = async () => {
-    if (!selGw) return;
-    setBusy(true);
-    const g = GATEWAYS.find((x) => x.id === selGw);
-    const res = await apiPost('/billing/payment-methods', { provider: g.id, label: `${g.id} gateway`, currency: g.currency, role: 'backup' });
-    setBusy(false);
-    if (res && res.ok) { toast(`${g.id} connected — billing in ${g.currency}`, 'ok'); setGwOpen(false); setSelGw(null); refetch(); }
-    else toast('Could not connect gateway', 'err');
-  };
   const downloadAll = () => {
     exportCsv('toovix-invoices.csv', ['Reference', 'Period', 'Amount (USD)', 'Status', 'Due'], invoices.map((i) => [i.reference, i.period, Number(i.amount).toFixed(2), i.status, (i.due_date || '').slice(0, 10)]));
     toast(`Exported ${invoices.length} invoices`, 'ok');
@@ -195,7 +174,12 @@ export default function Billing() {
           {Object.keys(RATES).map((c) => <option key={c} value={c}>{c} ({SYM[c]})</option>)}
         </select>
         <button className="btn-secondary" onClick={downloadAll}>⤓ Download all invoices</button>
-        <button className="btn-primary" onClick={() => { setGw(simMethods[0]?.provider || 'Stripe'); setPayOpen(true); }}>⚑ Make a payment</button>
+        {hasPaymentMethod && balance.outstanding > 0 && (
+          <button
+            className="btn-primary"
+            onClick={() => setPayOpen(true)}
+          >⚑ Make a payment</button>
+        )}
       </PageHeader>
 
       <section className="kpi-grid">
@@ -243,19 +227,38 @@ export default function Billing() {
 
       <div className="grid2" style={{ marginBottom: 14 }}>
         <div className="card">
-          <div className="card-header"><span className="card-title">Payment methods</span><button className="card-link" onClick={() => setGwOpen(true)} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>+ Connect</button></div>
+          <div className="card-header"><span className="card-title">Payment methods</span><button className="card-link" onClick={goToPayments} style={{ background: 'none', border: 'none', cursor: 'pointer' }}>⚙ Manage in Settings</button></div>
           <div className="card-body">
-            {paymentMethods.map((m) => (
-              <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, marginBottom: 10 }}>
-                <span style={{ fontSize: 18, width: 32, textAlign: 'center' }}>⚑</span>
-                <div style={{ flex: 1 }}><b style={{ fontSize: 13 }}>{m.provider}</b><div className="muted" style={{ fontSize: 12 }}>{m.role === 'primary' ? 'Primary' : 'Backup'} · {m.label}</div></div>
-                <span className={`badge ${m.role === 'primary' ? 'status-green' : ''} dot`} style={{ fontSize: 10 }}>{m.role === 'primary' ? 'Connected' : 'Backup'}</span>
+            {!hasPaymentMethod ? (
+              <div style={{ textAlign: 'center', padding: '20px 16px', background: 'var(--surface-2)', border: '1px dashed var(--line)', borderRadius: 10, marginBottom: 12 }}>
+                <div style={{ fontSize: 30, marginBottom: 8 }}>💳</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>No payment method configured</div>
+                <p style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 auto 12px', maxWidth: 380, lineHeight: 1.6, textAlign: 'left' }}>
+                  A payment method is a gateway your workspace connects with its own API credentials. To set one up:
+                </p>
+                <ol style={{ fontSize: 12.5, color: 'var(--muted)', margin: '0 auto 14px', maxWidth: 380, textAlign: 'left', paddingLeft: 18, lineHeight: 1.7 }}>
+                  <li>Open <b>Settings → Payments</b>.</li>
+                  <li>Pick a gateway — <b>Razorpay</b> or <b>PayU</b>.</li>
+                  <li>Enter its <b>API key &amp; secret</b> (from the gateway dashboard) and save.</li>
+                </ol>
+                <button className="btn-primary" onClick={goToPayments}>Go to Settings → Payments</button>
+                <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 12 }}><b>No card data stored</b> — credentials stay server-side; card/bank data stays with the gateway (PCI DSS Level 1).</div>
               </div>
-            ))}
-            <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>
-              <b>Payment terms:</b> {account.terms} · Auto-pay {account.autopay ? 'enabled' : 'off'} · invoices to {account.email}<br />
-              <b>No card data stored</b> — all payment info is held by the gateway (PCI DSS Level 1).
-            </div>
+            ) : (
+              <>
+                {gateways.map((g) => (
+                  <div key={g.key} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, marginBottom: 10 }}>
+                    <span style={{ fontSize: 18, width: 32, textAlign: 'center' }}>⚑</span>
+                    <div style={{ flex: 1 }}><b style={{ fontSize: 13 }}>{g.name}</b><div className="muted" style={{ fontSize: 12 }}>{g.detail}</div></div>
+                    <span className="badge status-green dot" style={{ fontSize: 10 }}>Configured</span>
+                  </div>
+                ))}
+                <div style={{ marginTop: 6, fontSize: 12, color: 'var(--muted)' }}>
+                  <b>Payment terms:</b> {account.terms} · Auto-pay {account.autopay ? 'enabled' : 'off'} · invoices to {account.email}<br />
+                  Manage credentials in <button className="card-link" onClick={goToPayments} style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--primary)' }}>Settings → Payments</button>. <b>No card data stored.</b>
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -308,69 +311,24 @@ export default function Billing() {
           </div>
         </div>
 
-        {/* Live gateways (real checkout UI) */}
+        {/* Your configured gateways (real checkout UI) */}
         <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--subtle)', marginBottom: 8 }}>Pay now</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
-          {payCfg?.razorpay?.available && (
+          {payCfg?.razorpay?.configured && (
             <button className="btn-primary" disabled={busy || !currentInvoice} onClick={payWithRazorpay} style={{ justifyContent: 'space-between', background: '#0c2451' }}>
-              <span>Pay with <b>Razorpay</b>{payCfg.razorpay.mode === 'demo' ? <span style={{ fontWeight: 400, opacity: .8 }}> · test mode</span> : ''}</span>
+              <span>Pay with <b>Razorpay</b></span>
               <span style={{ fontSize: 12, opacity: .85 }}>UPI · Cards · Net Banking</span>
             </button>
           )}
-          {payCfg?.payu?.available && (
+          {payCfg?.payu?.configured && (
             <button className="btn-primary" disabled={busy || !currentInvoice} onClick={payWithPayU} style={{ justifyContent: 'space-between', background: '#01bd9b' }}>
-              <span>Pay with <b>PayU</b>{payCfg.payu.source === 'demo' ? <span style={{ fontWeight: 400, opacity: .8 }}> · test mode</span> : ''}</span>
+              <span>Pay with <b>PayU</b></span>
               <span style={{ fontSize: 12, opacity: .85 }}>UPI · Cards · EMI</span>
             </button>
           )}
         </div>
-        {payCfg?.payu?.source === 'demo' && (
-          <div style={{ background: 'var(--info-soft)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.5 }}>
-            PayU is in <b>test mode</b> (public sandbox credentials — opens the real PayU hosted page on test.payu.in). Add your own merchant key + salt in <b>Settings → Payments</b> to go live.
-          </div>
-        )}
-        {payCfg?.razorpay?.mode === 'demo' && (
-          <div style={{ background: 'var(--info-soft)', borderRadius: 8, padding: '8px 12px', marginBottom: 14, fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.5 }}>
-            Razorpay is in <b>test mode</b> (using a demo key — opens the real Razorpay UI, use test card <b>4111 1111 1111 1111</b>). Add your own keys in <b>Settings → Payments</b> to go live.
-          </div>
-        )}
-
-        {/* Simulated fallback for other (non-real-UI) gateways like Stripe/PayPal */}
-        {simMethods.length > 0 && (
-          <>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--subtle)', marginBottom: 8 }}>Other methods (simulated — no real checkout)</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
-              {simMethods.map((m) => (
-                <label key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 9, cursor: 'pointer', fontSize: 13, border: `1.5px solid ${gw === m.provider ? 'var(--primary)' : 'var(--line)'}`, background: gw === m.provider ? 'var(--primary-soft)' : 'var(--surface-2)' }}>
-                  <input type="radio" name="gw" checked={gw === m.provider} onChange={() => setGw(m.provider)} />
-                  <div><b>{m.provider}</b> ({m.role})<div className="muted" style={{ fontSize: 12 }}>{m.label}</div></div>
-                </label>
-              ))}
-            </div>
-          </>
-        )}
         <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
           <button className="btn-secondary" onClick={() => setPayOpen(false)}>Cancel</button>
-          {simMethods.length > 0 && (
-            <button className="btn-secondary" disabled={busy || !currentInvoice} onClick={pay}>{busy ? 'Processing…' : `Simulate via ${gw}`}</button>
-          )}
-        </div>
-      </Modal>
-
-      {/* Connect gateway */}
-      <Modal open={gwOpen} onClose={() => { setGwOpen(false); setSelGw(null); }} title="Connect payment gateway" width={560}>
-        <p className="muted" style={{ fontSize: 13.5, marginTop: 0, lineHeight: 1.5 }}>Connect a gateway to process payments. TooVix stores no payment credentials — all card/bank data is held by the gateway (PCI DSS Level 1).</p>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 8 }}>
-          {GATEWAYS.map((g) => (
-            <div key={g.id} onClick={() => setSelGw(g.id)} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px', borderRadius: 10, cursor: 'pointer', border: `1.5px solid ${selGw === g.id ? 'var(--primary)' : 'var(--line)'}`, background: selGw === g.id ? 'var(--primary-soft)' : 'var(--surface-2)' }}>
-              <div style={{ flex: 1 }}><b style={{ fontSize: 13 }}>{g.id}</b><div className="muted" style={{ fontSize: 12 }}>{g.desc}</div></div>
-              <div style={{ textAlign: 'right', fontSize: 11, color: 'var(--muted)', minWidth: 90 }}><div>{g.regions.split(',')[0]}</div><div>{g.fee}</div></div>
-            </div>
-          ))}
-        </div>
-        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
-          <button className="btn-secondary" onClick={() => { setGwOpen(false); setSelGw(null); }}>Cancel</button>
-          <button className="btn-primary" disabled={busy || !selGw} onClick={connectGateway}>{busy ? 'Connecting…' : 'Connect gateway'}</button>
         </div>
       </Modal>
     </Layout>

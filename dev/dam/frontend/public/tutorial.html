@@ -174,6 +174,7 @@
     <div class="toc-title">Part 2 · How DAM works</div>
     <a href="#pipeline">The monitoring pipeline</a>
     <a href="#capture">Capturing activity</a>
+    <a href="#capture-modes">Capture modes in depth</a>
     <a href="#policies">Policies & detection</a>
     <a href="#alerts-c">Alerts & severity</a>
     <a href="#respond">Responding to threats</a>
@@ -280,6 +281,130 @@
       </table>
       <p>The choice of method is called the <b>capture mode</b>, and how widely you've deployed it is your <b>coverage</b>. More coverage = fewer blind spots.</p>
       <div class="tip"><b>Beginner takeaway:</b> a database TooVix doesn't capture is a database it can't protect. Step one is always getting monitoring onto your data sources.</div>
+    </section>
+
+    <!-- ══════════ CAPTURE MODES (in depth) ══════════ -->
+    <section id="capture-modes">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Capture modes &amp; coverage — in depth</h2>
+      <p>The section above introduced capture at a high level. In practice TooVix offers <b>four</b> capture modes, and each one watches a different <b>path</b> into your database with different powers. You rarely pick just one — you combine them to close blind spots. Here's the fuller picture.</p>
+
+      <h3 style="margin:22px 0 4px">At a glance — the four capture modes</h3>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 6px">Where each mode sits, and what it can do.</p>
+      <div style="border:1px solid var(--line);border-radius:12px;background:var(--bg);padding:14px 14px 10px">
+        <svg viewBox="0 0 900 210" width="100%" style="max-height:260px" role="img" aria-label="Capture modes architecture diagram">
+          <defs>
+            <marker id="cmArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+              <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke"/>
+            </marker>
+          </defs>
+
+          <!-- DAM control plane -->
+          <rect x="30" y="8" width="840" height="32" rx="8" fill="#ffffff" stroke="#e2e8f0"/>
+          <text x="450" y="28" text-anchor="middle" fill="#0f172a" font-size="12.5" font-weight="700">🛡  TooVix DAM — Control Plane   ·   events in → alerts out</text>
+
+          <!-- telemetry (dashed, agent-initiated outbound) -->
+          <line x1="205" y1="66" x2="205" y2="42" stroke="#4f46e5" stroke-dasharray="4 3" marker-end="url(#cmArrow)"/>
+          <line x1="302" y1="142" x2="302" y2="42" stroke="#b45309" stroke-dasharray="4 3" marker-end="url(#cmArrow)"/>
+          <line x1="528" y1="134" x2="528" y2="42" stroke="#0284c7" stroke-dasharray="4 3" marker-end="url(#cmArrow)"/>
+          <line x1="795" y1="146" x2="795" y2="42" stroke="#16a34a" stroke-dasharray="4 3" marker-end="url(#cmArrow)"/>
+
+          <!-- (1) Network tap -->
+          <rect x="150" y="66" width="110" height="34" rx="6" fill="#ffffff" stroke="#4f46e5" stroke-width="1.5"/>
+          <text x="205" y="87" text-anchor="middle" fill="#4f46e5" font-size="11" font-weight="700">① Network tap</text>
+          <line x1="205" y1="100" x2="205" y2="166" stroke="#4f46e5" stroke-dasharray="3 3"/>
+          <text x="270" y="130" text-anchor="start" fill="#64748b" font-size="9.5" font-weight="500">sniffs wire</text>
+
+          <!-- data path: App -> proxy -> DB host -->
+          <rect x="30" y="146" width="96" height="40" rx="8" fill="#ffffff" stroke="#e2e8f0"/>
+          <text x="78" y="163" text-anchor="middle" fill="#0f172a" font-size="11" font-weight="600">App /</text>
+          <text x="78" y="178" text-anchor="middle" fill="#0f172a" font-size="11" font-weight="600">Clients</text>
+          <line x1="126" y1="166" x2="248" y2="166" stroke="#0f172a" marker-end="url(#cmArrow)"/>
+
+          <rect x="250" y="142" width="104" height="48" rx="8" fill="#ffffff" stroke="#b45309" stroke-width="2"/>
+          <text x="302" y="162" text-anchor="middle" fill="#b45309" font-size="11" font-weight="700">③ Inline proxy</text>
+          <text x="302" y="178" text-anchor="middle" fill="#b45309" font-size="9.5" font-weight="600">GATE · blocks</text>
+          <line x1="354" y1="166" x2="468" y2="166" stroke="#0f172a" marker-end="url(#cmArrow)"/>
+
+          <rect x="470" y="134" width="216" height="64" rx="10" fill="none" stroke="#0284c7" stroke-dasharray="5 4"/>
+          <text x="478" y="148" text-anchor="start" fill="#64748b" font-size="9.5" font-weight="600">DB host</text>
+          <rect x="482" y="152" width="92" height="40" rx="6" fill="#ffffff" stroke="#0284c7" stroke-width="1.5"/>
+          <text x="528" y="176" text-anchor="middle" fill="#0284c7" font-size="10.5" font-weight="700">② Host eBPF</text>
+          <rect x="596" y="150" width="82" height="44" rx="6" fill="#ffffff" stroke="#e2e8f0"/>
+          <text x="637" y="177" text-anchor="middle" fill="#0f172a" font-size="12" font-weight="700">DB</text>
+
+          <!-- (4) Agentless (reads audit logs - no install) -->
+          <line x1="686" y1="168" x2="720" y2="168" stroke="#16a34a" marker-end="url(#cmArrow)"/>
+          <text x="703" y="161" text-anchor="middle" fill="#64748b" font-size="9" font-weight="500">audit</text>
+          <rect x="720" y="146" width="150" height="44" rx="6" fill="#ffffff" stroke="#16a34a" stroke-width="1.5"/>
+          <text x="795" y="164" text-anchor="middle" fill="#16a34a" font-size="11" font-weight="700">④ Agentless</text>
+          <text x="795" y="179" text-anchor="middle" fill="#16a34a" font-size="9.5" font-weight="500">Pull / Cloud Push</text>
+        </svg>
+        <p style="font-size:12px;color:var(--muted);margin:8px 4px 2px;line-height:1.5">
+          Dashed lines = telemetry each mode sends <b>outbound</b> to the DAM (agents dial out; the control plane never connects into your DB network — which is why this works for private, no-public-IP databases). Only the <b style="color:#b45309">inline proxy</b> sits in the traffic path, so it's the only mode that can block in real time.
+        </p>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <div class="ic" style="color:#4f46e5">①</div>
+          <h4>Network agent <span style="font-weight:500;color:#94a3b8;font-size:12px">· installed · passive</span></h4>
+          <p>Sniffs the database's network traffic (libpcap, protocol decode). No path change, ~0 overhead, and it sees every networked connection — <b>including ones that bypass a proxy</b>. Blind to local/IPC; cannot block.</p>
+        </div>
+        <div class="card">
+          <div class="ic" style="color:#0284c7">②</div>
+          <h4>Host agent (eBPF) <span style="font-weight:500;color:#94a3b8;font-size:12px">· installed · passive</span></h4>
+          <p>Runs on the DB host kernel. Sees every connection reaching the DB process — including <b>local sockets, shared memory and IPC</b> nothing else can. Deepest visibility; limited local enforcement.</p>
+        </div>
+        <div class="card">
+          <div class="ic" style="color:#b45309">③</div>
+          <h4>Inline proxy <span style="font-weight:500;color:#94a3b8;font-size:12px">· installed · inline</span></h4>
+          <p>A gateway in the data path — clients connect through it. The only mode that can <b>block / quarantine</b>, and the only one that sees the real end-user behind a pooled connection. Only sees traffic routed through it.</p>
+        </div>
+        <div class="card">
+          <div class="ic" style="color:#16a34a">④</div>
+          <h4>Agentless (Pull / Push) <span style="font-weight:500;color:#94a3b8;font-size:12px">· no install</span></h4>
+          <p>Reads native DB audit logs / the DB profiler, or consumes cloud audit streams (Cloud Push). Works for <b>managed / PaaS</b> databases where you can't (or don't want to) install on the host. After-the-fact; cannot block.</p>
+        </div>
+      </div>
+
+      <div class="tip"><b>Mental model:</b> the <b>inline proxy is a gate</b> the traffic passes through (so it can stop it); the <b>network</b> and <b>host</b> agents are <b>cameras pointed at the database</b> (they see traffic arrive but can't stop it). Each catches a path the others can't — so combining them closes blind spots.</div>
+
+      <h3 style="margin:24px 0 4px">Who sees what — by connection path</h3>
+      <table>
+        <tr><th>Connection path</th><th>Inline Proxy</th><th>Network agent</th><th>Host agent</th></tr>
+        <tr><td><b>App routed through the proxy</b></td><td><span style="color:#16a34a;font-weight:600">✓ + real client IP</span></td><td><span style="color:#b45309;font-weight:600">✓ source = proxy</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td></tr>
+        <tr><td><b>Direct TCP (bypasses proxy)</b></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td></tr>
+        <tr><td><b>Local / IPC (Unix socket, shared mem)</b></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#16a34a;font-weight:600">✓ only one</span></td></tr>
+      </table>
+
+      <h3 style="margin:24px 0 4px">What each combination buys</h3>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 6px">Pick a posture, not a checkbox.</p>
+      <table>
+        <tr><th>Capability</th><th style="text-align:center">Network</th><th style="text-align:center">Host</th><th style="text-align:center">Proxy</th><th style="text-align:center">Net + Host</th><th style="text-align:center">Proxy + Net</th><th style="text-align:center">All 3</th></tr>
+        <tr><td><b>Networked SQL visibility</b></td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#b45309;font-weight:600">Routed only</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td></tr>
+        <tr><td><b>Local / IPC visibility</b></td><td style="text-align:center;color:#94a3b8">✗</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#94a3b8">✗</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#94a3b8">✗</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td></tr>
+        <tr><td><b>Real end-user attribution</b></td><td style="text-align:center;color:#94a3b8">✗</td><td style="text-align:center;color:#b45309;font-weight:600">Partial</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#b45309;font-weight:600">Partial</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td></tr>
+        <tr><td><b>Block / quarantine</b></td><td style="text-align:center;color:#94a3b8">✗</td><td style="text-align:center;color:#b45309;font-weight:600">Local only</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#94a3b8">✗</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td><td style="text-align:center;color:#16a34a;font-weight:600">✓</td></tr>
+        <tr><td><b>Reroutes clients?</b></td><td style="text-align:center;color:#94a3b8">no</td><td style="text-align:center;color:#94a3b8">no</td><td style="text-align:center;color:#b45309;font-weight:600">YES</td><td style="text-align:center;color:#94a3b8">no</td><td style="text-align:center;color:#b45309;font-weight:600">YES</td><td style="text-align:center;color:#b45309;font-weight:600">YES</td></tr>
+        <tr><td><b>Install on DB host?</b></td><td style="text-align:center;color:#94a3b8">no</td><td style="text-align:center;color:#b45309;font-weight:600">YES</td><td style="text-align:center;color:#94a3b8">no</td><td style="text-align:center;color:#b45309;font-weight:600">on host</td><td style="text-align:center;color:#94a3b8">no</td><td style="text-align:center;color:#b45309;font-weight:600">on host</td></tr>
+        <tr><td><b>Containers to deploy</b></td><td style="text-align:center">1</td><td style="text-align:center">1</td><td style="text-align:center">1</td><td style="text-align:center">2</td><td style="text-align:center">2</td><td style="text-align:center">3</td></tr>
+      </table>
+
+      <h3 style="margin:24px 0 4px">What's applicable by deployment type</h3>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 6px">IaaS / on-prem can install agents · PaaS goes agentless.</p>
+      <table>
+        <tr><th>Deployment</th><th>Network</th><th>Host</th><th>Inline Proxy</th><th>Agentless</th><th>Recommended</th></tr>
+        <tr><td><b>On-prem (bare metal)</b></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td><span style="color:#16a34a;font-weight:600">✓ pull</span></td><td style="color:var(--muted);font-size:13px">Network + Host (full visibility); add Proxy to block</td></tr>
+        <tr><td><b>IaaS (VM — EC2 / Azure VM / GCE)</b></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td style="color:var(--muted);font-size:13px">Network + Host; Proxy if blocking required</td></tr>
+        <tr><td><b>AWS RDS / Aurora</b></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#b45309;font-weight:600">⚠ in your VPC</span></td><td><span style="color:#16a34a;font-weight:600">✓ Cloud Push</span></td><td style="color:var(--muted);font-size:13px">Cloud Push (agentless)</td></tr>
+        <tr><td><b>Azure SQL / Managed Instance</b></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#b45309;font-weight:600">⚠ in your VPC</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td style="color:var(--muted);font-size:13px">Cloud Push</td></tr>
+        <tr><td><b>Google Cloud SQL</b></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#b45309;font-weight:600">⚠ in your VPC</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td style="color:var(--muted);font-size:13px">Audit Pull / Push</td></tr>
+        <tr><td><b>MongoDB on VM / on-prem</b></td><td><span style="color:#b45309;font-weight:600">⚠ wire decode</span></td><td><span style="color:#b45309;font-weight:600">⚠ host eBPF</span></td><td><span style="color:#b45309;font-weight:600">⚠ for blocking</span></td><td><span style="color:#16a34a;font-weight:600">✓ profiler pull</span></td><td style="color:var(--muted);font-size:13px">Audit Pull (DB profiler) — wire-protocol agents N/A yet</td></tr>
+        <tr><td><b>MongoDB Atlas</b></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#16a34a;font-weight:600">✓ webhook</span></td><td style="color:var(--muted);font-size:13px">Cloud Push</td></tr>
+        <tr><td><b>OCI Autonomous</b></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#94a3b8">✗</span></td><td><span style="color:#16a34a;font-weight:600">✓</span></td><td style="color:var(--muted);font-size:13px">Audit Pull / Push</td></tr>
+      </table>
+      <div class="note">An inline proxy <b>can</b> front a PaaS database if it exposes a network endpoint you route through (you deploy the proxy in your own VPC, not on the managed host) — but agentless capture is the recommended fit for managed databases.</div>
     </section>
 
     <section id="policies">

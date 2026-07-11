@@ -267,7 +267,7 @@ function CreateWizard({ open, onClose, onCreated }) {
   const [step, setStep] = useState(1);
   const [slugEdited, setSlugEdited] = useState(false);
   const [form, setForm] = useState({
-    name: '', slug: '', plan: 'enterprise', adminName: '', adminEmail: '', sso: 'azure-ad',
+    name: '', slug: '', plan: 'enterprise', adminName: '', adminEmail: '',
     deploy: 'saas', cloud: 'azure', region: 'US-East',
   });
   const [provisioning, setProvisioning] = useState(false);
@@ -278,7 +278,7 @@ function CreateWizard({ open, onClose, onCreated }) {
 
   function reset() {
     setStep(1); setSlugEdited(false); setProvisioning(false); setDoneSteps(0); setResult(null);
-    setForm({ name: '', slug: '', plan: 'enterprise', adminName: '', adminEmail: '', sso: 'azure-ad', deploy: 'saas', cloud: 'azure', region: 'US-East' });
+    setForm({ name: '', slug: '', plan: 'enterprise', adminName: '', adminEmail: '', deploy: 'saas', cloud: 'azure', region: 'US-East' });
   }
   function close() { reset(); onClose(); }
 
@@ -304,7 +304,7 @@ function CreateWizard({ open, onClose, onCreated }) {
       deployment_type: form.deploy,
       cloud_provider: form.deploy === 'onprem' ? null : form.cloud,
       data_region: form.region,
-      adminName: form.adminName, adminEmail: form.adminEmail, sso: form.sso,
+      adminName: form.adminName, adminEmail: form.adminEmail,
     };
 
     const res = await apiPost('/admin/tenants', body);
@@ -357,15 +357,12 @@ function CreateWizard({ open, onClose, onCreated }) {
               <div className="form-field"><label>Admin email *</label>
                 <input value={form.adminEmail} placeholder="e.g. s.chen@meridianfg.com" onChange={(e) => set({ adminEmail: e.target.value })} /></div>
               <Section>Identity</Section>
-              <div className="form-field"><label>SSO provider</label>
-                <select value={form.sso} onChange={(e) => set({ sso: e.target.value })}>
-                  <option value="azure-ad">Azure AD / Entra ID</option>
-                  <option value="okta">Okta</option>
-                  <option value="google">Google Workspace</option>
-                  <option value="ldap">LDAP / Kerberos</option>
-                  <option value="saml">Generic SAML 2.0</option>
-                  <option value="none">None (email + password)</option>
-                </select></div>
+              <div className="form-field">
+                <div style={{ fontSize: 13, color: 'var(--muted)', lineHeight: 1.5, background: 'var(--surface-2, rgba(148,163,184,.08))', border: '1px solid var(--line)', borderRadius: 8, padding: '10px 12px' }}>
+                  🔐 The first admin signs in with <b>email + password</b> and is required to set up <b>MFA</b>.
+                  Single sign-on (Azure AD, Okta, Google) is enabled later from <b>Integrations → SSO</b> inside the workspace.
+                </div>
+              </div>
             </div>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--line)', justifyContent: 'flex-end' }}>

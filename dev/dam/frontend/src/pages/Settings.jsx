@@ -23,7 +23,10 @@ function SettingRow({ title, sub, children }) {
 
 export default function Settings() {
   const { user } = useAuth();
-  const [tab, setTab] = useState('gen');
+  const [tab, setTab] = useState(() => {
+    const t = new URLSearchParams(window.location.search).get('tab');
+    return ['gen', 'ret', 'sec', 'pay', 'plan'].includes(t) ? t : 'gen';
+  });
   const [toggles, setToggles] = useState({
     airgap: false, ha: true, coldExport: true, legalHold: false,
     mfa: true, byok: true, noNative: true, selfAudit: true,
@@ -44,8 +47,8 @@ export default function Settings() {
     reader.onload = () => setBLogo(reader.result);
     reader.readAsDataURL(file);
   };
-  const saveBrand = () => { setBranding({ name: bName, logo: bLogo, placement: bPlace }); toast('Branding applied', 'ok'); };
-  const resetBrand = () => { resetBranding(); setBName(''); setBLogo(''); setBPlace('sidebar'); toast('Branding reset to default', 'ok'); };
+  const saveBrand = async () => { const ok = await setBranding({ name: bName, logo: bLogo, placement: bPlace }); toast(ok ? 'Branding applied' : 'Could not save branding', ok ? 'ok' : 'err'); };
+  const resetBrand = async () => { const ok = await resetBranding(); setBName(''); setBLogo(''); setBPlace('sidebar'); toast(ok ? 'Branding reset to default' : 'Could not reset branding', ok ? 'ok' : 'err'); };
 
   const usage = [
     { label: 'DBs', value: 47, color: 'var(--primary)' },

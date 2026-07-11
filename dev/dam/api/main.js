@@ -13,7 +13,7 @@ const QRCode = require('qrcode');
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '5mb' })); // room for base64 branding logos
 app.use(express.urlencoded({ extended: true })); // PayU posts its callback as form-encoded
 
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-jwt-secret-change-in-prod';
@@ -59,35 +59,32 @@ const API_PUBLIC_URL = (process.env.API_PUBLIC_URL || 'http://localhost:3000').r
 const BILLING_TEST_TOTAL_USD = process.env.BILLING_TEST_TOTAL_USD ? parseFloat(process.env.BILLING_TEST_TOTAL_USD) : null;
 const usdToInr = (usd) => Math.max(1, Math.round(Number(usd) * USD_TO_INR * 100) / 100); // 2dp INR
 
-let gatewayDbConfig = { razorpay: null, payu: null }; // loaded from gateway_config
-
-// Load DB-saved gateway config at boot + after every save.
-async function loadGatewayConfig() {
+// Gateway credentials are PER-TENANT (Settings → Payments), keyed by (tenant_id,
+// provider) in gateway_config. Each workspace configures its own Razorpay/PayU keys;
+// a fresh workspace has none until its admin adds them.
+async function gatewayConfigFor(tenantId) {
   try {
-    const rows = (await pgPool.query('SELECT provider, config FROM gateway_config')).rows;
-    const next = { razorpay: null, payu: null };
-    for (const r of rows) next[r.provider] = r.config;
-    gatewayDbConfig = next;
-  } catch (e) { /* table may not exist yet at first boot */ }
+    const rows = (await pgPool.query('SELECT provider, config FROM gateway_config WHERE tenant_id = $1', [tenantId])).rows;
+    const out = { razorpay: null, payu: null };
+    for (const r of rows) out[r.provider] = r.config;
+    return out;
+  } catch { return { razorpay: null, payu: null }; }
 }
 
-// Effective Razorpay: DB → env → demo. mode 'live' (own key+secret, order+verify)
-// or 'demo' (public key, no-order checkout + mark-paid-on-success).
-function activeRazorpay() {
-  const db = gatewayDbConfig.razorpay;
+// Effective Razorpay for a tenant's stored config: DB → env → demo. mode 'live'
+// (own key+secret, order+verify) or 'demo' (public key, mark-paid-on-success).
+// `source === 'database'` means THIS tenant configured real credentials.
+function activeRazorpay(db) {
   if (db && db.key_id && db.key_secret) return { keyId: db.key_id, keySecret: db.key_secret, source: 'database', mode: 'live' };
   if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) return { keyId: process.env.RAZORPAY_KEY_ID, keySecret: process.env.RAZORPAY_KEY_SECRET, source: 'env', mode: 'live' };
   return { keyId: RAZORPAY_DEMO_KEY, keySecret: '', source: 'demo', mode: 'demo' };
 }
-// Effective PayU: DB → env → demo (public sandbox key+salt, test.payu.in).
-function activePayU() {
-  const db = gatewayDbConfig.payu;
+// Effective PayU for a tenant's stored config: DB → env → demo (sandbox, test.payu.in).
+function activePayU(db) {
   if (db && db.merchant_key && db.salt) return { merchantKey: db.merchant_key, salt: db.salt, mode: (db.mode || 'test'), source: 'database' };
   if (process.env.PAYU_MERCHANT_KEY && process.env.PAYU_SALT) return { merchantKey: process.env.PAYU_MERCHANT_KEY, salt: process.env.PAYU_SALT, mode: (process.env.PAYU_MODE || 'test').toLowerCase(), source: 'env' };
   return { merchantKey: PAYU_DEMO_KEY, salt: PAYU_DEMO_SALT, mode: 'test', source: 'demo' };
 }
-const razorpayLive = () => activeRazorpay().mode === 'live';
-const payuConfigured = () => !!activePayU();
 const payuBase = (mode) => (mode === 'live' ? 'https://secure.payu.in' : 'https://test.payu.in');
 
 // SMTP can be configured two ways, DB-first then env:
@@ -848,7 +845,7 @@ async function runAuthMigration() {
     await client.query(`CREATE TABLE IF NOT EXISTS billing_invoices (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id   UUID,
-      reference   VARCHAR(40) UNIQUE,
+      reference   VARCHAR(40),
       period      VARCHAR(20),
       period_start DATE,
       amount      NUMERIC(12,2) DEFAULT 0,
@@ -859,6 +856,15 @@ async function runAuthMigration() {
       issued_at   TIMESTAMPTZ DEFAULT now(),
       paid_at     TIMESTAMPTZ
     )`);
+    // Invoice references (INV-YYYY-MM) repeat across tenants, so uniqueness must be
+    // PER-TENANT — a legacy global UNIQUE(reference) meant only the first tenant each
+    // month got an invoice (others hit ON CONFLICT and silently got none).
+    await client.query(`ALTER TABLE billing_invoices DROP CONSTRAINT IF EXISTS billing_invoices_reference_key`);
+    await client.query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'billing_invoices_tenant_reference_key') THEN
+        ALTER TABLE billing_invoices ADD CONSTRAINT billing_invoices_tenant_reference_key UNIQUE (tenant_id, reference);
+      END IF;
+    END $$`);
     await client.query(`CREATE TABLE IF NOT EXISTS payment_methods (
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id   UUID,
@@ -869,21 +875,43 @@ async function runAuthMigration() {
       status      VARCHAR(20) DEFAULT 'connected',
       created_at  TIMESTAMPTZ DEFAULT now()
     )`);
-    // Seed the two gateways the mockup shows, once.
-    const pmCount = await client.query('SELECT COUNT(*) AS n FROM payment_methods');
-    if (parseInt(pmCount.rows[0].n) === 0) {
-      await client.query(`INSERT INTO payment_methods (provider, label, currency, role, status) VALUES
-        ('Stripe', 'Visa ending 9214 · Auto-pay enabled', 'USD', 'primary', 'connected'),
-        ('Razorpay', 'UPI / Net Banking · INR payments', 'INR', 'backup', 'connected'),
-        ('PayU', 'UPI · Cards · EMI · INR payments', 'INR', 'backup', 'connected')`);
-    }
-    // Gateway API credentials (configurable in Settings → Payments). One row per
-    // provider; config jsonb holds keys/salt. Secrets never leave the server.
+    // Payment methods are per-tenant and added by each workspace's admin
+    // (Settings → Payments). No global/demo seed — a fresh tenant starts with none.
+    // Gateway API credentials (configurable in Settings → Payments), PER-TENANT.
+    // config jsonb holds keys/salt; secrets never leave the server. Keyed by (tenant_id, provider).
     await client.query(`CREATE TABLE IF NOT EXISTS gateway_config (
-      provider    VARCHAR(20) PRIMARY KEY,
+      tenant_id   UUID,
+      provider    VARCHAR(20),
       config      JSONB DEFAULT '{}',
       updated_at  TIMESTAMPTZ DEFAULT now()
     )`);
+    // Migrate a legacy platform-global table (provider-only PK) to per-tenant scoping.
+    await client.query(`ALTER TABLE gateway_config ADD COLUMN IF NOT EXISTS tenant_id UUID`);
+    // Any pre-existing global rows belong to the reference tenant (Meridian) so its billing keeps working.
+    await client.query(`UPDATE gateway_config SET tenant_id = (SELECT id FROM tenants WHERE slug='meridian-fg' LIMIT 1) WHERE tenant_id IS NULL`);
+    await client.query(`DELETE FROM gateway_config WHERE tenant_id IS NULL`); // drop any unassignable leftovers
+    await client.query(`ALTER TABLE gateway_config DROP CONSTRAINT IF EXISTS gateway_config_pkey`);
+    await client.query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'gateway_config_tenant_provider_pk') THEN
+        ALTER TABLE gateway_config ADD CONSTRAINT gateway_config_tenant_provider_pk PRIMARY KEY (tenant_id, provider);
+      END IF;
+    END $$`);
+
+    // Per-tenant white-label branding. Logo bytes live in S3/MinIO (object storage);
+    // only the object key + metadata are in Postgres — never another tenant's data.
+    await client.query(`CREATE TABLE IF NOT EXISTS tenant_branding (
+      tenant_id         UUID PRIMARY KEY,
+      name              TEXT,
+      placement         VARCHAR(20) DEFAULT 'sidebar',
+      logo_key          TEXT,
+      logo_content_type VARCHAR(80),
+      updated_at        TIMESTAMPTZ DEFAULT now()
+    )`);
+
+    // Per-tenant agent enrollment token — agents present this to enroll into the RIGHT
+    // tenant. A single global token can't tell tenants apart (all agents would land in one).
+    await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_enroll_token VARCHAR(80)`);
+    await client.query(`UPDATE tenants SET agent_enroll_token = 'tvxenr_' || replace(gen_random_uuid()::text, '-', '') WHERE agent_enroll_token IS NULL`);
 
     // Per-database masking bypass: DB principals (least-privilege service / break-glass
     // accounts) that see UNMASKED data for a given database. Isolated/additive table.
@@ -901,6 +929,7 @@ async function runAuthMigration() {
     // account the customer configures per instance — NOT root/DBA). Isolated/additive.
     await client.query(`CREATE TABLE IF NOT EXISTS exec_credentials (
       id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id  UUID,
       engine     VARCHAR(20),
       host       VARCHAR(160) NOT NULL,
       port       INT,
@@ -908,8 +937,17 @@ async function runAuthMigration() {
       password   VARCHAR(300),
       note       VARCHAR(200),
       created_at TIMESTAMPTZ DEFAULT now(),
-      UNIQUE(host, port)
+      UNIQUE(tenant_id, host, port)
     )`);
+    // host:port repeats across tenants' private VPCs → exec creds must be PER-TENANT,
+    // never keyed globally (a global key would leak/collide credentials across tenants).
+    await client.query(`ALTER TABLE exec_credentials ADD COLUMN IF NOT EXISTS tenant_id UUID`);
+    await client.query(`ALTER TABLE exec_credentials DROP CONSTRAINT IF EXISTS exec_credentials_host_port_key`);
+    await client.query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'exec_credentials_tenant_host_port_key') THEN
+        ALTER TABLE exec_credentials ADD CONSTRAINT exec_credentials_tenant_host_port_key UNIQUE (tenant_id, host, port);
+      END IF;
+    END $$`);
 
     // JIT (just-in-time) privileged access grants: request → approve → active (auto-
     // expiring) → revoked/expired. Isolated/additive table. The reaper expires grants.
@@ -951,8 +989,16 @@ async function runAuthMigration() {
       health_detail  JSONB,
       last_health_at TIMESTAMPTZ,
       created_at     TIMESTAMPTZ DEFAULT now(),
-      UNIQUE(host, port, engine)
+      UNIQUE(tenant_id, host, port, engine)
     )`);
+    // host:port repeats across different tenants' private VPCs, so the broker key must be
+    // PER-TENANT — a global (host,port,engine) unique let one tenant overwrite another's broker.
+    await client.query(`ALTER TABLE jit_brokers DROP CONSTRAINT IF EXISTS jit_brokers_host_port_engine_key`);
+    await client.query(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'jit_brokers_tenant_host_port_engine_key') THEN
+        ALTER TABLE jit_brokers ADD CONSTRAINT jit_brokers_tenant_host_port_engine_key UNIQUE (tenant_id, host, port, engine);
+      END IF;
+    END $$`);
 
     // Structured scope + signed-approval provenance on JIT grants (additive).
     await client.query(`ALTER TABLE jit_grants ADD COLUMN IF NOT EXISTS broker_id UUID`);
@@ -1691,14 +1737,16 @@ app.post('/api/auth/verify-email', async (req, res) => {
     if (u.invite_expires_at && new Date(u.invite_expires_at) < new Date())
       return res.status(410).json({ error: 'This verification link has expired. Please sign up again.' });
 
-    await pgPool.query(`UPDATE users SET status='active', invite_token=NULL, invite_expires_at=NULL, last_login_at=now() WHERE id=$1`, [u.id]);
-    const jwtToken = jwt.sign({ userId: u.id, email: u.email, fullName: u.full_name, role: u.role, tenantId: u.tenant_id, tenantName: u.tenant_name }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    await pgPool.query(`UPDATE users SET status='active', invite_token=NULL, invite_expires_at=NULL WHERE id=$1`, [u.id]);
     writeAudit({ tenantId: u.tenant_id, actorId: u.id, actorEmail: u.email, action: 'auth.email_verified', resourceType: 'user', resourceId: u.id, details: {} });
     // Workspace is now live → welcome the new admin (best-effort; never block activation).
     const tierRow = (await pgPool.query('SELECT tier FROM tenants WHERE id = $1', [u.tenant_id])).rows[0];
     sendWelcomeEmail({ to: u.email, fullName: u.full_name, tenantName: u.tenant_name, slug: u.tenant_slug, tier: tierRow?.tier || 'starter', loginUrl: `${APP_BASE_URL}/login` })
       .catch((e) => console.error(`[Welcome] send failed for ${u.email}: ${e.message}`));
-    res.json({ token: jwtToken, slug: u.tenant_slug, user: { id: u.id, email: u.email, fullName: u.full_name, role: u.role, mfaEnabled: false, tenantId: u.tenant_id, tenantName: u.tenant_name, authProvider: 'local' } });
+    // Verified, but NO session is issued here. The admin signs in next — and because
+    // mfa_enabled=true, the login gate forces MFA enrolment before any token is granted
+    // (same path as every other login). This keeps self-serve signup strictly local+MFA.
+    res.json({ verified: true, slug: u.tenant_slug, email: u.email });
   } catch (err) {
     console.error('[Auth] verify-email failed:', err.message);
     res.status(500).json({ error: 'Could not verify your email' });
@@ -2263,7 +2311,7 @@ function tenantHealth(t) {
 }
 
 // auth_provider → human SSO label shown in the manage modal.
-const SSO_LABEL = { azure: 'Azure AD / Entra ID', 'azure-ad': 'Azure AD / Entra ID', okta: 'Okta', google: 'Google Workspace', ldap: 'LDAP / Kerberos', saml: 'SAML 2.0', local: 'Email + password' };
+const SSO_LABEL = { azure: 'Azure AD / Entra ID', 'azure-ad': 'Azure AD / Entra ID', azure_ad: 'Azure AD / Entra ID', okta: 'Okta', google: 'Google Workspace', ldap: 'LDAP / Kerberos', saml: 'SAML 2.0', local: 'Email + password' };
 
 function shapeTenant(t, eventsByTenant) {
   return {
@@ -2360,9 +2408,9 @@ app.get('/api/admin/tenants/:id', async (req, res) => {
 
 // Create tenant — a REAL additive INSERT (new rows only; no existing tenant is
 // modified, so the main DAM app is unaffected). Optionally invites a tenant admin.
-const SSO_TO_PROVIDER = { 'azure-ad': 'azure', okta: 'okta', google: 'google', ldap: 'ldap', saml: 'saml', none: 'local' };
+// The first admin is always local email+password with MFA (no SSO at setup time).
 app.post('/api/admin/tenants', async (req, res) => {
-  const { name, slug, tier = 'professional', deployment_type = 'saas', cloud_provider = null, data_region = null, status = 'active', adminName = null, adminEmail = null, sso = 'azure-ad' } = req.body || {};
+  const { name, slug, tier = 'professional', deployment_type = 'saas', cloud_provider = null, data_region = null, status = 'active', adminName = null, adminEmail = null } = req.body || {};
   if (!name || !slug) return res.status(400).json({ error: 'name and slug are required' });
   if (!/^[a-z0-9-]+$/.test(slug)) return res.status(400).json({ error: 'slug must be lowercase letters, numbers and hyphens' });
   try {
@@ -2382,28 +2430,24 @@ app.post('/api/admin/tenants', async (req, res) => {
 
     let adminInvited = false;
     if (adminEmail) {
-      const provider = SSO_TO_PROVIDER[sso] || 'local';
-      const isSso = sso && sso !== 'none' && provider !== 'local';
-      // Local admins get a tokened accept-invite link (set a password); SSO admins
-      // sign in via their IdP, so no token — just an access notification.
-      const inviteToken = isSso ? null : crypto.randomBytes(32).toString('hex');
-      const inviteExpires = isSso ? null : new Date(Date.now() + 7 * 24 * 3600 * 1000);
+      // The FIRST tenant admin is ALWAYS a local email+password account with MFA.
+      // SSO is never used during tenant setup — the admin enables it afterwards from
+      // Integrations → SSO. This avoids the bootstrap deadlock where an SSO-only admin
+      // (no password) can't sign in to configure the very SSO they'd need to sign in.
+      const inviteToken = crypto.randomBytes(32).toString('hex');
+      const inviteExpires = new Date(Date.now() + 7 * 24 * 3600 * 1000);
       const u = await pgPool.query(
         `INSERT INTO users (tenant_id, email, full_name, role, auth_provider, mfa_enabled, status, invite_token, invite_expires_at)
-         VALUES ($1,$2,$3,'tenant_admin',$4,true,'invited',$5,$6)
+         VALUES ($1,$2,$3,'tenant_admin','local',true,'invited',$4,$5)
          ON CONFLICT (tenant_id, email) DO NOTHING RETURNING id`,
-        [tenantId, adminEmail, adminName || adminEmail, isSso ? 'azure_ad' : 'local', inviteToken, inviteExpires]
+        [tenantId, adminEmail, adminName || adminEmail, inviteToken, inviteExpires]
       );
       adminInvited = u.rows.length > 0;
       if (adminInvited) {
         const inviter = req.body?.actor || 'TooVix';
         try {
-          if (isSso) {
-            await sendSsoInviteEmail({ to: adminEmail, fullName: adminName || adminEmail, role: 'tenant admin', tenantName: name, inviterName: inviter, loginUrl: `${APP_BASE_URL}/login` });
-          } else {
-            const acceptUrl = `${APP_BASE_URL}/accept-invite?token=${inviteToken}`;
-            await sendInviteEmail({ to: adminEmail, fullName: adminName || adminEmail, role: 'tenant admin', tenantName: name, inviterName: inviter, acceptUrl });
-          }
+          const acceptUrl = `${APP_BASE_URL}/accept-invite?token=${inviteToken}`;
+          await sendInviteEmail({ to: adminEmail, fullName: adminName || adminEmail, role: 'tenant admin', tenantName: name, inviterName: inviter, acceptUrl });
         } catch (e) { console.error(`[Admin] admin invite email failed for ${adminEmail}: ${e.message}`); }
       }
     }
@@ -4018,8 +4062,14 @@ app.delete('/api/agents/:id', authRequired, async (req, res) => {
 // the fleet — we do NOT create an agent row here. (Dev: returns the shared token;
 // prod would mint a short-lived, single-use token bound to the instance.)
 app.get('/api/agents/enroll-token', authRequired, async (req, res) => {
+  // PER-TENANT token so the agent enrolls into THIS tenant (not whichever is first).
+  let token = (await pgPool.query('SELECT agent_enroll_token FROM tenants WHERE id = $1', [req.user.tenantId])).rows[0]?.agent_enroll_token;
+  if (!token) {
+    token = 'tvxenr_' + crypto.randomBytes(20).toString('hex');
+    await pgPool.query('UPDATE tenants SET agent_enroll_token = $1 WHERE id = $2', [token, req.user.tenantId]);
+  }
   res.json({
-    token: AGENT_ENROLL_TOKEN,
+    token,
     control_plane: process.env.PUBLIC_CONTROL_PLANE || 'meridian.toovix.security',
   });
 });
@@ -4031,13 +4081,21 @@ const AGENT_ENROLL_TOKEN = process.env.AGENT_ENROLL_TOKEN || 'dev-agent-enroll-t
 
 app.post('/api/agents/enroll', async (req, res) => {
   const { token, host, port, engine, agent_type, agent_host, version } = req.body;
-  if (token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid enrollment token' });
+  // Resolve the tenant FROM the token (per-tenant). The legacy global dev token still works
+  // for local agents and maps to the reference (oldest) tenant only.
+  let tenantId = null;
+  if (token) {
+    tenantId = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
+    if (!tenantId && token === AGENT_ENROLL_TOKEN) {
+      tenantId = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
+    }
+  }
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
   if (!host || !engine || !agent_type) return res.status(400).json({ error: 'host, engine and agent_type are required' });
-  const tenantId = (await pgPool.query('SELECT id FROM tenants LIMIT 1')).rows[0].id;
 
   const found = await pgPool.query(
-    `SELECT id FROM db_instances WHERE host = $1 AND port IS NOT DISTINCT FROM $2 AND engine = $3`,
-    [host, port || null, engine]
+    `SELECT id FROM db_instances WHERE tenant_id = $1 AND host = $2 AND port IS NOT DISTINCT FROM $3 AND engine = $4`,
+    [tenantId, host, port || null, engine]
   );
   let instanceId;
   if (found.rows.length) instanceId = found.rows[0].id;
@@ -4332,7 +4390,7 @@ app.post('/api/access/jit/brokers', authRequired, adminOnly, async (req, res) =>
     const r = (await pgPool.query(
       `INSERT INTO jit_brokers (tenant_id, label, engine, host, port, vault_mount, vault_role, allowed_scopes, rate_limit_per_hour, owners, status)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'unconfigured')
-       ON CONFLICT (host, port, engine) DO UPDATE SET label=EXCLUDED.label, vault_mount=EXCLUDED.vault_mount,
+       ON CONFLICT (tenant_id, host, port, engine) DO UPDATE SET label=EXCLUDED.label, vault_mount=EXCLUDED.vault_mount,
          vault_role=EXCLUDED.vault_role, allowed_scopes=EXCLUDED.allowed_scopes, rate_limit_per_hour=EXCLUDED.rate_limit_per_hour, owners=EXCLUDED.owners
        RETURNING id`,
       [req.user.tenantId, label || host, String(engine).toLowerCase(), host, port || null, vaultMount || 'database', vaultRole, JSON.stringify(scopes), parseInt(rateLimitPerHour) || 10, JSON.stringify(ownerList)])).rows[0];
@@ -5627,8 +5685,8 @@ const ENGINE_FAMILY = { mysql: 'mysql', mariadb: 'mysql', postgres: 'postgres', 
 async function resolveExecCred(s) {
   try {
     const row = (await pgPool.query(
-      'SELECT username, password FROM exec_credentials WHERE host = $1 AND (port = $2 OR port IS NULL) ORDER BY port NULLS LAST LIMIT 1',
-      [s.db_host, s.db_port || null])).rows[0];
+      'SELECT username, password FROM exec_credentials WHERE tenant_id = $1 AND host = $2 AND (port = $3 OR port IS NULL) ORDER BY port NULLS LAST LIMIT 1',
+      [s.tenant_id, s.db_host, s.db_port || null])).rows[0];
     if (row && row.username) return { user: row.username, password: row.password || '' };
   } catch (e) { /* table may be absent on first boot */ }
   const fam = ENGINE_FAMILY[(s.engine || '').toLowerCase()];
@@ -6886,20 +6944,22 @@ async function loadBillingRates() {
 const GB = 1024 ** 3;
 
 // Compute real usage from live platform state.
-async function computeUsage() {
+async function computeUsage(tenantId) {
+  // Usage is PER-TENANT — a workspace is billed only for its own databases/events.
   const dbRow = (await pgPool.query(
-    `SELECT COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id)) AS monitored FROM databases d`
+    `SELECT COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id AND a.tenant_id = d.tenant_id)) AS monitored FROM databases d WHERE d.tenant_id = $1`, [tenantId]
   )).rows[0];
   const monitoredDbs = parseInt(dbRow.monitored) || 0;
-  const inlineDbs = parseInt((await pgPool.query(`SELECT COUNT(DISTINCT instance_id) AS n FROM agents WHERE agent_type = 'inline_proxy'`)).rows[0].n) || 0;
-  const dsarThisPeriod = parseInt((await pgPool.query(`SELECT COUNT(*) AS n FROM dsar_requests WHERE created_at >= date_trunc('month', now())`)).rows[0].n) || 0;
+  const inlineDbs = parseInt((await pgPool.query(`SELECT COUNT(DISTINCT instance_id) AS n FROM agents WHERE agent_type = 'inline_proxy' AND tenant_id = $1`, [tenantId])).rows[0].n) || 0;
+  const dsarThisPeriod = parseInt((await pgPool.query(`SELECT COUNT(*) AS n FROM dsar_requests WHERE created_at >= date_trunc('month', now()) AND tenant_id = $1`, [tenantId])).rows[0].n) || 0;
 
   let eventsPerDay = 0, hotBytes = 0;
   try {
-    const days7 = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE timestamp >= now() - INTERVAL 7 DAY", 'TabSeparated')) || 0;
-    const today = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE timestamp >= today()", 'TabSeparated')) || 0;
+    const evDb = await eventsDbFor(tenantId);
+    const days7 = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id = '${tenantId}' AND timestamp >= now() - INTERVAL 7 DAY`, 'TabSeparated')) || 0;
+    const today = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id = '${tenantId}' AND timestamp >= today()`, 'TabSeparated')) || 0;
     eventsPerDay = Math.max(Math.round(days7 / 7), today);
-    hotBytes = parseInt(await chSafe("SELECT sum(bytes_on_disk) FROM system.parts WHERE database = 'dam_analytics' AND active", 'TabSeparated')) || 0;
+    hotBytes = parseInt(await chSafe(`SELECT sum(bytes_on_disk) FROM system.parts WHERE database = '${evDb}' AND active`, 'TabSeparated')) || 0;
   } catch (e) { /* ClickHouse not ready */ }
 
   let coldBytes = 0, coldObjects = 0;
@@ -6968,36 +7028,29 @@ async function ensureInvoices(tenantId, usage, plan, rates) {
   const due = new Date(now.getFullYear(), now.getMonth() + 1, 15);
   const { items, total } = buildLineItems(usage, plan, rates);
   const ref = `INV-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  // Test override: shrink the *current* invoice (history/backfill keep real numbers).
-  let invItems = items, invTotal = total;
-  if (BILLING_TEST_TOTAL_USD != null && !Number.isNaN(BILLING_TEST_TOTAL_USD)) {
+  // Billing is usage-gated: a workspace with NO monitored databases is not billed —
+  // no base fee, no test override → its current bill is $0. Only active workspaces
+  // (≥1 monitored DB) accrue the base fee / usage (or the payment-test override).
+  let invItems, invTotal;
+  if (usage.monitoredDbs === 0) {
+    invTotal = 0;
+    invItems = [{ item: 'No active databases', desc: 'No monitored databases this period — nothing to bill', qty: 0, rate: 0, amount: 0 }];
+  } else if (BILLING_TEST_TOTAL_USD != null && !Number.isNaN(BILLING_TEST_TOTAL_USD)) {
     invTotal = BILLING_TEST_TOTAL_USD;
     invItems = [{ item: 'Test charge', desc: 'Reduced bill for payment-gateway testing (BILLING_TEST_TOTAL_USD)', qty: 1, rate: BILLING_TEST_TOTAL_USD, amount: BILLING_TEST_TOTAL_USD }];
+  } else {
+    invItems = items; invTotal = total;
   }
 
-  const existing = (await pgPool.query('SELECT * FROM billing_invoices WHERE reference = $1', [ref])).rows[0];
+  const existing = (await pgPool.query('SELECT * FROM billing_invoices WHERE tenant_id = $1 AND reference = $2', [tenantId, ref])).rows[0];
   if (!existing) {
-    // Backfill 5 prior months once (derived from current total with mild taper) so history isn't empty.
-    const anyHistory = parseInt((await pgPool.query('SELECT COUNT(*) AS n FROM billing_invoices')).rows[0].n);
-    if (anyHistory === 0) {
-      for (let k = 5; k >= 1; k--) {
-        const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
-        const amt = +(total * (1 - k * 0.03)).toFixed(2);
-        const r2 = `INV-${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-        await pgPool.query(
-          `INSERT INTO billing_invoices (tenant_id, reference, period, period_start, amount, currency, status, line_items, due_date, issued_at, paid_at)
-           VALUES ($1,$2,$3,$4,$5,'USD','paid','[]',$6,$7,$7) ON CONFLICT (reference) DO NOTHING`,
-          [tenantId, r2, periodLabel(d), d, amt > 0 ? amt : total, new Date(d.getFullYear(), d.getMonth() + 1, 15), new Date(d.getFullYear(), d.getMonth() + 1, 1)]
-        );
-      }
-    }
     await pgPool.query(
       `INSERT INTO billing_invoices (tenant_id, reference, period, period_start, amount, currency, status, line_items, due_date)
-       VALUES ($1,$2,$3,$4,$5,'USD','open',$6,$7) ON CONFLICT (reference) DO NOTHING`,
+       VALUES ($1,$2,$3,$4,$5,'USD','open',$6,$7) ON CONFLICT (tenant_id, reference) DO NOTHING`,
       [tenantId, ref, periodLabel(now), periodStart, invTotal, JSON.stringify(invItems), due]
     );
   } else if (existing.status !== 'paid') {
-    // Keep the open invoice in sync with live usage (or the test override).
+    // Keep the open invoice in sync with live usage (or the $0 no-usage / test override).
     await pgPool.query('UPDATE billing_invoices SET amount = $2, line_items = $3 WHERE id = $1', [existing.id, invTotal, JSON.stringify(invItems)]);
   }
   return ref;
@@ -7013,13 +7066,12 @@ app.use('/api/billing', (req, res, next) => {
 app.get('/api/billing', authRequired, async (req, res) => {
   try {
     const tenantId = req.user.tenantId;
-    const usage = await computeUsage();
+    const usage = await computeUsage(tenantId);
     const eff = await effectiveBilling(tenantId);
     const currentRef = await ensureInvoices(tenantId, usage, eff.plan, eff.rates);
-    const invoices = (await pgPool.query('SELECT reference, period, amount, currency, status, due_date, issued_at, line_items FROM billing_invoices ORDER BY period_start DESC LIMIT 12')).rows;
+    const invoices = (await pgPool.query('SELECT reference, period, amount, currency, status, due_date, issued_at, line_items FROM billing_invoices WHERE tenant_id = $1 ORDER BY period_start DESC LIMIT 12', [tenantId])).rows;
     const current = invoices.find((i) => i.reference === currentRef) || invoices[0];
     const outstanding = invoices.filter((i) => i.status !== 'paid').reduce((s, i) => s + Number(i.amount), 0);
-    const methods = (await pgPool.query('SELECT id, provider, label, currency, role, status FROM payment_methods ORDER BY role, created_at')).rows;
 
     const pct = (v, lim) => Math.min(100, Math.round((v / lim) * 100));
     res.json({
@@ -7035,7 +7087,6 @@ app.get('/api/billing', authRequired, async (req, res) => {
       },
       currentInvoice: current ? { reference: current.reference, period: current.period, total: Number(current.amount), items: current.line_items } : null,
       balance: { outstanding: +outstanding.toFixed(2), currency: 'USD' },
-      paymentMethods: methods,
       invoices,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -7044,48 +7095,43 @@ app.get('/api/billing', authRequired, async (req, res) => {
 // Record a payment against the outstanding invoice(s) (gateway redirect is simulated).
 app.post('/api/billing/pay', authRequired, async (req, res) => {
   const { reference, gateway } = req.body;
+  // A payment gateway must be configured for THIS tenant before any charge.
+  const gwCfg = await gatewayConfigFor(req.user.tenantId);
+  const hasGateway = activeRazorpay(gwCfg.razorpay).source === 'database' || activePayU(gwCfg.payu).source === 'database';
+  if (!hasGateway) return res.status(400).json({ error: 'Configure a payment gateway in Settings → Payments before making a payment.' });
   const txn = (gateway === 'Razorpay' ? 'rzp_pay_' : 'pi_') + crypto.randomBytes(8).toString('hex');
+  // Tenant-scoped so a workspace can only pay its OWN invoices.
   const inv = reference
-    ? (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE reference=$1 AND status<>'paid' RETURNING *`, [reference])).rows[0]
-    : (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE status<>'paid' RETURNING *`)).rows[0];
+    ? (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE reference=$1 AND status<>'paid' AND tenant_id=$2 RETURNING *`, [reference, req.user.tenantId])).rows[0]
+    : (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE status<>'paid' AND tenant_id=$1 RETURNING *`, [req.user.tenantId])).rows[0];
   await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'billing.payment', resourceType: 'invoice', resourceId: inv ? inv.id : null, details: { reference: inv ? inv.reference : reference, gateway: gateway || 'Stripe', txn } });
   res.json({ ok: true, txn, gateway: gateway || 'Stripe', invoice: inv ? inv.reference : reference });
 });
 
-// Connect a payment gateway.
-app.post('/api/billing/payment-methods', authRequired, async (req, res) => {
-  const { provider, label, currency, role } = req.body;
-  if (!provider) return res.status(400).json({ error: 'provider required' });
-  if (role === 'primary') await pgPool.query(`UPDATE payment_methods SET role='backup' WHERE role='primary'`);
-  const r = (await pgPool.query(
-    `INSERT INTO payment_methods (tenant_id, provider, label, currency, role, status) VALUES ($1,$2,$3,$4,$5,'connected') RETURNING *`,
-    [req.user.tenantId, provider, label || `${provider} gateway`, currency || 'USD', role || 'primary']
-  )).rows[0];
-  await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'billing.gateway_connect', resourceType: 'payment_method', resourceId: r.id, details: { provider, currency } });
-  res.status(201).json(r);
-});
+// (Removed) The old credential-less "connect a payment method" endpoint. Payment
+// methods = a tenant's configured gateway (Settings → Payments · gateway_config).
 
 // ── Live payment gateways: Razorpay + PayU ────────────────
 // Resolve the invoice to charge (by reference, else the oldest unpaid one) and its
 // INR amount. Shared by both gateways.
-async function resolvePayable(reference) {
+async function resolvePayable(reference, tenantId) {
   const row = reference
-    ? (await pgPool.query(`SELECT id, tenant_id, reference, amount, status FROM billing_invoices WHERE reference = $1`, [reference])).rows[0]
-    : (await pgPool.query(`SELECT id, tenant_id, reference, amount, status FROM billing_invoices WHERE status <> 'paid' ORDER BY period_start ASC LIMIT 1`)).rows[0];
+    ? (await pgPool.query(`SELECT id, tenant_id, reference, amount, status FROM billing_invoices WHERE reference = $1 AND tenant_id = $2`, [reference, tenantId])).rows[0]
+    : (await pgPool.query(`SELECT id, tenant_id, reference, amount, status FROM billing_invoices WHERE status <> 'paid' AND tenant_id = $1 ORDER BY period_start ASC LIMIT 1`, [tenantId])).rows[0];
   if (!row) return null;
   const amountUsd = Number(row.amount);
   return { ...row, amountUsd, amountInr: usdToInr(amountUsd) };
 }
 
 // Which gateways are live (drives the UI). Never returns secrets — key_id is public.
-app.get('/api/billing/payment-config', authRequired, (req, res) => {
-  const rz = activeRazorpay();
-  const pu = activePayU();
+app.get('/api/billing/payment-config', authRequired, async (req, res) => {
+  const gw = await gatewayConfigFor(req.user.tenantId);
+  const rz = activeRazorpay(gw.razorpay);
+  const pu = activePayU(gw.payu);
   res.json({
-    // Razorpay is always "available" (own key → live order+verify; else demo key → real UI, test cards).
-    razorpay: { available: true, mode: rz.mode, keyId: rz.keyId, configured: rz.mode === 'live' },
-    // PayU likewise: own key+salt → live; else demo sandbox creds → real hosted page, test cards.
-    payu: { available: true, mode: pu.mode, source: pu.source, configured: pu.source !== 'demo' },
+    // `configured` = THIS tenant entered its own credentials (Settings → Payments).
+    razorpay: { available: true, mode: rz.mode, keyId: rz.keyId, configured: rz.source === 'database' },
+    payu: { available: true, mode: pu.mode, source: pu.source, configured: pu.source === 'database' },
     currency: 'INR', usdToInr: USD_TO_INR,
   });
 });
@@ -7095,8 +7141,8 @@ app.get('/api/billing/payment-config', authRequired, (req, res) => {
 // opens with test cards (no order to verify → confirmed via /razorpay/demo-confirm).
 app.post('/api/billing/razorpay/order', authRequired, async (req, res) => {
   try {
-    const rz = activeRazorpay();
-    const inv = await resolvePayable(req.body && req.body.reference);
+    const rz = activeRazorpay((await gatewayConfigFor(req.user.tenantId)).razorpay);
+    const inv = await resolvePayable(req.body && req.body.reference, req.user.tenantId);
     if (!inv) return res.status(404).json({ error: 'No outstanding invoice to pay' });
     const amountPaise = Math.round(inv.amountInr * 100);
     const base = { keyId: rz.keyId, mode: rz.mode, amount: amountPaise, currency: 'INR', amountInr: inv.amountInr, amountUsd: inv.amountUsd, reference: inv.reference, name: 'TooVix DAM', email: req.user.email };
@@ -7122,14 +7168,14 @@ app.post('/api/billing/razorpay/order', authRequired, async (req, res) => {
 
 // Razorpay — verify the signature returned by the in-page checkout (live mode), then mark paid.
 app.post('/api/billing/razorpay/verify', authRequired, async (req, res) => {
-  const rz = activeRazorpay();
+  const rz = activeRazorpay((await gatewayConfigFor(req.user.tenantId)).razorpay);
   if (rz.mode !== 'live') return res.status(400).json({ error: 'Razorpay not in live mode' });
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, reference } = req.body || {};
   if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) return res.status(400).json({ error: 'Missing payment fields' });
   const expected = crypto.createHmac('sha256', rz.keySecret).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest('hex');
   const ok = expected.length === razorpay_signature.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(razorpay_signature));
   if (!ok) return res.status(400).json({ ok: false, error: 'Signature verification failed' });
-  const inv = (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE reference=$1 AND status<>'paid' RETURNING id, reference`, [reference])).rows[0];
+  const inv = (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE reference=$1 AND status<>'paid' AND tenant_id=$2 RETURNING id, reference`, [reference, req.user.tenantId])).rows[0];
   await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'billing.payment', resourceType: 'invoice', resourceId: inv ? inv.id : null, details: { reference, gateway: 'Razorpay', txn: razorpay_payment_id } });
   res.json({ ok: true, txn: razorpay_payment_id, invoice: reference });
 });
@@ -7137,19 +7183,19 @@ app.post('/api/billing/razorpay/verify', authRequired, async (req, res) => {
 // Razorpay — demo-mode confirm (only when no real key is configured; there is no
 // order/signature to verify, so the test-card success simply marks the invoice paid).
 app.post('/api/billing/razorpay/demo-confirm', authRequired, async (req, res) => {
-  if (activeRazorpay().mode !== 'demo') return res.status(400).json({ error: 'Not in demo mode' });
+  if (activeRazorpay((await gatewayConfigFor(req.user.tenantId)).razorpay).mode !== 'demo') return res.status(400).json({ error: 'Not in demo mode' });
   const { razorpay_payment_id, reference } = req.body || {};
-  const inv = (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE reference=$1 AND status<>'paid' RETURNING id, reference`, [reference])).rows[0];
+  const inv = (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE reference=$1 AND status<>'paid' AND tenant_id=$2 RETURNING id, reference`, [reference, req.user.tenantId])).rows[0];
   await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'billing.payment', resourceType: 'invoice', resourceId: inv ? inv.id : null, details: { reference, gateway: 'Razorpay (demo)', txn: razorpay_payment_id || 'demo' } });
   res.json({ ok: true, txn: razorpay_payment_id || 'demo', invoice: reference, demo: true });
 });
 
 // PayU — build the request hash + params; the browser auto-submits to PayU's page.
 app.post('/api/billing/payu/initiate', authRequired, async (req, res) => {
-  const pu = activePayU();
+  const pu = activePayU((await gatewayConfigFor(req.user.tenantId)).payu);
   if (!pu) return res.status(400).json({ error: 'PayU not configured', configured: false });
   try {
-    const inv = await resolvePayable(req.body && req.body.reference);
+    const inv = await resolvePayable(req.body && req.body.reference, req.user.tenantId);
     if (!inv) return res.status(404).json({ error: 'No outstanding invoice to pay' });
     const txnid = 'TVX' + crypto.randomBytes(8).toString('hex');
     const amount = inv.amountInr.toFixed(2);
@@ -7178,19 +7224,23 @@ app.post('/api/billing/payu/initiate', authRequired, async (req, res) => {
 // PayU — callback (PayU posts the result here as a browser form-POST). Verify the
 // reverse hash, mark the invoice paid on success, then redirect back to the app.
 app.post('/api/billing/payu/callback', async (req, res) => {
-  const pu = activePayU();
   const b = req.body || {};
   const { status, txnid, amount, productinfo, firstname, email, udf1 = '', hash: posted, mihpayid } = b;
+  const reference = productinfo || udf1;
   let outcome = 'failed';
-  if (!pu) { outcome = 'invalid'; }
+  // Public webhook (no user token): resolve the tenant from the invoice reference and
+  // verify the hash with THAT tenant's PayU salt.
+  const invRow = (await pgPool.query('SELECT id, tenant_id FROM billing_invoices WHERE reference=$1', [reference])).rows[0];
+  const pu = invRow ? activePayU((await gatewayConfigFor(invRow.tenant_id)).payu) : null;
+  if (!pu || !invRow) { outcome = 'invalid'; }
   else {
     // PayU v1 reverse hash: salt|status|<6 empty>|udf5..udf1 (reversed)|email|firstname|productinfo|amount|txnid|key
     const revSeq = [pu.salt, status].join('|') + '||||||' + ['', '', '', '', udf1].join('|') + '|' + [email, firstname, productinfo, amount, txnid, pu.merchantKey].join('|');
     const expected = crypto.createHash('sha512').update(revSeq).digest('hex');
     const valid = posted && expected === posted;
     if (valid && status === 'success') {
-      const inv = (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE reference=$1 AND status<>'paid' RETURNING id, tenant_id`, [productinfo || udf1])).rows[0];
-      if (inv) await writeAudit({ tenantId: inv.tenant_id, actorId: null, actorEmail: email || 'payu', action: 'billing.payment', resourceType: 'invoice', resourceId: inv.id, details: { reference: productinfo || udf1, gateway: 'PayU', txn: mihpayid || txnid } });
+      const inv = (await pgPool.query(`UPDATE billing_invoices SET status='paid', paid_at=now() WHERE reference=$1 AND status<>'paid' AND tenant_id=$2 RETURNING id, tenant_id`, [reference, invRow.tenant_id])).rows[0];
+      if (inv) await writeAudit({ tenantId: inv.tenant_id, actorId: null, actorEmail: email || 'payu', action: 'billing.payment', resourceType: 'invoice', resourceId: inv.id, details: { reference, gateway: 'PayU', txn: mihpayid || txnid } });
       outcome = 'success';
     } else if (!valid) { outcome = 'invalid'; console.warn('[Billing] PayU callback hash mismatch for txn', txnid); }
   }
@@ -7205,9 +7255,10 @@ const GW_FIELDS = {
 };
 function maskTail(s) { s = String(s || ''); return s.length <= 6 ? '••••' : '••••' + s.slice(-4); }
 
-app.get('/api/billing/gateways/config', authRequired, (req, res) => {
-  const rz = activeRazorpay(), pu = activePayU();
-  const rzDb = gatewayDbConfig.razorpay || {}, puDb = gatewayDbConfig.payu || {};
+app.get('/api/billing/gateways/config', authRequired, async (req, res) => {
+  const gw = await gatewayConfigFor(req.user.tenantId);
+  const rz = activeRazorpay(gw.razorpay), pu = activePayU(gw.payu);
+  const rzDb = gw.razorpay || {}, puDb = gw.payu || {};
   res.json({
     razorpay: { source: rz.source, mode: rz.mode, keyId: (rzDb.key_id || process.env.RAZORPAY_KEY_ID || (rz.mode === 'demo' ? rz.keyId : '')) || '', hasSecret: !!(rzDb.key_secret || process.env.RAZORPAY_KEY_SECRET), demoKey: RAZORPAY_DEMO_KEY },
     payu: { source: pu ? pu.source : null, configured: !!pu, merchantKey: (puDb.merchant_key || process.env.PAYU_MERCHANT_KEY || ''), hasSalt: !!(puDb.salt || process.env.PAYU_SALT), mode: pu ? pu.mode : 'test' },
@@ -7221,7 +7272,7 @@ app.put('/api/billing/gateways/:provider', authRequired, async (req, res) => {
   if (!GW_FIELDS[provider]) return res.status(400).json({ error: 'Unknown gateway' });
   const body = req.body || {};
   try {
-    const existing = (await pgPool.query('SELECT config FROM gateway_config WHERE provider = $1', [provider])).rows[0];
+    const existing = (await pgPool.query('SELECT config FROM gateway_config WHERE tenant_id = $1 AND provider = $2', [req.user.tenantId, provider])).rows[0];
     const prev = (existing && existing.config) || {};
     const config = {};
     for (const f of GW_FIELDS[provider]) {
@@ -7235,9 +7286,8 @@ app.put('/api/billing/gateways/:provider', authRequired, async (req, res) => {
     const idField = provider === 'razorpay' ? 'key_id' : 'merchant_key';
     const secretField = provider === 'razorpay' ? 'key_secret' : 'salt';
     if (!config[idField] || !config[secretField]) return res.status(400).json({ error: `${provider === 'razorpay' ? 'Key ID and secret' : 'Merchant key and salt'} are required` });
-    await pgPool.query(`INSERT INTO gateway_config (provider, config, updated_at) VALUES ($1,$2,now())
-      ON CONFLICT (provider) DO UPDATE SET config = $2, updated_at = now()`, [provider, config]);
-    await loadGatewayConfig();
+    await pgPool.query(`INSERT INTO gateway_config (tenant_id, provider, config, updated_at) VALUES ($1,$2,$3,now())
+      ON CONFLICT (tenant_id, provider) DO UPDATE SET config = $3, updated_at = now()`, [req.user.tenantId, provider, config]);
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'billing.gateway_configure', resourceType: 'gateway', resourceId: null, details: { provider, mode: config.mode || null } });
     res.json({ ok: true, provider });
   } catch (err) {
@@ -7249,10 +7299,120 @@ app.put('/api/billing/gateways/:provider', authRequired, async (req, res) => {
 app.delete('/api/billing/gateways/:provider', authRequired, async (req, res) => {
   const provider = req.params.provider;
   if (!GW_FIELDS[provider]) return res.status(400).json({ error: 'Unknown gateway' });
-  await pgPool.query('DELETE FROM gateway_config WHERE provider = $1', [provider]);
-  await loadGatewayConfig();
+  await pgPool.query('DELETE FROM gateway_config WHERE tenant_id = $1 AND provider = $2', [req.user.tenantId, provider]);
   await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'billing.gateway_disconnect', resourceType: 'gateway', resourceId: null, details: { provider } });
   res.json({ ok: true, provider });
+});
+
+// ── Tenant branding (white-label) — logo in S3/MinIO, metadata in Postgres ─────
+// Per-tenant: a workspace's logo/name is stored server-side under its own object key,
+// so it can never leak into another tenant and follows the tenant across devices.
+const BRANDING_BUCKET = process.env.BRANDING_BUCKET || 'dam-branding';
+let brandingClient = null;
+function s3BrandingClient() {
+  if (brandingClient) return brandingClient;
+  const Minio = require('minio');
+  brandingClient = new Minio.Client({
+    endPoint: process.env.S3_ENDPOINT || 'dam-minio',
+    port: parseInt(process.env.S3_PORT) || 9000,
+    useSSL: String(process.env.S3_USE_SSL) === 'true',
+    region: process.env.S3_REGION || 'us-east-1',
+    accessKey: process.env.S3_ACCESS_KEY || 'dam_minio',
+    secretKey: process.env.S3_SECRET_KEY || 'dam_minio_secret',
+  });
+  return brandingClient;
+}
+async function ensureBrandingBucket() {
+  try {
+    const c = s3BrandingClient();
+    const exists = await c.bucketExists(BRANDING_BUCKET).catch(() => false);
+    if (!exists) await c.makeBucket(BRANDING_BUCKET, process.env.S3_REGION || 'us-east-1'); // mutable (NO object lock)
+    console.log(`[Branding] object store ready: ${BRANDING_BUCKET}`);
+  } catch (e) { console.error('[Branding] bucket init failed:', e.message); }
+}
+function s3GetBuffer(bucket, key) {
+  return new Promise((resolve, reject) => {
+    s3BrandingClient().getObject(bucket, key, (err, stream) => {
+      if (err) return reject(err);
+      const chunks = [];
+      stream.on('data', (d) => chunks.push(d));
+      stream.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.on('error', reject);
+    });
+  });
+}
+// Parse a data URL ("data:image/png;base64,....") → { buffer, contentType } or null.
+function parseDataUrl(dataUrl) {
+  const m = /^data:([^;,]+)?(;base64)?,(.*)$/s.exec(String(dataUrl || ''));
+  if (!m) return null;
+  const contentType = (m[1] || 'application/octet-stream').slice(0, 80);
+  const buffer = m[2] ? Buffer.from(m[3], 'base64') : Buffer.from(decodeURIComponent(m[3]));
+  return { buffer, contentType };
+}
+
+app.get('/api/branding', authRequired, async (req, res) => {
+  try {
+    const row = (await pgPool.query('SELECT name, placement, logo_key, logo_content_type FROM tenant_branding WHERE tenant_id = $1', [req.user.tenantId])).rows[0];
+    let logo = '';
+    if (row && row.logo_key) {
+      try {
+        const buf = await s3GetBuffer(BRANDING_BUCKET, row.logo_key);
+        logo = `data:${row.logo_content_type || 'image/png'};base64,${buf.toString('base64')}`;
+      } catch (e) { /* object missing — treat as no logo */ }
+    }
+    res.json({
+      name: (row && row.name) || 'TooVix DAM',
+      custom: !!(row && row.name),
+      placement: (row && row.placement) || 'sidebar',
+      logo,
+    });
+  } catch (err) { console.error('[Branding] load failed:', err.message); res.status(500).json({ error: 'Failed to load branding' }); }
+});
+
+app.put('/api/branding', authRequired, adminOnly, async (req, res) => {
+  const { name, logo, placement } = req.body || {};
+  const tenantId = req.user.tenantId;
+  try {
+    const existing = (await pgPool.query('SELECT logo_key FROM tenant_branding WHERE tenant_id = $1', [tenantId])).rows[0];
+    let logoKey = existing ? existing.logo_key : null;
+    let logoType = null;
+    if (logo !== undefined) {
+      // Remove any prior object first (key is stable per tenant, but content-type may change).
+      if (logoKey) { try { await s3BrandingClient().removeObject(BRANDING_BUCKET, logoKey); } catch (e) { /* ignore */ } }
+      if (logo) {
+        const parsed = parseDataUrl(logo);
+        if (!parsed) return res.status(400).json({ error: 'Logo must be a data URL (image)' });
+        if (!parsed.contentType.startsWith('image/')) return res.status(400).json({ error: 'Logo must be an image' });
+        logoKey = `${tenantId}/logo`;
+        logoType = parsed.contentType;
+        await s3BrandingClient().putObject(BRANDING_BUCKET, logoKey, parsed.buffer, parsed.buffer.length, { 'Content-Type': logoType });
+      } else {
+        logoKey = null; logoType = null; // cleared
+      }
+    }
+    await pgPool.query(
+      `INSERT INTO tenant_branding (tenant_id, name, placement, logo_key, logo_content_type, updated_at)
+       VALUES ($1,$2,$3,$4,$5, now())
+       ON CONFLICT (tenant_id) DO UPDATE SET
+         name = COALESCE($2, tenant_branding.name),
+         placement = COALESCE($3, tenant_branding.placement),
+         logo_key = $4, logo_content_type = $5, updated_at = now()`,
+      [tenantId, name !== undefined ? (name || null) : null, placement || null, logoKey, logoType]
+    );
+    await writeAudit({ tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'branding.update', resourceType: 'branding', resourceId: null, details: { hasLogo: !!logoKey, placement: placement || null } });
+    res.json({ ok: true });
+  } catch (err) { console.error('[Branding] save failed:', err.message); res.status(500).json({ error: 'Failed to save branding' }); }
+});
+
+app.delete('/api/branding', authRequired, adminOnly, async (req, res) => {
+  const tenantId = req.user.tenantId;
+  try {
+    const row = (await pgPool.query('SELECT logo_key FROM tenant_branding WHERE tenant_id = $1', [tenantId])).rows[0];
+    if (row && row.logo_key) { try { await s3BrandingClient().removeObject(BRANDING_BUCKET, row.logo_key); } catch (e) { /* ignore */ } }
+    await pgPool.query('DELETE FROM tenant_branding WHERE tenant_id = $1', [tenantId]);
+    await writeAudit({ tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'branding.reset', resourceType: 'branding', resourceId: null, details: {} });
+    res.json({ ok: true });
+  } catch (err) { console.error('[Branding] reset failed:', err.message); res.status(500).json({ error: 'Failed to reset branding' }); }
 });
 
 // ── Invoice PDF ───────────────────────────────────────────
@@ -7355,7 +7515,7 @@ function buildInvoicePdf(inv, party, cur) {
 
 app.get('/api/billing/invoices/:reference/pdf', authRequired, async (req, res) => {
   try {
-    const inv = (await pgPool.query('SELECT * FROM billing_invoices WHERE reference = $1', [req.params.reference])).rows[0];
+    const inv = (await pgPool.query('SELECT * FROM billing_invoices WHERE reference = $1 AND tenant_id = $2', [req.params.reference, req.user.tenantId])).rows[0];
     if (!inv) return res.status(404).json({ error: 'Invoice not found' });
     const tenant = (await pgPool.query('SELECT name FROM tenants WHERE id = $1', [inv.tenant_id])).rows[0];
     // Display currency from the frontend (the rate it's showing keeps the PDF in sync).
@@ -8478,7 +8638,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     await loadBillingRates();
     await loadSmtpConfig();
     await loadPlatformSmtp();
-    await loadGatewayConfig();
+    await ensureBrandingBucket();
   } catch (err) {
     console.error('[Auth] Migration failed:', err.message);
   }

@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { getUser as readUser, getToken } from '../api/client';
+import { loadBranding } from '../branding';
 
 const AuthContext = createContext(null);
 
@@ -19,6 +20,7 @@ export function AuthProvider({ children }) {
     setUser(u);
     setAuthenticated(true);
     setLoading(false);
+    loadBranding(); // refresh this tenant's branding from the server
     return true;
   }, []);
 
@@ -29,6 +31,7 @@ export function AuthProvider({ children }) {
     localStorage.setItem('dam_user', JSON.stringify(userData));
     setUser(userData);
     setAuthenticated(true);
+    loadBranding(); // load the tenant's server-side branding on login
   }
 
   function logout() {
