@@ -36,7 +36,8 @@ and populate the **Classification** page.
   already installed on the DB host does the scan when given DB read credentials. You do **not** need a
   separate agent.
 - Enable it by setting `CLASSIFY=true`, `DB_USER`, and `DB_PASSWORD` (the least-privilege reader) on the
-  agent. It re-scans every `CLASSIFY_INTERVAL_MIN` minutes (default 30). Uses the same outbound path — no
-  inbound connection to the DB.
+  agent. It re-scans every `CLASSIFY_INTERVAL_MIN` minutes (default 30), once ~10s after each agent
+  restart, and **on demand** when you click **Run Scan** on the Classification page (the agent polls the
+  control plane every ~12s for a pending request). Uses the same outbound path — no inbound connection.
 - For **agentless** / PaaS sources with no agent, the standalone **collector** performs the same scan.
 - Classification is available for **MySQL** in this build; other engines are observe-only for now.

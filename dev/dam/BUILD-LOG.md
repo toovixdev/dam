@@ -2039,3 +2039,23 @@ databases like `finance-prod-01` at ~89%). Wired them all to real state:
   removed all `DEMO_*` arrays and the fake `142`; dropped the unbacked Custom Rules tab.
 - Verified on `gcptest`: `orders` DB → **16 columns scanned / 3 objects / 1 sensitive**, coverage 100%
   (1/1 DBs scanned), detector `address` shows 1 hit, the other 8 detectors 0.
+
+## 59. "Run Scan" button now actually triggers the agent (was a dead global flag)
+
+The on-demand trigger was a single **global boolean** on an `authRequired` endpoint. The collector
+polled it **without a token** → always 401'd; agents never polled it at all. So the button did nothing
+for anyone. Rebuilt it per-tenant + token-based:
+- **Backend** (`main.js`): `scanRequested` is now a per-tenant `Set` (the button's `POST
+  /api/classification/scan` adds `req.user.tenantId`). `GET /api/classification/scan-pending` is
+  **token-authed** (agent enroll token / `x-enroll-token`), consume-once per tenant. Added a shared
+  `tenantFromEnrollToken()` helper.
+- **Agent** [main.go](agent/main.go): new `scanTriggerLoop` polls `scan-pending` every 12s and runs
+  `runClassificationScan` immediately when a scan is pending for its tenant.
+- **Collector**: now sends its enroll token when polling (fixes the 401).
+- **Frontend** [Classification.jsx](../frontend/src/pages/Classification.jsx): toast explains the ~15s
+  agent-poll delay; refreshes at 16s + 28s so results appear without a manual reload.
+- **Cadence recap**: periodic every `CLASSIFY_INTERVAL_MIN` (default 30 min) + ~10s after each agent
+  restart + on-demand via the button.
+- Verified live: minted a short-lived gcptest JWT server-side, `POST /classification/scan` →
+  `{requested:true}`; agent logged `on-demand classification scan requested` on its next poll and
+  re-reported (ran exactly once — consume-once confirmed).
