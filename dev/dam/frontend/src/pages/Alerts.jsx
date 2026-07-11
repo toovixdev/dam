@@ -95,7 +95,17 @@ export default function Alerts() {
     { key: 'principal', label: 'Principal', render: (v, row) => (
       <div>{v}<br /><small className="muted">{row.user_type || '—'}</small></div>
     ) },
-    { key: 'database_name', label: 'Database' },
+    { key: 'database_name', label: 'Database', render: (v) => v || <span className="muted">—</span> },
+    { key: 'instance_host', label: 'Instance / Host', render: (v, row) => {
+      const host = row.instance_host;
+      if (!host && !row.instance_name) return <span className="muted">—</span>;
+      return (
+        <span style={{ display: 'inline-flex', flexDirection: 'column', lineHeight: 1.3 }}>
+          {row.instance_name && <b style={{ fontSize: 12.5 }}>{row.instance_name}</b>}
+          {host && <span className="mono muted" style={{ fontSize: 11 }}>{host}</span>}
+        </span>
+      );
+    } },
     { key: 'anomaly_score', label: 'Score', align: 'right', render: (v) => {
       const s = v || 0;
       return <span style={{ fontWeight: 700, color: scoreColor(s) }}>{s}</span>;
@@ -122,8 +132,8 @@ export default function Alerts() {
   };
   const onExport = () => {
     exportCsv('toovix-alerts.csv',
-      ['ID', 'Severity', 'Alert', 'Rule', 'Principal', 'Database', 'Score', 'Status', 'Created'],
-      filtered.map((a) => [a.id, a.severity, a.summary, a.rule, a.principal, a.database_name, a.anomaly_score, a.status, a.created_at]));
+      ['ID', 'Severity', 'Alert', 'Rule', 'Principal', 'Database', 'Instance', 'Host', 'Score', 'Status', 'Created'],
+      filtered.map((a) => [a.id, a.severity, a.summary, a.rule, a.principal, a.database_name, a.instance_name || '', a.instance_host || '', a.anomaly_score, a.status, a.created_at]));
     toast(`Exported ${filtered.length} alerts`, 'ok');
   };
 

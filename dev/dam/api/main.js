@@ -5622,8 +5622,10 @@ app.get('/api/alerts', authRequired, async (req, res) => {
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
   params.push(limit, offset);
   const { rows } = await pgPool.query(
-    `SELECT a.*, d.name as database_name FROM alerts a
+    `SELECT a.*, d.name as database_name, i.name AS instance_name, i.host AS instance_host
+     FROM alerts a
      LEFT JOIN databases d ON a.database_id = d.id
+     LEFT JOIN db_instances i ON d.instance_id = i.id
      ${whereSql} ORDER BY a.created_at DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
     params
   );
