@@ -8650,8 +8650,12 @@ app.get('/api/audit/activity', authRequired, async (req, res) => {
        ORDER BY timestamp DESC
        LIMIT ${limit} OFFSET ${offset}`
     );
+    // Map the captured host → the registered instance's friendly name (tenant-scoped).
+    const instByHost = {};
+    (await pgPool.query('SELECT name, host FROM db_instances WHERE tenant_id = $1', [req.user.tenantId])).rows
+      .forEach((i) => { if (i.host) instByHost[i.host] = i.name; });
     // hash-chain index relative to the full (filtered) set, newest = highest.
-    res.json({ rows: rows.map((r, i) => ({ ...r, chain: total - offset - i })), total, offset, limit });
+    res.json({ rows: rows.map((r, i) => ({ ...r, chain: total - offset - i, instance_name: instByHost[r.source_host] || null })), total, offset, limit });
   } catch (e) {
     res.json({ rows: [], total: 0, offset: 0, limit: 100 });
   }
