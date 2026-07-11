@@ -8645,7 +8645,7 @@ app.get('/api/audit/activity', authRequired, async (req, res) => {
     const total = parseInt(await chQuery(`SELECT count() FROM ${evDb}.events ${whereSql}`, 'TabSeparated')) || 0;
     const rows = await chQuery(
       `SELECT timestamp, principal, database_name, operation, schema_name, table_name,
-              sql_text, row_count, anomaly_score, client_ip, agent_type
+              sql_text, row_count, anomaly_score, client_ip, agent_type, source_host
        FROM ${evDb}.events ${whereSql}
        ORDER BY timestamp DESC
        LIMIT ${limit} OFFSET ${offset}`
