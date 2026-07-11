@@ -157,8 +157,13 @@ func runNetwork(cfg Config) {
 	frame := make([]byte, 65536)
 	var frames uint64
 	for {
-		n, _, err := syscall.Recvfrom(fd, frame, 0)
+		n, from, err := syscall.Recvfrom(fd, frame, 0)
 		if err != nil || n < 14 {
+			continue
+		}
+		// On loopback, each packet is delivered twice (outgoing + incoming copy). Skip the
+		// outgoing copy so we don't double-count queries/rows.
+		if sll, ok := from.(*syscall.SockaddrLinklayer); ok && sll.Pkttype == packetOutgoing {
 			continue
 		}
 		frames++
@@ -169,7 +174,8 @@ func runNetwork(cfg Config) {
 	}
 }
 
-// handleFrame parses Ethernet/IPv4/TCP and feeds client→server payload to the MySQL decoder.
+// handleFrame parses Ethernet/IPv4/TCP. Client→server payload is decoded for SQL;
+// server→client payload is parsed to count result rows for the pending query.
 func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*connState) {
 	if len(f) < 14 || (uint16(f[12])<<8|uint16(f[13])) != 0x0800 { // IPv4 only
 		return
@@ -183,12 +189,10 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 		return
 	}
 	srcIP := net.IP(ip[12:16]).String()
+	dstIP := net.IP(ip[16:20]).String()
 	tcp := ip[ihl:]
 	srcPort := uint16(tcp[0])<<8 | uint16(tcp[1])
 	dstPort := uint16(tcp[2])<<8 | uint16(tcp[3])
-	if dstPort != targetPort { // only client→server
-		return
-	}
 	dataOff := int(tcp[12]>>4) * 4
 	if len(tcp) < dataOff {
 		return
@@ -197,18 +201,100 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 	if len(payload) == 0 {
 		return
 	}
-	if capDebug {
-		log.Printf("[net-dbg] c->s %s:%d payload=%dB first=0x%02x", srcIP, srcPort, len(payload), payload[0])
+	// A connection is keyed by the CLIENT's ip:port, computed the same in both directions.
+	if dstPort == targetPort { // client → server (queries)
+		key := fmt.Sprintf("%s:%d", srcIP, srcPort)
+		st := conns[key]
+		if st == nil {
+			st = &connState{principal: "unknown"}
+			conns[key] = st
+		}
+		st.buf = frameAndDecode(st, append(st.buf, payload...), func(sql string) {
+			// Defer emitting until the server's response is parsed so we know the row count.
+			st.pendingSQL = sql
+			st.pendingIP = srcIP
+			st.haveQuery = true
+			st.rs = nrIdle
+			st.rowCount = 0
+		})
+	} else if srcPort == targetPort { // server → client (result sets)
+		key := fmt.Sprintf("%s:%d", dstIP, dstPort)
+		st := conns[key]
+		if st == nil {
+			return // response for a connection we never saw open — ignore
+		}
+		st.respBuf = parseResponse(cfg, st, append(st.respBuf, payload...))
 	}
-	key := fmt.Sprintf("%s:%d", srcIP, srcPort)
-	st := conns[key]
-	if st == nil {
-		st = &connState{principal: "unknown"}
-		conns[key] = st
+}
+
+// parseResponse frames server→client MySQL packets and counts result rows for the
+// pending query, emitting the event when the result set (or OK/ERR) completes.
+func parseResponse(cfg Config, st *connState, buf []byte) []byte {
+	for len(buf) >= 4 {
+		plen := int(buf[0]) | int(buf[1])<<8 | int(buf[2])<<16
+		if len(buf) < 4+plen {
+			break
+		}
+		payload := buf[4 : 4+plen]
+		buf = buf[4+plen:]
+		b0 := byte(0xff)
+		if plen > 0 {
+			b0 = payload[0]
+		}
+		if !st.authDone {
+			if plen > 0 && (b0 == 0x00 || b0 == 0xff) { // first OK/ERR → command phase
+				st.authDone = true
+			}
+			continue
+		}
+		if !st.haveQuery {
+			continue // a response with no query we tracked (e.g. mid-stream start)
+		}
+		switch st.rs {
+		case nrIdle:
+			if plen == 0 || b0 == 0x00 || b0 == 0xff || b0 == 0xfb || (b0 == 0xfe && plen < 9) {
+				// OK / ERR / EOF / LOCAL INFILE — not a SELECT result set.
+				n := 0
+				if b0 == 0x00 { // OK packet → affected_rows (INSERT/UPDATE/DELETE)
+					if v, ln := readLenencInt(payload[1:]); ln > 0 {
+						n = int(v)
+					}
+				}
+				emitCaptured(cfg, st, n)
+			} else if cnt, ln := readLenencInt(payload); ln > 0 {
+				st.colsLeft = int(cnt)
+				st.rowCount = 0
+				st.rs = nrCols
+			}
+		case nrCols:
+			if st.colsLeft--; st.colsLeft <= 0 {
+				if st.deprecateEof {
+					st.rs = nrRows
+				} else {
+					st.rs = nrColEof
+				}
+			}
+		case nrColEof:
+			st.rs = nrRows // EOF terminating the column defs
+		case nrRows:
+			if b0 == 0xfe && (plen < 9 || st.deprecateEof) { // result-set terminator
+				emitCaptured(cfg, st, st.rowCount)
+			} else {
+				st.rowCount++
+			}
+		}
 	}
-	st.buf = frameAndDecode(st, append(st.buf, payload...), func(sql string) {
-		forwardEvent(cfg, st.principal, srcIP, sql)
-	})
+	return buf
+}
+
+// emitCaptured ships the pending query with its real row count, then resets.
+func emitCaptured(cfg Config, st *connState, rowCount int) {
+	if st.haveQuery {
+		forwardEvent(cfg, st.principal, st.pendingIP, st.pendingSQL, rowCount)
+	}
+	st.haveQuery = false
+	st.rs = nrIdle
+	st.rowCount = 0
 }
 
 // frameAndDecode frames complete MySQL client→server packets, decoding the login username
@@ -226,6 +312,7 @@ func frameAndDecode(st *connState, buf []byte, onQuery func(sql string)) []byte 
 			if len(payload) >= 4 {
 				caps := uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24
 				st.queryAttrs = caps&0x08000000 != 0
+				st.deprecateEof = caps&0x01000000 != 0 // CLIENT_DEPRECATE_EOF
 			}
 			if len(payload) > 33 {
 				if end := bytes.IndexByte(payload[32:], 0); end > 0 {
@@ -428,6 +515,7 @@ func runClassificationScan(cfg Config) error {
 	// those with zero sensitive columns — with per-database totals, so the control plane
 	// can compute real classification coverage (columns scanned vs. sensitive found).
 	dbs := map[string]map[string]interface{}{}
+	newSens := map[string][]string{} // table → policy tags, rebuilt each scan
 	var dbOrder []string
 	ensureDB := func(schema string) map[string]interface{} {
 		d := dbs[schema]
@@ -457,7 +545,23 @@ func runClassificationScan(cfg Config) error {
 			"schema_name": o.schema, "object_name": o.table, "object_type": "table",
 			"column_count": o.total, "sensitivity": best, "columns": o.cols,
 		})
+		// Record this table's policy tags so captured reads of it get tagged sensitive.
+		tset := map[string]bool{}
+		for _, c := range o.cols {
+			for _, t := range c["tags"].([]string) {
+				tset[policyTagFor(t)] = true
+			}
+		}
+		tags := []string{}
+		for t := range tset {
+			tags = append(tags, t)
+		}
+		newSens[strings.ToLower(o.table)] = tags
+		newSens[strings.ToLower(o.schema+"."+o.table)] = tags
 	}
+	sensTablesMu.Lock()
+	sensTables = newSens
+	sensTablesMu.Unlock()
 
 	databases := []interface{}{}
 	for _, s := range dbOrder {
@@ -554,6 +658,45 @@ type connState struct {
 	queryAttrs   bool   // MySQL 8 CLIENT_QUERY_ATTRIBUTES negotiated → COM_QUERY has a param header
 	deprecateEof bool   // CLIENT_DEPRECATE_EOF → result sets have no intermediate/terminal EOF packets
 	buf          []byte // network mode: per-connection reassembly buffer
+	// network mode: server→client response parsing, to attach a real row_count to the
+	// query that produced it (so volume-threshold policies like "bulk read" can fire).
+	respBuf     []byte
+	authDone    bool
+	rs          int // nrIdle | nrCols | nrColEof | nrRows
+	colsLeft    int
+	rowCount    int
+	pendingSQL  string // the query awaiting its result set
+	pendingIP   string
+	haveQuery   bool
+}
+
+// network-mode response-parser states (mirror the proxy's masking state machine).
+const (
+	nrIdle = iota
+	nrCols
+	nrColEof
+	nrRows
+)
+
+const packetOutgoing = 4 // linux PACKET_OUTGOING (loopback delivers a tx + rx copy)
+
+// sensTables maps a classified-sensitive table name → policy-taxonomy tags, refreshed by
+// each classification scan. Used to tag captured queries that read a sensitive table.
+var (
+	sensTablesMu sync.Mutex
+	sensTables   = map[string][]string{}
+)
+
+// policyTagFor collapses the classifier's fine-grained tag into the policy taxonomy.
+func policyTagFor(t string) string {
+	switch t {
+	case "pci":
+		return "pci"
+	case "aadhaar":
+		return "aadhaar"
+	default:
+		return "pii"
+	}
 }
 
 // Read the fields the masking goroutine needs (set once during the client handshake).
@@ -648,7 +791,7 @@ func processPackets(cfg Config, st *connState, buf []byte, client, upstream net.
 				go raiseAlert(cfg, st.principal, clientIP, sql)
 				go quarantineSession(cfg, st.principal, clientIP, sql)
 			} else {
-				forwardEvent(cfg, st.principal, clientIP, sql)
+				forwardEvent(cfg, st.principal, clientIP, sql, 0)
 			}
 		}
 
@@ -1118,21 +1261,23 @@ func readLenencInt(b []byte) (uint64, int) {
 	return 0, 0
 }
 
-// ── Event forwarding to ClickHouse ───────────────────────────────────
-func forwardEvent(cfg Config, principal, clientIP, sql string) {
+// ── Event forwarding to the control plane ────────────────────────────
+func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int) {
 	sql = strings.TrimSpace(sql)
 	if sql == "" {
 		return
 	}
+	tags := detectTags(sql)
+	tags = append(tags, classifyTags(sql)...) // tags from the agent's own classification scan
 	ev := map[string]interface{}{
 		"database_name": cfg.TargetDB,
 		"principal":     principal,
 		"client_ip":     clientIP,
 		"operation":     detectOp(sql),
 		"sql_text":      truncate(sql, 500),
-		"tags":          detectTags(sql),
+		"tags":          dedupTags(tags),
 		"agent_type":    agentTypeByMode[cfg.Mode],
-		"row_count":     0,
+		"row_count":     rowCount,
 		"anomaly_score": 0,
 		"source_host":   cfg.TargetHost,
 		"timestamp":     time.Now().UTC().Format("2006-01-02 15:04:05"),
@@ -1147,7 +1292,44 @@ func forwardEvent(cfg Config, principal, clientIP, sql string) {
 	} else {
 		resp.Body.Close()
 	}
-	log.Printf("[capture] %-6s %-14s %s", detectOp(sql), principal, truncate(sql, 80))
+	log.Printf("[capture] %-6s rows=%-6d %-14s %s", detectOp(sql), rowCount, principal, truncate(sql, 70))
+}
+
+// classifyTags maps the agent's classification scan (sensitive tables) to policy-taxonomy
+// tags (pii/pci/aadhaar), so a read of a sensitive table is tagged even when the query
+// doesn't name a sensitive column (e.g. SELECT *).
+func classifyTags(sql string) []string {
+	sensTablesMu.Lock()
+	defer sensTablesMu.Unlock()
+	if len(sensTables) == 0 {
+		return nil
+	}
+	lower := strings.ToLower(sql)
+	out := []string{}
+	seen := map[string]bool{}
+	for tbl, tags := range sensTables {
+		if strings.Contains(lower, tbl) {
+			for _, t := range tags {
+				if !seen[t] {
+					seen[t] = true
+					out = append(out, t)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func dedupTags(in []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, t := range in {
+		if t != "" && !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
