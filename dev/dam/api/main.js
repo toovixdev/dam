@@ -6213,7 +6213,7 @@ const OP_MAP = { READ: ['SELECT'], WRITE: ['INSERT', 'UPDATE'], DELETE: ['DELETE
 function policyToClickhouse(def) {
   const where = [];
   const ignored = [];
-  const SUPPORTED = ['action_type', 'rows_affected', 'object_sensitivity_tags', 'grants_role'];
+  const SUPPORTED = ['action_type', 'rows_affected', 'object_sensitivity_tags', 'grants_role', 'unusual_access_time', 'business_hours'];
   const opList = (val) => {
     let list = [];
     if (typeof val === 'string') list = [val];
@@ -6235,6 +6235,14 @@ function policyToClickhouse(def) {
   if (def.grants_role && Array.isArray(def.grants_role.in)) {
     const roles = def.grants_role.in.filter(Boolean).map((r) => `positionCaseInsensitive(sql_text, '${chEsc(String(r))}') > 0`);
     if (roles.length) where.push(`(${roles.join(' OR ')})`);
+  }
+  // Off-hours access: outside the business window (default 08:00–18:00) or on a weekend.
+  // Window is configurable via rule_definition.business_hours { start, end } (event-TZ = UTC).
+  if (def.unusual_access_time) {
+    const bh = (def.business_hours && typeof def.business_hours === 'object') ? def.business_hours : {};
+    const start = Number.isInteger(bh.start) ? bh.start : 8;
+    const end = Number.isInteger(bh.end) ? bh.end : 18;
+    where.push(`(toHour(timestamp) < ${start} OR toHour(timestamp) >= ${end} OR toDayOfWeek(timestamp) >= 6)`);
   }
   Object.keys(def || {}).forEach((k) => { if (!SUPPORTED.includes(k)) ignored.push(k); });
   return { where, ignored, supported: where.length > 0 };
