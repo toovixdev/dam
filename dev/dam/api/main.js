@@ -946,6 +946,8 @@ async function runAuthMigration() {
     // tenant. A single global token can't tell tenants apart (all agents would land in one).
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS agent_enroll_token VARCHAR(80)`);
     await client.query(`UPDATE tenants SET agent_enroll_token = 'tvxenr_' || replace(gen_random_uuid()::text, '-', '') WHERE agent_enroll_token IS NULL`);
+    // Customer-configurable business hours (drives off-hours detection, timezone-aware).
+    await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS business_hours JSONB`);
 
     // Per-database masking bypass: DB principals (least-privilege service / break-glass
     // accounts) that see UNMASKED data for a given database. Isolated/additive table.
@@ -6210,7 +6212,38 @@ app.get('/api/policies/:id/versions', authRequired, async (req, res) => {
 // Translate the engine-neutral DSL into a ClickHouse predicate over events.
 // Best-effort: behavioral/threshold-window predicates aren't backtestable here.
 const OP_MAP = { READ: ['SELECT'], WRITE: ['INSERT', 'UPDATE'], DELETE: ['DELETE'], DDL: ['DDL'], GRANT: ['GRANT'], LOGIN: ['LOGIN'], ADMIN: ['GRANT', 'DDL'] };
-function policyToClickhouse(def) {
+
+// ── Business hours (tenant-configurable, drives off-hours detection) ──────────
+const DEFAULT_BUSINESS_HOURS = { timezone: 'UTC', start: 8, end: 18, days: [1, 2, 3, 4, 5] };
+function normalizeBusinessHours(raw) {
+  const b = (raw && typeof raw === 'object') ? raw : {};
+  const start = Number.isInteger(b.start) ? Math.min(23, Math.max(0, b.start)) : DEFAULT_BUSINESS_HOURS.start;
+  const end = Number.isInteger(b.end) ? Math.min(24, Math.max(0, b.end)) : DEFAULT_BUSINESS_HOURS.end;
+  let days = Array.isArray(b.days) ? b.days.map((d) => parseInt(d, 10)).filter((d) => d >= 1 && d <= 7) : DEFAULT_BUSINESS_HOURS.days;
+  if (!days.length) days = DEFAULT_BUSINESS_HOURS.days;
+  const timezone = (typeof b.timezone === 'string' && b.timezone.trim()) ? b.timezone.trim() : DEFAULT_BUSINESS_HOURS.timezone;
+  return { timezone, start, end, days: [...new Set(days)].sort((a, c) => a - c) };
+}
+async function businessHoursFor(tenantId) {
+  try {
+    const r = (await pgPool.query('SELECT business_hours FROM tenants WHERE id = $1', [tenantId])).rows[0];
+    return normalizeBusinessHours(r && r.business_hours);
+  } catch { return { ...DEFAULT_BUSINESS_HOURS }; }
+}
+// A curated allow-list keeps a bad timezone from breaking ClickHouse queries.
+const VALID_TIMEZONES = new Set(['UTC', 'Asia/Kolkata', 'Asia/Dubai', 'Asia/Singapore', 'Asia/Tokyo', 'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'America/New_York', 'America/Chicago', 'America/Los_Angeles', 'America/Sao_Paulo', 'Australia/Sydney']);
+
+app.get('/api/settings/business-hours', authRequired, async (req, res) => {
+  res.json({ ...(await businessHoursFor(req.user.tenantId)), timezones: [...VALID_TIMEZONES] });
+});
+app.put('/api/settings/business-hours', authRequired, async (req, res) => {
+  const bh = normalizeBusinessHours(req.body);
+  if (!VALID_TIMEZONES.has(bh.timezone)) return res.status(400).json({ error: 'Unsupported timezone' });
+  if (bh.end <= bh.start) return res.status(400).json({ error: 'End hour must be after start hour' });
+  await pgPool.query('UPDATE tenants SET business_hours = $2 WHERE id = $1', [req.user.tenantId, JSON.stringify(bh)]);
+  res.json(bh);
+});
+function policyToClickhouse(def, biz) {
   const where = [];
   const ignored = [];
   const SUPPORTED = ['action_type', 'rows_affected', 'object_sensitivity_tags', 'grants_role', 'unusual_access_time', 'business_hours'];
@@ -6236,13 +6269,15 @@ function policyToClickhouse(def) {
     const roles = def.grants_role.in.filter(Boolean).map((r) => `positionCaseInsensitive(sql_text, '${chEsc(String(r))}') > 0`);
     if (roles.length) where.push(`(${roles.join(' OR ')})`);
   }
-  // Off-hours access: outside the business window (default 08:00–18:00) or on a weekend.
-  // Window is configurable via rule_definition.business_hours { start, end } (event-TZ = UTC).
+  // Off-hours access: outside the tenant's business window or on a non-working day,
+  // evaluated in the tenant's timezone. A per-policy rule_definition.business_hours
+  // overrides the tenant default. `biz` is the tenant's configured business hours.
   if (def.unusual_access_time) {
-    const bh = (def.business_hours && typeof def.business_hours === 'object') ? def.business_hours : {};
-    const start = Number.isInteger(bh.start) ? bh.start : 8;
-    const end = Number.isInteger(bh.end) ? bh.end : 18;
-    where.push(`(toHour(timestamp) < ${start} OR toHour(timestamp) >= ${end} OR toDayOfWeek(timestamp) >= 6)`);
+    const o = normalizeBusinessHours((def.business_hours && typeof def.business_hours === 'object') ? def.business_hours : (biz || {}));
+    const tz = VALID_TIMEZONES.has(o.timezone) ? o.timezone : 'UTC';
+    const days = o.days.join(',');
+    // toHour(t, tz); toDayOfWeek(t, mode, tz) — mode 0 = Monday..Sunday = 1..7.
+    where.push(`(toHour(timestamp, '${tz}') < ${o.start} OR toHour(timestamp, '${tz}') >= ${o.end} OR toDayOfWeek(timestamp, 0, '${tz}') NOT IN (${days}))`);
   }
   Object.keys(def || {}).forEach((k) => { if (!SUPPORTED.includes(k)) ignored.push(k); });
   return { where, ignored, supported: where.length > 0 };
@@ -6253,7 +6288,7 @@ app.post('/api/policies/test', authRequired, async (req, res) => {
   let def = req.body && req.body.rule_definition;
   if (typeof def === 'string') { try { def = JSON.parse(def); } catch { return res.status(400).json({ error: 'rule_definition must be valid JSON' }); } }
   if (!def || typeof def !== 'object') return res.status(400).json({ error: 'rule_definition required' });
-  const { where, ignored, supported } = policyToClickhouse(def);
+  const { where, ignored, supported } = policyToClickhouse(def, await businessHoursFor(req.user.tenantId));
   if (!supported) {
     return res.json({ matches: null, ignored, window: '24h', note: 'This rule’s conditions (behavioral / first-time / threshold-window) can’t be backtested against raw events.' });
   }
@@ -8797,9 +8832,10 @@ async function runDetectionEngine() {
         && (s.object_name == null || s.object_name === object)
         && (s.database_name == null || s.database_name === database));
 
+      const biz = await businessHoursFor(tenantId); // tenant business hours (off-hours detection)
       for (const p of pols) {
         let def = p.rule_definition; if (typeof def === 'string') { try { def = JSON.parse(def); } catch { def = {}; } }
-        const { where, ignored, supported } = policyToClickhouse(def || {});
+        const { where, ignored, supported } = policyToClickhouse(def || {}, biz);
         if (!supported || !ignored.every((k) => BENIGN_IGNORABLE.has(k))) continue; // behavioral/windowed → Phase 2
         const whereSql = [`tenant_id = '${chEsc(tenantId)}'`, `timestamp > '${chEsc(lo)}'`, `timestamp <= '${chEsc(hi)}'`, ...where].join(' AND ');
         let evs;
@@ -8909,10 +8945,12 @@ setInterval(async () => {
     // Tenant-scoped: a monitor rule's shadow_hits count only its OWN tenant's events.
     const monitors = (await pgPool.query(`SELECT id, tenant_id, rule_definition FROM policies WHERE status = 'monitor'`)).rows;
     const evDbCache = {};
+    const bizCache = {};
     for (const m of monitors) {
       let def = m.rule_definition;
       if (typeof def === 'string') { try { def = JSON.parse(def); } catch { def = {}; } }
-      const { where, supported } = policyToClickhouse(def || {});
+      const biz = bizCache[m.tenant_id] || (bizCache[m.tenant_id] = await businessHoursFor(m.tenant_id));
+      const { where, supported } = policyToClickhouse(def || {}, biz);
       if (!supported) continue;
       const evDb = evDbCache[m.tenant_id] || (evDbCache[m.tenant_id] = await eventsDbFor(m.tenant_id));
       const whereSql = [`tenant_id = '${chEsc(m.tenant_id)}'`, 'timestamp >= now() - INTERVAL 24 HOUR', ...where].join(' AND ');
