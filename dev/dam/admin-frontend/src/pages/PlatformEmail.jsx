@@ -14,10 +14,15 @@ export default function PlatformEmail() {
   const [testTo, setTestTo] = useState('');
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
+  // Platform control-plane URL (the public endpoint agents enroll/report to).
+  const { data: settings, refetch: refetchSettings } = useApiData('/admin/platform/settings', { poll: 0 });
+  const [cp, setCp] = useState('');
+  const [cpBusy, setCpBusy] = useState(false);
 
   useEffect(() => {
     if (data) setF({ host: data.host || '', port: data.port || 587, secure: !!data.secure, username: data.username || '', password: '', from: data.from || '' });
   }, [data]);
+  useEffect(() => { if (settings?.controlPlane) setCp(settings.controlPlane); }, [settings]);
 
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
@@ -39,13 +44,40 @@ export default function PlatformEmail() {
     else toast(res?.data?.error || 'Test failed', 'err');
   };
 
+  const saveCp = async () => {
+    if (!cp.trim()) return toast('Enter the control-plane URL', 'err');
+    setCpBusy(true);
+    const res = await apiPut('/admin/platform/settings', { controlPlane: cp.trim(), actor: 'Platform Ops' });
+    setCpBusy(false);
+    if (res?.ok) { toast('Control-plane URL saved', 'ok'); setCp(res.data.controlPlane || cp.trim()); refetchSettings(); }
+    else toast(res?.data?.error || 'Save failed', 'err');
+  };
+
   const badge = data?.configured
     ? <span className="badge status-green">configured · {data.source}</span>
     : <span className="badge status-gray">not configured</span>;
 
   return (
     <Layout>
-      <PageHeader title="Platform Email" meta={['System SMTP · signup verification & invites']}>{badge}</PageHeader>
+      <PageHeader title="Platform Settings" meta={['Control-plane URL · system SMTP']}>{badge}</PageHeader>
+
+      <div className="card" style={{ maxWidth: 640, marginBottom: 16 }}>
+        <div className="card-body">
+          <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>Agent control-plane URL</h3>
+          <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>
+            The public HTTPS endpoint agents enroll and report to — it's baked into the install instructions
+            in each tenant's <b>Deploy monitoring</b> flow. Agents dial this outbound.
+            {settings?.controlPlaneSource && <> Current source: <b>{settings.controlPlaneSource}</b>.</>}
+          </p>
+          <div className="form-field"><label>Control-plane URL</label>
+            <input value={cp} onChange={(e) => setCp(e.target.value)} placeholder="https://dam.yourcompany.com" />
+            <span className="muted" style={{ fontSize: 11 }}>The DAM's public address, reachable from customer networks (e.g. https://dam.suchirasoistories.in).</span>
+          </div>
+          <div style={{ display: 'flex', gap: 10, paddingTop: 10, borderTop: '1px solid var(--line)', marginTop: 6 }}>
+            <button className="btn-primary" disabled={cpBusy} onClick={saveCp}>{cpBusy ? 'Saving…' : 'Save control-plane URL'}</button>
+          </div>
+        </div>
+      </div>
 
       <div className="card" style={{ maxWidth: 640 }}>
         <div className="card-body">

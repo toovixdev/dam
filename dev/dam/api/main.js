@@ -170,6 +170,22 @@ async function loadPlatformSmtp() {
   } catch (e) { platformSmtpConfig = null; }
   _platformMailer = null;
 }
+
+// Platform-wide settings (super-admin console). DB-backed key/value with env fallback.
+let platformSettings = {}; // { control_plane_url, ... }
+async function loadPlatformSettings() {
+  try {
+    const rows = (await pgPool.query('SELECT key, value FROM platform_settings')).rows;
+    const next = {};
+    for (const r of rows) next[r.key] = r.value;
+    platformSettings = next;
+  } catch (e) { /* table may not exist yet at first boot */ }
+}
+// The public URL agents enroll/report to: admin setting → env → placeholder.
+function controlPlaneUrl() {
+  return (platformSettings.control_plane_url || process.env.PUBLIC_CONTROL_PLANE || 'meridian.toovix.security');
+}
+
 function activePlatformSmtp() {
   if (platformSmtpConfig && platformSmtpConfig.host) {
     return { host: platformSmtpConfig.host, port: parseInt(platformSmtpConfig.port) || 587, secure: !!platformSmtpConfig.secure,
@@ -732,6 +748,15 @@ async function runAuthMigration() {
       CONSTRAINT platform_smtp_singleton CHECK (id = 1)
     )`);
     await client.query(`INSERT INTO platform_smtp (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+
+    // Platform-wide settings (super-admin console), incl. the public control-plane URL
+    // that agents enroll/report to (was env-only PUBLIC_CONTROL_PLANE).
+    await client.query(`CREATE TABLE IF NOT EXISTS platform_settings (
+      key        VARCHAR(60) PRIMARY KEY,
+      value      TEXT,
+      updated_at TIMESTAMPTZ DEFAULT now(),
+      updated_by VARCHAR(160)
+    )`);
 
     // Tier-based data-plane isolation: paid tenants get a dedicated ClickHouse DB
     // (name stored here); NULL = the shared dam_analytics pool (trial/starter).
@@ -2466,6 +2491,35 @@ app.post('/api/admin/tenants', async (req, res) => {
   }
 });
 
+// ── Admin · Platform settings (super-admin console) ──────────────────────────
+// Currently: the public control-plane URL agents enroll/report to.
+app.get('/api/admin/platform/settings', async (req, res) => {
+  try {
+    res.json({
+      controlPlane: controlPlaneUrl(),
+      controlPlaneSource: platformSettings.control_plane_url ? 'database' : (process.env.PUBLIC_CONTROL_PLANE ? 'env' : 'default'),
+    });
+  } catch (e) { res.status(500).json({ error: 'Failed to load platform settings' }); }
+});
+
+app.put('/api/admin/platform/settings', async (req, res) => {
+  const raw = (req.body && req.body.controlPlane != null) ? String(req.body.controlPlane).trim() : '';
+  if (!raw) return res.status(400).json({ error: 'Control plane URL is required' });
+  // Normalise: require an https/http URL (agents dial it over TLS in production).
+  let url = raw.replace(/\/+$/, '');
+  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+  try { new URL(url); } catch { return res.status(400).json({ error: 'Enter a valid URL, e.g. https://dam.example.com' }); }
+  try {
+    await pgPool.query(
+      `INSERT INTO platform_settings (key, value, updated_at, updated_by) VALUES ('control_plane_url', $1, now(), $2)
+       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now(), updated_by = $2`,
+      [url, (req.body && req.body.actor) || 'Platform Ops']);
+    await loadPlatformSettings();
+    try { await logPlatformAudit({ actor: (req.body && req.body.actor) || 'Platform Ops', action: 'platform.settings.update', resource: 'platform/control_plane_url', ip: req.ip, details: url }); } catch (e) { /* best-effort */ }
+    res.json({ ok: true, controlPlane: controlPlaneUrl() });
+  } catch (err) { console.error('[Admin] platform settings save failed:', err.message); res.status(500).json({ error: 'Failed to save platform settings' }); }
+});
+
 // ── Admin · Platform email (SMTP) — the SYSTEM sender for signup verification /
 // invites. Operator-configured in the Super-Admin console; password never returned.
 app.get('/api/admin/platform/smtp', async (req, res) => {
@@ -4077,7 +4131,7 @@ app.get('/api/agents/enroll-token', authRequired, async (req, res) => {
   }
   res.json({
     token,
-    control_plane: process.env.PUBLIC_CONTROL_PLANE || 'meridian.toovix.security',
+    control_plane: controlPlaneUrl(),
   });
 });
 
@@ -8645,6 +8699,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     await loadBillingRates();
     await loadSmtpConfig();
     await loadPlatformSmtp();
+    await loadPlatformSettings();
     await ensureBrandingBucket();
   } catch (err) {
     console.error('[Auth] Migration failed:', err.message);
