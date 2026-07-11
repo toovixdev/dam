@@ -453,6 +453,11 @@ async function runAuthMigration() {
     // GET /api/databases — we only persist descriptive metadata here.
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS environment VARCHAR(20) DEFAULT 'prod'`);
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS sensitivity_tags TEXT[] DEFAULT '{}'`);
+    // Classification scan summary (drives the real Coverage tab + Avg Coverage KPI).
+    await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS classified_at TIMESTAMPTZ`);
+    await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS columns_total INT`);
+    await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS objects_total INT`);
+    await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS sensitive_total INT`);
 
     // Sensitivity tags for the real, running client databases (these genuinely hold such data).
     await client.query(`UPDATE databases SET sensitivity_tags = ARRAY['PII'] WHERE name = 'PG-CRM-PROD' AND sensitivity_tags = '{}'`);
@@ -6277,6 +6282,67 @@ app.get('/api/classification/columns', authRequired, async (req, res) => {
   res.json(rows);
 });
 
+// Classification coverage per database — REAL, from the agent's last scan totals.
+// coverage_pct = whether the DB has been classification-scanned (100 once scanned,
+// 0 if monitored but never scanned). Every monitored DB is listed so gaps are visible.
+app.get('/api/classification/coverage', authRequired, async (req, res) => {
+  const { rows } = await pgPool.query(
+    `SELECT d.name AS database,
+            COALESCE(d.columns_total, 0)   AS total_columns,
+            COALESCE(d.objects_total, 0)   AS objects,
+            COALESCE(d.sensitive_total, 0) AS sensitive,
+            d.classified_at                AS last_scan,
+            (d.classified_at IS NOT NULL)  AS scanned
+     FROM databases d
+     WHERE d.tenant_id = $1
+     ORDER BY d.classified_at DESC NULLS LAST, d.name`, [req.user.tenantId]
+  );
+  const list = rows.map((r) => ({
+    database: r.database,
+    total_columns: +r.total_columns,
+    objects: +r.objects,
+    sensitive: +r.sensitive,
+    // "Classified" = columns actually scanned/evaluated (the whole schema once scanned).
+    classified: r.scanned ? +r.total_columns : 0,
+    coverage_pct: r.scanned ? 100 : 0,
+    last_scan: r.last_scan,
+    scanned: r.scanned,
+  }));
+  const total = list.length;
+  const scanned = list.filter((r) => r.scanned).length;
+  res.json({ databases: list, total, scanned, coverage_pct: total ? Math.round((scanned / total) * 100) : 0 });
+});
+
+// The detector catalog the agent/collector actually run (name-pattern classifiers),
+// with LIVE hit counts = how many classified columns each detector produced for this
+// tenant. Replaces the static "Detection Rules" demo list.
+const CLASSIFICATION_DETECTORS = [
+  { tag: 'aadhaar', name: 'Aadhaar Number', category: 'PII', type: 'regex', pattern: 'aadhaar | aadhar' },
+  { tag: 'ssn', name: 'US Social Security Number', category: 'PII', type: 'regex', pattern: 'ssn | social_security | sin' },
+  { tag: 'pci', name: 'Payment Card Data (PAN/CVV/expiry)', category: 'PCI', type: 'regex', pattern: 'card_number | cvv | card_expiry | last4' },
+  { tag: 'email', name: 'Email Address', category: 'PII', type: 'regex', pattern: 'email' },
+  { tag: 'name', name: 'Person Name', category: 'PII', type: 'regex', pattern: 'first_name | last_name | full_name | cardholder' },
+  { tag: 'dob', name: 'Date of Birth', category: 'PII', type: 'regex', pattern: 'dob | date_of_birth | birth_date' },
+  { tag: 'gov_id', name: 'Government ID (passport/tax/PAN)', category: 'PII', type: 'regex', pattern: 'passport | tax_id | tin | pan' },
+  { tag: 'phone', name: 'Phone Number', category: 'PII', type: 'regex', pattern: 'phone | mobile_no | contact_no' },
+  { tag: 'address', name: 'Postal Address', category: 'PII', type: 'regex', pattern: 'address | postal_code | pincode | zip_code' },
+];
+app.get('/api/classification/detectors', authRequired, async (req, res) => {
+  const hits = (await pgPool.query(
+    `SELECT COALESCE(tags[1], 'unknown') AS tag, COUNT(*)::int AS hits
+     FROM classified_columns WHERE tenant_id = $1 GROUP BY 1`, [req.user.tenantId]
+  )).rows.reduce((m, r) => { m[r.tag] = r.hits; return m; }, {});
+  // A detector is "active" if the scanner ran it; all catalog detectors run on every scan.
+  const scanned = (await pgPool.query(
+    `SELECT COUNT(*)::int AS n FROM databases WHERE tenant_id = $1 AND classified_at IS NOT NULL`, [req.user.tenantId]
+  )).rows[0].n;
+  const detectors = CLASSIFICATION_DETECTORS.map((d, i) => ({
+    id: i + 1, name: d.name, category: d.category, type: d.type, pattern: d.pattern,
+    status: scanned > 0 ? 'enabled' : 'idle', hits: hits[d.tag] || 0,
+  }));
+  res.json({ detectors, active: scanned > 0 ? detectors.length : 0, scanned_databases: scanned });
+});
+
 // On-demand scan trigger: the UI requests, the classification scanner (collector,
 // which can reach the client DBs) picks it up and runs a real schema scan.
 let classificationScanRequested = false;
@@ -6336,6 +6402,16 @@ app.post('/api/classification/scan-results', async (req, res) => {
     if (!dbRow) continue;
     await pgPool.query('DELETE FROM classified_columns WHERE object_id IN (SELECT id FROM classified_objects WHERE database_id = $1)', [dbRow.id]);
     await pgPool.query('DELETE FROM classified_objects WHERE database_id = $1', [dbRow.id]);
+    // Persist per-database scan totals so classification coverage is REAL (columns
+    // scanned vs. sensitive found), not a static demo number. Fall back to the object
+    // sums the agent sent if an older agent doesn't report totals.
+    const objsTotal = Number.isFinite(+dbres.objects_total) ? +dbres.objects_total : (dbres.objects || []).length;
+    const colsTotal = Number.isFinite(+dbres.columns_total) ? +dbres.columns_total : (dbres.objects || []).reduce((s, o) => s + (+o.column_count || (o.columns || []).length), 0);
+    const sensTotal = Number.isFinite(+dbres.sensitive_total) ? +dbres.sensitive_total : (dbres.objects || []).reduce((s, o) => s + (o.columns || []).length, 0);
+    await pgPool.query(
+      `UPDATE databases SET classified_at = now(), columns_total = $2, objects_total = $3, sensitive_total = $4 WHERE id = $1`,
+      [dbRow.id, colsTotal, objsTotal, sensTotal]
+    );
     for (const obj of (dbres.objects || [])) {
       const o = await pgPool.query(
         `INSERT INTO classified_objects (tenant_id, database_id, schema_name, object_name, object_type, row_count, sensitivity, owner, column_count)

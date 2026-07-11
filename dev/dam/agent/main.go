@@ -381,13 +381,27 @@ func runClassificationScan(cfg Config) error {
 		}
 	}
 
-	// Group sensitive objects by schema (= database in MySQL).
+	// Group by schema (= database in MySQL). We report EVERY scanned schema — including
+	// those with zero sensitive columns — with per-database totals, so the control plane
+	// can compute real classification coverage (columns scanned vs. sensitive found).
 	dbs := map[string]map[string]interface{}{}
 	var dbOrder []string
+	ensureDB := func(schema string) map[string]interface{} {
+		d := dbs[schema]
+		if d == nil {
+			d = map[string]interface{}{"name": schema, "objects": []interface{}{}, "columns_total": 0, "objects_total": 0, "sensitive_total": 0}
+			dbs[schema] = d
+			dbOrder = append(dbOrder, schema)
+		}
+		return d
+	}
 	for _, key := range objOrder {
 		o := objs[key]
+		d := ensureDB(o.schema)
+		d["columns_total"] = d["columns_total"].(int) + o.total
+		d["objects_total"] = d["objects_total"].(int) + 1
 		if len(o.cols) == 0 {
-			continue // only report objects with at least one sensitive column
+			continue // object has no sensitive columns — counted in totals, not in the inventory
 		}
 		best := "low"
 		for _, c := range o.cols {
@@ -395,12 +409,7 @@ func runClassificationScan(cfg Config) error {
 				best = c["sensitivity"].(string)
 			}
 		}
-		d := dbs[o.schema]
-		if d == nil {
-			d = map[string]interface{}{"name": o.schema, "objects": []interface{}{}}
-			dbs[o.schema] = d
-			dbOrder = append(dbOrder, o.schema)
-		}
+		d["sensitive_total"] = d["sensitive_total"].(int) + len(o.cols)
 		d["objects"] = append(d["objects"].([]interface{}), map[string]interface{}{
 			"schema_name": o.schema, "object_name": o.table, "object_type": "table",
 			"column_count": o.total, "sensitivity": best, "columns": o.cols,
@@ -412,7 +421,7 @@ func runClassificationScan(cfg Config) error {
 		databases = append(databases, dbs[s])
 	}
 	if len(databases) == 0 {
-		log.Printf("classification: scan complete, no sensitive columns found")
+		log.Printf("classification: scan complete, no user schemas found")
 		return nil
 	}
 

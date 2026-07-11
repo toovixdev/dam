@@ -10,51 +10,32 @@ import { toast } from '../components/shared/Toast';
 import { exportCsv } from '../exportCsv';
 import { apiPost } from '../api/client';
 
-const DEMO_RULES = [
-  { id: 1, name: 'SSN Detector', pattern: '\\d{3}-\\d{2}-\\d{4}', type: 'regex', category: 'PII', status: 'enabled', hits: 14320 },
-  { id: 2, name: 'Credit Card (Luhn)', pattern: 'Luhn check on 13-19 digit numbers', type: 'algorithm', category: 'PCI', status: 'enabled', hits: 8741 },
-  { id: 3, name: 'Email Address', pattern: '[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+', type: 'regex', category: 'PII', status: 'enabled', hits: 45210 },
-  { id: 4, name: 'Aadhaar Number', pattern: '\\d{4}[\\s-]?\\d{4}[\\s-]?\\d{4}', type: 'regex', category: 'PII', status: 'enabled', hits: 2103 },
-  { id: 5, name: 'Phone Number (IN)', pattern: '(\\+91|0)?[6-9]\\d{9}', type: 'regex', category: 'PII', status: 'enabled', hits: 11540 },
-  { id: 6, name: 'Date of Birth', pattern: 'NER date-of-birth model', type: 'ml', category: 'PII', status: 'enabled', hits: 9280 },
-  { id: 7, name: 'Medical Record ID', pattern: 'MRN-\\d{6,10}', type: 'regex', category: 'PHI', status: 'enabled', hits: 3211 },
-  { id: 8, name: 'IP Address', pattern: '\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}', type: 'regex', category: 'PII', status: 'disabled', hits: 0 },
-];
-
-const DEMO_CUSTOM = [
-  { id: 1, name: 'Employee ID', pattern: 'EMP-[A-Z]{2}\\d{5}', type: 'regex', category: 'Internal', status: 'enabled', hits: 1820 },
-  { id: 2, name: 'Account Number', pattern: 'ACC\\d{10}', type: 'regex', category: 'Financial', status: 'enabled', hits: 5410 },
-  { id: 3, name: 'Policy Number', pattern: 'POL-\\d{8}', type: 'regex', category: 'Insurance', status: 'monitor', hits: 310 },
-];
-
-const DEMO_COVERAGE = [
-  { id: 1, database: 'finance-prod-01', total_columns: 342, classified: 298, coverage_pct: 87, last_scan: '2025-06-26T14:00:00Z' },
-  { id: 2, database: 'hr-prod', total_columns: 186, classified: 186, coverage_pct: 100, last_scan: '2025-06-26T14:00:00Z' },
-  { id: 3, database: 'crm-replica', total_columns: 528, classified: 412, coverage_pct: 78, last_scan: '2025-06-25T22:00:00Z' },
-  { id: 4, database: 'analytics-dw', total_columns: 1024, classified: 890, coverage_pct: 87, last_scan: '2025-06-26T08:00:00Z' },
-  { id: 5, database: 'customer-db', total_columns: 210, classified: 195, coverage_pct: 93, last_scan: '2025-06-26T12:00:00Z' },
-];
-
 export default function Classification() {
   const { data: inventoryData, loading, refetch } = useApiData('/classification/columns');
   const { data: objectsData, refetch: refetchObjects } = useApiData('/classification/objects');
+  const { data: detectorsData, refetch: refetchDetectors } = useApiData('/classification/detectors');
+  const { data: coverageData, refetch: refetchCoverage } = useApiData('/classification/coverage');
   const [lastRefresh, setLastRefresh] = useState(new Date());
-  const [activeTab, setActiveTab] = useState('rules');
+  const [activeTab, setActiveTab] = useState('objects');
 
   const handleRefresh = () => {
     refetch();
     refetchObjects();
+    refetchDetectors();
+    refetchCoverage();
     setLastRefresh(new Date());
   };
 
   const inventory = Array.isArray(inventoryData) ? inventoryData : [];
   const objects = Array.isArray(objectsData) ? objectsData : [];
+  const detectors = Array.isArray(detectorsData?.detectors) ? detectorsData.detectors : [];
+  const coverage = Array.isArray(coverageData?.databases) ? coverageData.databases : [];
 
   const runScan = async () => {
     const res = await apiPost('/classification/scan');
     if (res && res.ok) {
       toast('Scan requested — introspecting & classifying live schemas…', 'ok');
-      setTimeout(() => { refetch(); refetchObjects(); setLastRefresh(new Date()); }, 13000);
+      setTimeout(handleRefresh, 13000);
     } else { toast('Could not start scan', 'err'); }
   };
 
@@ -71,17 +52,16 @@ export default function Classification() {
       toast(`Exported ${inventory.length} columns`, 'ok');
     }
   };
-  const totalClassified = inventory.length || DEMO_COVERAGE.reduce((s, d) => s + d.classified, 0);
-  const sensitiveCount = inventory.filter(c => c.sensitivity === 'high' || c.sensitivity === 'critical').length || 142;
-  const detectorsActive = DEMO_RULES.filter(r => r.status === 'enabled').length;
-  const avgCoverage = DEMO_COVERAGE.length > 0 ? Math.round(DEMO_COVERAGE.reduce((s, d) => s + d.coverage_pct, 0) / DEMO_COVERAGE.length) : 0;
+  const classifiedObjects = objects.length;
+  const sensitiveCount = inventory.length;                       // every classified column is a PII/PCI hit
+  const detectorsActive = detectorsData?.active ?? 0;            // real: detectors that ran on the last scan
+  const avgCoverage = coverageData?.coverage_pct ?? 0;           // real: % of databases classification-scanned
 
   const tabs = [
-    { id: 'rules', label: 'Detection Rules', count: DEMO_RULES.length },
     { id: 'objects', label: 'Objects', count: objects.length || '-' },
     { id: 'inventory', label: 'Columns', count: inventory.length || '-' },
-    { id: 'custom', label: 'Custom Rules', count: DEMO_CUSTOM.length },
-    { id: 'coverage', label: 'Coverage', count: DEMO_COVERAGE.length },
+    { id: 'rules', label: 'Detection Rules', count: detectors.length || '-' },
+    { id: 'coverage', label: 'Coverage', count: coverage.length || '-' },
   ];
 
   const objectColumns = [
@@ -122,13 +102,14 @@ export default function Classification() {
 
   const coverageColumns = [
     { key: 'database', label: 'Database' },
-    { key: 'total_columns', label: 'Total Columns', align: 'right' },
-    { key: 'classified', label: 'Classified', align: 'right' },
-    { key: 'coverage_pct', label: 'Coverage', align: 'right', render: (v) => {
+    { key: 'objects', label: 'Objects', align: 'right', render: (v) => (v || 0).toLocaleString() },
+    { key: 'total_columns', label: 'Columns Scanned', align: 'right', render: (v) => (v || 0).toLocaleString() },
+    { key: 'sensitive', label: 'Sensitive', align: 'right', render: (v) => <span style={{ fontWeight: 600, color: v > 0 ? 'var(--amber)' : 'var(--muted)' }}>{(v || 0).toLocaleString()}</span> },
+    { key: 'coverage_pct', label: 'Coverage', align: 'right', render: (v, row) => {
       const color = v >= 90 ? 'var(--green)' : v >= 70 ? 'var(--amber)' : 'var(--danger)';
-      return <span style={{ fontWeight: 600, color }}>{v}%</span>;
+      return <span style={{ fontWeight: 600, color }}>{row.scanned ? `${v}%` : 'not scanned'}</span>;
     }},
-    { key: 'last_scan', label: 'Last Scan', render: (v) => v ? new Date(v).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '-' },
+    { key: 'last_scan', label: 'Last Scan', render: (v) => v ? new Date(v).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—' },
   ];
 
   if (loading && activeTab === 'inventory') {
@@ -143,7 +124,7 @@ export default function Classification() {
     <Layout activePage="classification" lastRefresh={lastRefresh} onRefresh={handleRefresh}>
       <PageHeader
         title="Data Classification"
-        meta={[`${totalClassified} classified objects`, `${detectorsActive} detectors active`]}
+        meta={[`${classifiedObjects} classified objects`, `${detectorsActive} detectors active`]}
       >
         <button className="btn-secondary" onClick={handleRefresh}>Refresh</button>
         <button className="btn-secondary" onClick={onExport}>⤓ Export</button>
@@ -151,10 +132,10 @@ export default function Classification() {
       </PageHeader>
 
       <section className="kpi-grid">
-        <KpiCard icon="◧" label="Classified Objects" value={totalClassified} detail="columns and fields" />
-        <KpiCard icon="⚠" iconBg="var(--danger-soft)" iconColor="var(--danger)" label="Sensitive Columns" value={sensitiveCount} detail="high/critical sensitivity" detailType="down" />
-        <KpiCard icon="◎" iconBg="var(--green-soft)" iconColor="var(--green)" label="Detectors Active" value={detectorsActive} detail="rules running" detailType="up" />
-        <KpiCard icon="◉" iconBg="var(--info-soft)" iconColor="var(--info)" label="Avg Coverage" value={`${avgCoverage}%`} detail="across all databases" detailType={avgCoverage >= 85 ? 'up' : 'down'} />
+        <KpiCard icon="◧" label="Classified Objects" value={classifiedObjects} detail="tables / collections with sensitive data" />
+        <KpiCard icon="⚠" iconBg="var(--danger-soft)" iconColor="var(--danger)" label="Sensitive Columns" value={sensitiveCount} detail="PII/PCI columns found" detailType={sensitiveCount > 0 ? 'down' : undefined} />
+        <KpiCard icon="◎" iconBg="var(--green-soft)" iconColor="var(--green)" label="Detectors Active" value={detectorsActive} detail={`of ${detectors.length} in catalog`} detailType={detectorsActive > 0 ? 'up' : undefined} />
+        <KpiCard icon="◉" iconBg="var(--info-soft)" iconColor="var(--info)" label="Avg Coverage" value={`${avgCoverage}%`} detail={`${coverageData?.scanned ?? 0}/${coverageData?.total ?? 0} databases scanned`} detailType={avgCoverage >= 85 ? 'up' : 'down'} />
       </section>
 
       <TabNav tabs={tabs} active={activeTab} onChange={setActiveTab} />
@@ -163,10 +144,10 @@ export default function Classification() {
         <div className="card">
           <div className="card-header">
             <span className="card-title">Detection Rules</span>
-            <span className="card-sub">{DEMO_RULES.length} rules</span>
+            <span className="card-sub">{detectors.length} detectors · hits from live scans</span>
           </div>
           <div className="card-body no-pad">
-            <DataTable columns={ruleColumns} data={DEMO_RULES} emptyMessage="No detection rules configured" />
+            <DataTable columns={ruleColumns} data={detectors} emptyMessage="Detector catalog unavailable" />
           </div>
         </div>
       )}
@@ -195,26 +176,14 @@ export default function Classification() {
         </div>
       )}
 
-      {activeTab === 'custom' && (
-        <div className="card">
-          <div className="card-header">
-            <span className="card-title">Custom Rules</span>
-            <span className="card-sub">{DEMO_CUSTOM.length} rules</span>
-          </div>
-          <div className="card-body no-pad">
-            <DataTable columns={ruleColumns} data={DEMO_CUSTOM} emptyMessage="No custom rules defined" />
-          </div>
-        </div>
-      )}
-
       {activeTab === 'coverage' && (
         <div className="card">
           <div className="card-header">
             <span className="card-title">Classification Coverage by Database</span>
-            <span className="card-sub">{DEMO_COVERAGE.length} databases</span>
+            <span className="card-sub">{coverageData?.scanned ?? 0}/{coverageData?.total ?? 0} databases scanned</span>
           </div>
           <div className="card-body no-pad">
-            <DataTable columns={coverageColumns} data={DEMO_COVERAGE} emptyMessage="No coverage data available" />
+            <DataTable columns={coverageColumns} data={coverage} emptyMessage="No databases registered yet. Register an instance and deploy an agent with classification enabled." />
           </div>
         </div>
       )}
