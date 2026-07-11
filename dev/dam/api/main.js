@@ -6322,7 +6322,7 @@ app.post('/api/classification/scan-results', async (req, res) => {
     // Find-or-create the database row (tenant-scoped, keyed on name + instance) so a
     // schema discovered by the agent shows up on the Classification page automatically.
     let dbRow = (await pgPool.query(
-      `SELECT id, tenant_id FROM databases WHERE tenant_id = $1 AND name = $2 AND ($3::int IS NULL OR instance_id = $3) LIMIT 1`,
+      `SELECT id, tenant_id FROM databases WHERE tenant_id = $1 AND name = $2 AND ($3::uuid IS NULL OR instance_id = $3::uuid) LIMIT 1`,
       [tenantId, dbres.name, instanceId]
     )).rows[0];
     if (!dbRow && instanceId) {
