@@ -23,6 +23,7 @@ volumes:
   dam-signer-keys:       # the Approval Signer's private key (DAM never mounts this)
   caddy-data:            # Caddy TLS certs + ACME account (persist across restarts)
   caddy-config:
+  registry-data:         # self-hosted Docker registry (agent image distribution)
 
 services:
 
@@ -210,6 +211,20 @@ services:
       - "9090:9090"   # MinIO console
     volumes:
       - dam-minio-data:/data
+    networks:
+      - dam-net
+
+  # Self-hosted Docker registry for agent image distribution. Push happens INTERNALLY
+  # (localhost:5001 on the DAM host); customers PULL via Caddy at dam.<domain>/v2/*
+  # (Caddy blocks external writes → pull-only from the internet).
+  dam-registry:
+    image: registry:2
+    container_name: dam-registry
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5001:5000"   # localhost-only: internal push target
+    volumes:
+      - registry-data:/var/lib/registry
     networks:
       - dam-net
 
