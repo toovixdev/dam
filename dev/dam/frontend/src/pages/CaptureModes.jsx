@@ -226,6 +226,25 @@ export default function CaptureModes() {
         ⚠ Inline proxy can front a PaaS database if it exposes a network endpoint you route through (you deploy the proxy in your own VPC, not on the managed host) — but agentless capture is the recommended fit for managed databases.
       </p>
 
+      {/* Data classification — orthogonal to capture */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-header"><span className="card-title">Data classification</span><span className="card-sub">separate from capture — any agent can do it</span></div>
+        <div className="card-body" style={{ fontSize: 13, lineHeight: 1.6 }}>
+          <p style={{ margin: '0 0 8px' }}>
+            Classification — finding which columns hold <b>PII/PCI</b> — is <b>independent of the capture mode</b>.
+            It doesn’t watch traffic: the agent logs into the database as a <b>least-privilege reader</b>
+            (e.g. <code>dam_svc</code> with <code>SELECT</code>), reads <code>information_schema</code>, and matches
+            column names against the PII/PCI pattern library (Aadhaar, SSN, card number/CVV, email, name, DOB,
+            phone, address…). Results populate the <b>Classification</b> page.
+          </p>
+          <ul style={{ margin: '0 0 4px', paddingLeft: 18 }}>
+            <li><b>Any agent can classify</b> — network, host or proxy. The same agent already on the DB host does the scan; no separate agent needed.</li>
+            <li>Enable it with <code>CLASSIFY=true</code>, <code>DB_USER</code> and <code>DB_PASSWORD</code> on the agent. Re-scans every <code>CLASSIFY_INTERVAL_MIN</code> min (default 30), all over the same outbound path — no inbound DB connection.</li>
+            <li>For <b>agentless / PaaS</b> sources the standalone <b>collector</b> runs the same scan. Classification is available for <b>MySQL</b> in this build.</li>
+          </ul>
+        </div>
+      </div>
+
       {/* Posture presets → deploy */}
       <div className="page-header" style={{ marginBottom: 8 }}>
         <h1 style={{ fontSize: 15 }}>Ready? Pick a posture and deploy</h1>

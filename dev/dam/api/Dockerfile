@@ -4,6 +4,7 @@ FROM golang:1.22-alpine AS agent
 WORKDIR /src
 COPY agent/go.mod ./
 COPY agent/*.go ./
+RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/dam-agent-linux-amd64 .
 
 # ── Stage 2: the control-plane API ──

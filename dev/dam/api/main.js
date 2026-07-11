@@ -6286,12 +6286,53 @@ app.get('/api/classification/scan-pending', authRequired, (req, res) => { const 
 // Token-gated ingest of real scan results — replaces the classification inventory
 // for each scanned database with what was actually found in its schema.
 app.post('/api/classification/scan-results', async (req, res) => {
-  const { token, databases } = req.body;
-  if (token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const { token, databases, host, port, engine } = req.body;
   if (!Array.isArray(databases)) return res.status(400).json({ error: 'databases[] required' });
+  // Resolve the tenant FROM the token (per-tenant), mirroring /api/agents/enroll.
+  // The legacy global dev token still works and maps to the oldest tenant.
+  let tenantId = null;
+  if (token) {
+    tenantId = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
+    if (!tenantId && token === AGENT_ENROLL_TOKEN) {
+      tenantId = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
+    }
+  }
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+
+  // Find-or-create the instance the agent is reporting for (scoped to this tenant),
+  // so scan results land on the right instance even in a shared control plane.
+  let instanceId = null;
+  if (host) {
+    const eng = engine || 'mysql';
+    const foundInst = await pgPool.query(
+      `SELECT id FROM db_instances WHERE tenant_id = $1 AND host = $2 AND port IS NOT DISTINCT FROM $3 AND engine = $4`,
+      [tenantId, host, port || null, eng]
+    );
+    if (foundInst.rows.length) instanceId = foundInst.rows[0].id;
+    else {
+      instanceId = (await pgPool.query(
+        `INSERT INTO db_instances (tenant_id, name, engine, host, port) VALUES ($1,$2,$3,$4,$5) RETURNING id`,
+        [tenantId, host, eng, host, port || null]
+      )).rows[0].id;
+    }
+  }
+
   let objCount = 0, colCount = 0;
   for (const dbres of databases) {
-    const dbRow = (await pgPool.query('SELECT id, tenant_id FROM databases WHERE name = $1 LIMIT 1', [dbres.name])).rows[0];
+    // Find-or-create the database row (tenant-scoped, keyed on name + instance) so a
+    // schema discovered by the agent shows up on the Classification page automatically.
+    let dbRow = (await pgPool.query(
+      `SELECT id, tenant_id FROM databases WHERE tenant_id = $1 AND name = $2 AND ($3::int IS NULL OR instance_id = $3) LIMIT 1`,
+      [tenantId, dbres.name, instanceId]
+    )).rows[0];
+    if (!dbRow && instanceId) {
+      const inst = (await pgPool.query('SELECT * FROM db_instances WHERE id = $1', [instanceId])).rows[0];
+      dbRow = (await pgPool.query(
+        `INSERT INTO databases (tenant_id, instance_id, name, engine, version, host, port, deployment_type, cloud_provider, region, environment, monitoring_status, risk_score)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'monitored',0) RETURNING id, tenant_id`,
+        [tenantId, instanceId, dbres.name, inst.engine, inst.version, inst.host, inst.port, inst.deployment_type, inst.cloud_provider, inst.region, inst.environment]
+      )).rows[0];
+    }
     if (!dbRow) continue;
     await pgPool.query('DELETE FROM classified_columns WHERE object_id IN (SELECT id FROM classified_objects WHERE database_id = $1)', [dbRow.id]);
     await pgPool.query('DELETE FROM classified_objects WHERE database_id = $1', [dbRow.id]);

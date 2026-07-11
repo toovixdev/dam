@@ -28,7 +28,7 @@ const NAV = [
   { id: 'impersonation',  ic: '◑', label: 'Impersonation',       to: '/impersonation' },
   { id: 'break-glass',    ic: '⚠', label: 'Break-Glass Access',  to: '/break-glass' },
   { id: 'roles',          ic: '⊕', label: 'Roles & Permissions', to: '/roles' },
-  { id: 'platform-email', ic: '@', label: 'Platform Email',       to: '/platform-email' },
+  { id: 'platform-email', ic: '@', label: 'Platform Settings',    to: '/platform-email' },
   { id: 'approvals',      ic: '✓', label: 'Approval Requests',   to: '/approvals' },
 
   { sec: 'Product Config' },

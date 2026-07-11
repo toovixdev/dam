@@ -10,6 +10,7 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,10 +19,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 type Config struct {
@@ -41,6 +45,12 @@ type Config struct {
 	Version       string
 	TenantID      string   // resolved from the enroll response; tags captured events
 	BlockPatterns []string // case-insensitive substrings; a matching query is blocked
+	// Classification (schema scan) — orthogonal to capture: the agent logs into the DB
+	// as a least-privilege reader and classifies columns by name (PII/PCI).
+	Classify     bool
+	DBUser       string
+	DBPass       string
+	ClassifyMins int
 }
 
 func env(k, d string) string {
@@ -68,6 +78,10 @@ func loadConfig() Config {
 		// so re-enrollment reuses the same agent row instead of creating duplicates.
 		AgentHost: "dam-agent-" + env("MODE", "proxy") + "-" + env("TARGET_HOST", "client-mysql") + "-" + env("TARGET_PORT", "3306"),
 		Version:   "0.1.0",
+		Classify:  env("CLASSIFY", "false") == "true",
+		DBUser:    env("DB_USER", ""),
+		DBPass:    env("DB_PASSWORD", ""),
+		ClassifyMins: atoiDefault(env("CLASSIFY_INTERVAL_MIN", "30"), 30),
 	}
 	if c.TargetDB == "" {
 		c.TargetDB = c.TargetHost + ":" + c.TargetPort
@@ -90,6 +104,13 @@ func main() {
 	agentID, tenantID := enrollWithRetry(cfg)
 	cfg.TenantID = tenantID
 	go heartbeatLoop(cfg, agentID)
+
+	// Classification runs alongside ANY capture mode (it just needs a DB read login).
+	if cfg.Classify && cfg.DBUser != "" && cfg.Engine == "mysql" {
+		go classifyLoop(cfg)
+	} else if cfg.Classify {
+		log.Printf("classification enabled but skipped (need DB_USER and engine=mysql in this build)")
+	}
 
 	switch cfg.Mode {
 	case "proxy":
@@ -263,6 +284,151 @@ func heartbeatLoop(cfg Config, agentID string) {
 		}
 		resp.Body.Close()
 	}
+}
+
+// ── Classification (schema scan) ─────────────────────────────────────
+// Connects to the DB as a least-privilege reader, reads information_schema, classifies
+// columns by NAME (PII/PCI), and reports to the control plane. Independent of capture mode.
+type nameClassifier struct {
+	re   *regexp.Regexp
+	tag  string
+	sens string
+}
+
+var nameClassifiers = []nameClassifier{
+	{regexp.MustCompile(`(?i)aadhaar|aadhar`), "aadhaar", "critical"},
+	{regexp.MustCompile(`(?i)ssn|social_security|(^|_)sin(_|$)`), "ssn", "critical"},
+	{regexp.MustCompile(`(?i)card_number|card_no|ccnum|creditcard|card_num|pan_number`), "pci", "critical"},
+	{regexp.MustCompile(`(?i)cvv|cvc|card_sec`), "pci", "critical"},
+	{regexp.MustCompile(`(?i)card_expiry|exp_date|(^|_)expiry`), "pci", "high"},
+	{regexp.MustCompile(`(?i)card_last4|last4`), "pci", "medium"},
+	{regexp.MustCompile(`(?i)(^|_)email`), "email", "high"},
+	{regexp.MustCompile(`(?i)first_name|last_name|full_name|fullname|cardholder|customer_name|contact_name`), "name", "high"},
+	{regexp.MustCompile(`(?i)(^|_)dob(_|$)|date_of_birth|birth_date`), "dob", "high"},
+	{regexp.MustCompile(`(?i)passport|tax_id|taxid|(^|_)tin(_|$)|(^|_)pan(_|$)`), "gov_id", "high"},
+	{regexp.MustCompile(`(?i)(^|_)phone|mobile_no|contact_no`), "phone", "medium"},
+	{regexp.MustCompile(`(?i)(^|_)address|postal_code|pincode|zip_code`), "address", "medium"},
+}
+
+func classifyCol(name string) (tag, sens string, ok bool) {
+	for _, c := range nameClassifiers {
+		if c.re.MatchString(name) {
+			return c.tag, c.sens, true
+		}
+	}
+	return "", "", false
+}
+
+var sensRank = map[string]int{"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+func classifyLoop(cfg Config) {
+	every := time.Duration(cfg.ClassifyMins) * time.Minute
+	if every < time.Minute {
+		every = 30 * time.Minute
+	}
+	// Small initial delay so enrollment settles first.
+	time.Sleep(10 * time.Second)
+	for {
+		if err := runClassificationScan(cfg); err != nil {
+			log.Printf("classification scan failed: %v", err)
+		}
+		time.Sleep(every)
+	}
+}
+
+func runClassificationScan(cfg Config) error {
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/information_schema?timeout=8s&readTimeout=20s&allowNativePasswords=true", cfg.DBUser, cfg.DBPass, cfg.TargetHost, cfg.TargetPort)
+	db, err := sql.Open("mysql", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetConnMaxLifetime(30 * time.Second)
+
+	rows, err := db.Query(`SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
+		WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
+		ORDER BY table_schema, table_name, ordinal_position`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	type objAgg struct {
+		schema, table string
+		total         int
+		cols          []map[string]interface{}
+	}
+	objs := map[string]*objAgg{}
+	var objOrder []string
+	for rows.Next() {
+		var sch, tbl, col, dt string
+		if err := rows.Scan(&sch, &tbl, &col, &dt); err != nil {
+			continue
+		}
+		key := sch + "\x00" + tbl
+		o := objs[key]
+		if o == nil {
+			o = &objAgg{schema: sch, table: tbl}
+			objs[key] = o
+			objOrder = append(objOrder, key)
+		}
+		o.total++
+		if tag, sens, ok := classifyCol(col); ok {
+			o.cols = append(o.cols, map[string]interface{}{
+				"column_name": col, "data_type": dt, "tags": []string{tag},
+				"sensitivity": sens, "detection_method": "pattern", "confidence": 0.85, "is_masked": false,
+			})
+		}
+	}
+
+	// Group sensitive objects by schema (= database in MySQL).
+	dbs := map[string]map[string]interface{}{}
+	var dbOrder []string
+	for _, key := range objOrder {
+		o := objs[key]
+		if len(o.cols) == 0 {
+			continue // only report objects with at least one sensitive column
+		}
+		best := "low"
+		for _, c := range o.cols {
+			if sensRank[c["sensitivity"].(string)] > sensRank[best] {
+				best = c["sensitivity"].(string)
+			}
+		}
+		d := dbs[o.schema]
+		if d == nil {
+			d = map[string]interface{}{"name": o.schema, "objects": []interface{}{}}
+			dbs[o.schema] = d
+			dbOrder = append(dbOrder, o.schema)
+		}
+		d["objects"] = append(d["objects"].([]interface{}), map[string]interface{}{
+			"schema_name": o.schema, "object_name": o.table, "object_type": "table",
+			"column_count": o.total, "sensitivity": best, "columns": o.cols,
+		})
+	}
+
+	databases := []interface{}{}
+	for _, s := range dbOrder {
+		databases = append(databases, dbs[s])
+	}
+	if len(databases) == 0 {
+		log.Printf("classification: scan complete, no sensitive columns found")
+		return nil
+	}
+
+	payload := map[string]interface{}{
+		"token": cfg.EnrollToken, "host": cfg.TargetHost,
+		"port": atoiDefault(cfg.TargetPort, 3306), "engine": cfg.Engine, "databases": databases,
+	}
+	body, _ := json.Marshal(payload)
+	resp, err := http.Post(cfg.ControlPlane+"/api/classification/scan-results", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	log.Printf("classification reported (%d db): %s", len(databases), strings.TrimSpace(string(b)))
+	return nil
 }
 
 // ── Inline proxy (MySQL) ─────────────────────────────────────────────

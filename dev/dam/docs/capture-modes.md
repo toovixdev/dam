@@ -24,3 +24,19 @@ ClickHouse → alerts); they differ in **where they sit** and whether they can *
 - **Agents dial outbound** to the DAM; the control plane never connects into the DB network — which is
   why every mode works for private, no-public-IP databases (see
   [deployment-architecture.md](./deployment-architecture.md)).
+
+## Data classification (orthogonal to capture)
+Classification — discovering which columns hold PII/PCI — is **separate from the capture mode above**.
+It doesn't watch traffic; it logs into the database as a **least-privilege reader** (e.g. `dam_svc` with
+`SELECT`), reads `information_schema`, and matches column names against the PII/PCI pattern library
+(Aadhaar, SSN, card number/CVV, email, name, DOB, phone, address, …). Matches are reported to the DAM
+and populate the **Classification** page.
+
+- **Any agent can classify**, regardless of its capture mode — network, host, or proxy. The *same* agent
+  already installed on the DB host does the scan when given DB read credentials. You do **not** need a
+  separate agent.
+- Enable it by setting `CLASSIFY=true`, `DB_USER`, and `DB_PASSWORD` (the least-privilege reader) on the
+  agent. It re-scans every `CLASSIFY_INTERVAL_MIN` minutes (default 30). Uses the same outbound path — no
+  inbound connection to the DB.
+- For **agentless** / PaaS sources with no agent, the standalone **collector** performs the same scan.
+- Classification is available for **MySQL** in this build; other engines are observe-only for now.

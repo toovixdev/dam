@@ -5,6 +5,9 @@ FROM golang:1.22-alpine AS build
 WORKDIR /src
 COPY go.mod ./
 COPY *.go ./
+# Resolve the MySQL driver (used by classification) + generate go.sum. No local Go
+# toolchain in this repo, so tidy runs here inside the build with network access.
+RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /dam-agent .
 
 FROM alpine:3.20
