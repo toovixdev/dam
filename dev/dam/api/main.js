@@ -4712,6 +4712,35 @@ setInterval(async () => {
   } catch (e) { /* non-fatal */ }
 }, 30000);
 
+// Outbound event ingest — agents (which can't reach ClickHouse directly) POST their
+// captured activity here over HTTPS. Token → tenant; we write to the tenant's events DB.
+// This is how captured SQL becomes audit-trail activity and feeds detection (decoy scan).
+app.post('/api/agents/events', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.body?.token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const raw = Array.isArray(req.body.events) ? req.body.events : (req.body.event ? [req.body.event] : []);
+  if (!raw.length) return res.status(400).json({ error: 'events[] required' });
+  const evs = raw.slice(0, 500).map((e) => ({
+    database_name: e.database_name || req.body.host || '',
+    timestamp: e.timestamp || new Date().toISOString().slice(0, 19).replace('T', ' '),
+    principal: e.principal || 'unknown',
+    client_ip: e.client_ip || '',
+    operation: e.operation || 'OTHER',
+    schema_name: e.schema_name || '',
+    table_name: e.table_name || '',
+    columns_accessed: Array.isArray(e.columns_accessed) ? e.columns_accessed : [],
+    row_count: Number(e.row_count) || 0,
+    sql_text: e.sql_text || '',
+    anomaly_score: Number(e.anomaly_score) || 0,
+    tags: Array.isArray(e.tags) ? e.tags : [],
+    agent_type: e.agent_type || 'network',
+    source_host: e.source_host || req.body.host || '',
+  }));
+  try { await chInsertEvents(tenantId, evs); }
+  catch (e) { console.error('[events] ingest failed:', e.message); return res.status(502).json({ error: 'ingest failed' }); }
+  res.json({ ingested: evs.length });
+});
+
 app.post('/api/agents/alert', async (req, res) => {
   const { token, host, port, principal, summary, severity, raw_sql } = req.body;
   if (token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid token' });
@@ -7955,6 +7984,16 @@ async function chInsertEvent(ev) {
   const db = await eventsDbFor(ev.tenant_id);
   const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, sql_text, anomaly_score, tags, agent_type, source_host) FORMAT JSONEachRow`;
   await fetch(`${CH_URL}/?${CH_AUTH}&query=${encodeURIComponent(q)}`, { method: 'POST', body: JSON.stringify(ev) });
+}
+
+// Batch insert of agent-captured events into the tenant's events DB (used by the
+// outbound event-ingest endpoint so a remote agent never needs to reach ClickHouse).
+async function chInsertEvents(tenantId, evs) {
+  if (!evs.length) return;
+  const db = await eventsDbFor(tenantId);
+  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, sql_text, anomaly_score, tags, agent_type, source_host) FORMAT JSONEachRow`;
+  const body = evs.map((e) => JSON.stringify({ ...e, tenant_id: tenantId })).join('\n');
+  await fetch(`${CH_URL}/?${CH_AUTH}&query=${encodeURIComponent(q)}`, { method: 'POST', body });
 }
 
 // ── Tier-based data-plane isolation ──────────────────────────────────────────

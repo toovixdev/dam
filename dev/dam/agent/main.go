@@ -129,16 +129,22 @@ func main() {
 // wire protocol on the client→server direction. Passive — observes, never blocks.
 func runNetwork(cfg Config) {
 	iface := env("CAPTURE_IFACE", "eth0")
-	ifi, err := net.InterfaceByName(iface)
-	if err != nil {
-		log.Fatalf("interface %s not found: %v", iface, err)
+	// "any" (ifindex 0) sniffs ALL interfaces incl. loopback — handy when SQL is run
+	// on the DB host itself (localhost connections travel over lo, not the primary NIC).
+	ifIndex := 0
+	if iface != "any" && iface != "" {
+		ifi, err := net.InterfaceByName(iface)
+		if err != nil {
+			log.Fatalf("interface %s not found: %v", iface, err)
+		}
+		ifIndex = ifi.Index
 	}
 	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(0x0003))) // ETH_P_ALL
 	if err != nil {
 		log.Fatalf("AF_PACKET socket failed: %v (needs CAP_NET_RAW / root)", err)
 	}
 	defer syscall.Close(fd)
-	if err := syscall.Bind(fd, &syscall.SockaddrLinklayer{Protocol: htons(0x0003), Ifindex: ifi.Index}); err != nil {
+	if err := syscall.Bind(fd, &syscall.SockaddrLinklayer{Protocol: htons(0x0003), Ifindex: ifIndex}); err != nil {
 		log.Fatalf("bind to %s failed: %v", iface, err)
 	}
 	targetPort := uint16(atoiDefault(cfg.TargetPort, 3306))
@@ -1107,32 +1113,27 @@ func forwardEvent(cfg Config, principal, clientIP, sql string) {
 	if sql == "" {
 		return
 	}
-	tenantID := cfg.TenantID
-	if tenantID == "" {
-		tenantID = "dev-tenant" // fallback if enrollment hasn't resolved a tenant yet
-	}
 	ev := map[string]interface{}{
-		"tenant_id":     tenantID,
 		"database_name": cfg.TargetDB,
 		"principal":     principal,
 		"client_ip":     clientIP,
 		"operation":     detectOp(sql),
 		"sql_text":      truncate(sql, 500),
-		"sql_hash":      simpleHash(sql),
 		"tags":          detectTags(sql),
 		"agent_type":    agentTypeByMode[cfg.Mode],
 		"row_count":     0,
-		"duration_ms":   0,
 		"anomaly_score": 0,
+		"source_host":   cfg.TargetHost,
 		"timestamp":     time.Now().UTC().Format("2006-01-02 15:04:05"),
 	}
-	body, _ := json.Marshal(ev)
-	q := url.Values{}
-	q.Set("query", "INSERT INTO dam_analytics.events FORMAT JSONEachRow")
-	q.Set("user", cfg.CHUser)
-	q.Set("password", cfg.CHPassword)
-	resp, err := http.Post(cfg.ClickHouse+"/?"+q.Encode(), "application/json", bytes.NewReader(body))
-	if err == nil {
+	// Ship OUTBOUND to the control plane (not straight to ClickHouse, which isn't
+	// reachable from a customer network). The control plane writes it to the data plane.
+	payload := map[string]interface{}{"token": cfg.EnrollToken, "host": cfg.TargetHost, "events": []interface{}{ev}}
+	body, _ := json.Marshal(payload)
+	resp, err := http.Post(cfg.ControlPlane+"/api/agents/events", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[capture] event ship failed: %v", err)
+	} else {
 		resp.Body.Close()
 	}
 	log.Printf("[capture] %-6s %-14s %s", detectOp(sql), principal, truncate(sql, 80))
