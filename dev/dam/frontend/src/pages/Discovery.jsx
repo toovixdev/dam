@@ -65,6 +65,9 @@ export default function Discovery() {
   const { data: candData, refetch: refetchCands } = useApiData('/discovery/candidates', { poll: 30000 });
   const { data: jobData, refetch: refetchJobs } = useApiData('/discovery/jobs', { poll: 30000 });
   const { data: dbData, refetch: refetchDbs } = useApiData('/databases', { poll: 30000 });
+  const { data: cloudCfg } = useApiData('/settings/cloud-providers', { poll: 0 });
+  const tenantClouds = Array.isArray(cloudCfg?.providers) ? cloudCfg.providers : [];
+  const cloudLabel = (id) => (cloudCfg?.available || []).find((a) => a.id === id)?.label || id;
   const [scanCfg, setScanCfg] = useState(null); // open scan-config modal when set
   const [confirmCand, setConfirmCand] = useState(null); // unreachable-approve confirmation
 
@@ -77,10 +80,18 @@ export default function Discovery() {
   const cloudsScanned = new Set(candidates.map((c) => c.cloud)).size;
   const sensitiveCount = candidates.filter((c) => c.sig === 'sensitive').length;
 
-  const openScan = () => setScanCfg({ scanType: 'network', preset: 'common', customPorts: '', scope: 'client-postgres, client-mysql, client-mongo' });
+  const openScan = () => setScanCfg({ scanType: 'network', preset: 'common', customPorts: '', scope: 'client-postgres, client-mysql, client-mongo', providers: [] });
 
   const runScan = async () => {
     const cfg = scanCfg;
+    if (cfg.scanType === 'cloud_api') {
+      if (!(cfg.providers || []).length) { toast('Pick at least one cloud to enumerate', 'err'); return; }
+      const res = await apiPost('/discovery/scan', { scan_type: 'cloud_api', scope: cfg.providers.join(', '), providers: cfg.providers });
+      setScanCfg(null);
+      if (res && res.ok) { toast(`Cloud discovery queued for ${cfg.providers.map((p) => p.toUpperCase()).join(', ')}`, 'ok'); refetchJobs(); setTimeout(refetchCands, 1500); }
+      else toast(res?.data?.error || 'Could not start cloud discovery', 'err');
+      return;
+    }
     const ports_count = cfg.preset === 'custom' ? countCustomPorts(cfg.customPorts) : PORT_PRESETS[cfg.preset].count;
     const res = await apiPost('/discovery/scan', {
       scan_type: cfg.scanType,
@@ -97,6 +108,7 @@ export default function Discovery() {
       toast('Could not start scan', 'err');
     }
   };
+  const toggleProvider = (id) => setScanCfg((c) => ({ ...c, providers: c.providers.includes(id) ? c.providers.filter((x) => x !== id) : [...c.providers, id] }));
 
   // Discovery only REGISTERS the asset (instance + database). Agent monitoring is
   // deployed separately from the Agent Fleet page. Unreachable candidates confirm first.
@@ -183,11 +195,34 @@ export default function Discovery() {
                   <option value="cloud_api">Cloud API enumeration (PaaS)</option>
                 </select>
               </div>
-              <div className="form-field">
-                <label>{scanCfg.scanType === 'cloud_api' ? 'Cloud accounts / regions' : 'Targets (hosts / CIDR)'}</label>
-                <input value={scanCfg.scope} onChange={(e) => setScanCfg({ ...scanCfg, scope: e.target.value })}
-                  placeholder={scanCfg.scanType === 'cloud_api' ? 'aws:us-east-1, azure:westeurope' : '10.20.0.0/16, client-postgres'} />
-              </div>
+              {scanCfg.scanType === 'network' && (
+                <div className="form-field">
+                  <label>Targets (hosts / CIDR)</label>
+                  <input value={scanCfg.scope} onChange={(e) => setScanCfg({ ...scanCfg, scope: e.target.value })}
+                    placeholder="10.20.0.0/16, client-postgres" />
+                </div>
+              )}
+
+              {scanCfg.scanType === 'cloud_api' && (
+                <div className="form-field">
+                  <label>Which cloud(s) to enumerate</label>
+                  {tenantClouds.length === 0 ? (
+                    <div style={{ background: 'var(--amber-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12.5, lineHeight: 1.5 }}>
+                      No clouds configured for this workspace. Set your <b>Cloud environment</b> in
+                      {' '}<a href="/settings">Settings → General</a> first, then run cloud discovery.
+                    </div>
+                  ) : (
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      {tenantClouds.map((id) => (
+                        <label key={id} className="approach-card" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 12px', cursor: 'pointer' }}>
+                          <input type="checkbox" checked={scanCfg.providers.includes(id)} onChange={() => toggleProvider(id)} />
+                          <span style={{ fontSize: 13 }}><b style={{ textTransform: 'uppercase', marginRight: 6 }}>{id}</b><span className="muted">{cloudLabel(id)}</span></span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {scanCfg.scanType === 'network' && (
                 <>
@@ -218,7 +253,9 @@ export default function Discovery() {
 
               <div className="modal-footer" style={{ padding: '16px 0 0', justifyContent: 'flex-end' }}>
                 <button className="btn-secondary" onClick={() => setScanCfg(null)}>Cancel</button>
-                <button className="btn-primary" onClick={runScan}>Start scan</button>
+                <button className="btn-primary" onClick={runScan} disabled={scanCfg.scanType === 'cloud_api' && scanCfg.providers.length === 0}>
+                  {scanCfg.scanType === 'cloud_api' ? 'Run cloud discovery' : 'Start scan'}
+                </button>
               </div>
             </>
           );
