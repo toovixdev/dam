@@ -385,7 +385,7 @@ function startClassification() {
   setTimeout(classifyDatabases, 8000);
   setInterval(async () => {
     try {
-      const r = await fetch(`${CONTROL_PLANE}/api/classification/scan-pending`);
+      const r = await fetch(`${CONTROL_PLANE}/api/classification/scan-pending?token=${encodeURIComponent(ENROLL_TOKEN)}`);
       const j = await r.json().catch(() => ({}));
       if (j && j.pending) { console.log('[Classify] on-demand scan requested'); await classifyDatabases(); }
     } catch (e) { /* control plane optional */ }

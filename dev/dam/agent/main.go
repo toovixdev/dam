@@ -107,7 +107,8 @@ func main() {
 
 	// Classification runs alongside ANY capture mode (it just needs a DB read login).
 	if cfg.Classify && cfg.DBUser != "" && cfg.Engine == "mysql" {
-		go classifyLoop(cfg)
+		go classifyLoop(cfg)     // periodic (CLASSIFY_INTERVAL_MIN)
+		go scanTriggerLoop(cfg)  // on-demand — the "Run Scan" button
 	} else if cfg.Classify {
 		log.Printf("classification enabled but skipped (need DB_USER and engine=mysql in this build)")
 	}
@@ -320,6 +321,31 @@ func classifyCol(name string) (tag, sens string, ok bool) {
 }
 
 var sensRank = map[string]int{"low": 0, "medium": 1, "high": 2, "critical": 3}
+
+// scanTriggerLoop makes the Classification page's "Run Scan" button work: it polls the
+// control plane for an on-demand scan request for this agent's tenant and runs immediately.
+func scanTriggerLoop(cfg Config) {
+	client := &http.Client{Timeout: 10 * time.Second}
+	pollURL := cfg.ControlPlane + "/api/classification/scan-pending?token=" + url.QueryEscape(cfg.EnrollToken)
+	for {
+		time.Sleep(12 * time.Second)
+		resp, err := client.Get(pollURL)
+		if err != nil {
+			continue
+		}
+		var body struct {
+			Pending bool `json:"pending"`
+		}
+		json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		if body.Pending {
+			log.Printf("on-demand classification scan requested")
+			if err := runClassificationScan(cfg); err != nil {
+				log.Printf("on-demand classification scan failed: %v", err)
+			}
+		}
+	}
+}
 
 func classifyLoop(cfg Config) {
 	every := time.Duration(cfg.ClassifyMins) * time.Minute

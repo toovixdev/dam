@@ -34,8 +34,11 @@ export default function Classification() {
   const runScan = async () => {
     const res = await apiPost('/classification/scan');
     if (res && res.ok) {
-      toast('Scan requested — introspecting & classifying live schemas…', 'ok');
-      setTimeout(handleRefresh, 13000);
+      toast('Scan requested — the agent will introspect & classify on its next poll (~15s)…', 'ok');
+      // The agent/collector picks up the request on its poll (~12s) then scans; refresh a
+      // couple of times so the new results land without a manual reload.
+      setTimeout(handleRefresh, 16000);
+      setTimeout(handleRefresh, 28000);
     } else { toast('Could not start scan', 'err'); }
   };
 

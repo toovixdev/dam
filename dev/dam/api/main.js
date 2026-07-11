@@ -4176,6 +4176,15 @@ app.get('/api/agents/enroll-token', authRequired, async (req, res) => {
 // (host:port + engine); we find-or-create that instance and register the agent on it.
 const AGENT_ENROLL_TOKEN = process.env.AGENT_ENROLL_TOKEN || 'dev-agent-enroll-token';
 
+// Resolve a tenant from an agent enroll token (per-tenant token; the legacy global dev
+// token maps to the reference/oldest tenant). Shared by enroll, scan-results, scan-pending.
+async function tenantFromEnrollToken(token) {
+  if (!token) return null;
+  let id = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
+  if (!id && token === AGENT_ENROLL_TOKEN) id = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
+  return id;
+}
+
 app.post('/api/agents/enroll', async (req, res) => {
   const { token, host, port, engine, agent_type, agent_host, version } = req.body;
   // Resolve the tenant FROM the token (per-tenant). The legacy global dev token still works
@@ -6343,11 +6352,23 @@ app.get('/api/classification/detectors', authRequired, async (req, res) => {
   res.json({ detectors, active: scanned > 0 ? detectors.length : 0, scanned_databases: scanned });
 });
 
-// On-demand scan trigger: the UI requests, the classification scanner (collector,
-// which can reach the client DBs) picks it up and runs a real schema scan.
-let classificationScanRequested = false;
-app.post('/api/classification/scan', authRequired, (req, res) => { classificationScanRequested = true; res.json({ requested: true }); });
-app.get('/api/classification/scan-pending', authRequired, (req, res) => { const p = classificationScanRequested; classificationScanRequested = false; res.json({ pending: p }); });
+// On-demand scan trigger — PER TENANT. The UI's "Run Scan" button marks the tenant;
+// whichever classifier serves it (a deployed agent, or the dev collector) polls
+// scan-pending with its enroll token and consumes the request (consume-once per tenant).
+const scanRequested = new Set(); // tenantIds with a pending on-demand scan
+app.post('/api/classification/scan', authRequired, (req, res) => {
+  scanRequested.add(req.user.tenantId);
+  res.json({ requested: true });
+});
+// Token-authed (agents/collector aren't users). Returns + clears the pending flag for
+// the token's tenant. No token → nothing pending (safe default).
+app.get('/api/classification/scan-pending', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.query.token || req.headers['x-enroll-token']);
+  if (!tenantId) return res.json({ pending: false });
+  const pending = scanRequested.has(tenantId);
+  if (pending) scanRequested.delete(tenantId);
+  res.json({ pending });
+});
 
 // Token-gated ingest of real scan results — replaces the classification inventory
 // for each scanned database with what was actually found in its schema.
