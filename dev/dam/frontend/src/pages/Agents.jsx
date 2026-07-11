@@ -190,10 +190,14 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const [instId, setInstId] = useState(initialInstanceId || instances[0]?.id || '');
   const [modes, setModes] = useState(seeded.length ? seeded : ['network', 'host']);
   const [platform, setPlatform] = useState('binary');
+  const [classify, setClassify] = useState(false);
+  const [dbUser, setDbUser] = useState('');
+  const [dbPass, setDbPass] = useState('');
   const [instructions, setInstructions] = useState(null);
 
   const instance = instances.find((i) => i.id === instId);
   const isPaas = !!instance?.is_paas;
+  const canClassify = (instance?.engine || 'mysql') === 'mysql'; // MySQL-only in this build
   const has = (m) => modes.includes(m);
   const toggle = (m) => setModes((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
   const activePreset = PRESETS.find((p) => sameSet(p.modes, modes));
@@ -217,7 +221,13 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
     const token = (res && res.token) || ('tvx_enroll_' + Math.random().toString(36).slice(2, 14));
     const cp = (res && res.control_plane) || 'meridian.toovix.security';
     const image = (res && res.agent_image) || 'registry.toovix.security/dam-agent:latest';
-    setInstructions({ token, cp, image, modes: [...modes], platform, target: instance?.instance || instance?.name, engine: instance?.engine });
+    const useClassify = classify && canClassify;
+    if (useClassify && !dbUser.trim()) { toast('Enter the DB reader username for classification', 'err'); return; }
+    setInstructions({
+      token, cp, image, modes: [...modes], platform,
+      target: instance?.instance || instance?.name, engine: instance?.engine,
+      classify: useClassify, dbUser: dbUser.trim(), dbPass: dbPass.trim(),
+    });
   };
   const done = () => { onDeployed(); onClose(); };
 
@@ -292,6 +302,34 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
             <option value="package">OS package (.deb / .rpm)</option>
             <option value="kubernetes">Kubernetes (Helm)</option>
           </select>
+
+          <div className="section-label">Data classification</div>
+          <div className="approach-card" style={{ padding: 12, marginBottom: 8, cursor: canClassify ? 'pointer' : 'not-allowed', opacity: canClassify ? 1 : 0.55 }}
+            onClick={() => { if (canClassify) { setClassify((v) => !v); setInstructions(null); } }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <input type="checkbox" checked={classify && canClassify} readOnly style={{ pointerEvents: 'none' }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>Discover sensitive data (PII/PCI)</div>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  {canClassify
+                    ? 'The agent logs into the DB as a least-privilege reader, classifies columns, and populates the Classification page. Runs alongside capture over the same outbound path.'
+                    : 'Classification is available for MySQL in this build.'}
+                </div>
+              </div>
+            </div>
+          </div>
+          {classify && canClassify && (
+            <div style={{ display: 'flex', gap: 10, margin: '0 0 14px' }}>
+              <div className="form-field" style={{ flex: 1, margin: 0 }}>
+                <label>DB reader user</label>
+                <input value={dbUser} onChange={(e) => { setDbUser(e.target.value); setInstructions(null); }} placeholder="dam_svc" />
+              </div>
+              <div className="form-field" style={{ flex: 1, margin: 0 }}>
+                <label>DB reader password</label>
+                <input type="password" value={dbPass} onChange={(e) => { setDbPass(e.target.value); setInstructions(null); }} placeholder="least-privilege SELECT user" />
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -303,10 +341,18 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
           </div>
           {instructions.modes.map((m) => (
             <div key={m} style={{ marginBottom: 10 }}>
-              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{MODES.find((x) => x.id === m)?.name}</div>
-              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image)}</pre>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                {MODES.find((x) => x.id === m)?.name}
+                {instructions.classify && m === instructions.modes[0] && <span className="pill info" style={{ marginLeft: 6 }}>+ classification</span>}
+              </div>
+              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image, { classify: instructions.classify && m === instructions.modes[0], dbUser: instructions.dbUser, dbPass: instructions.dbPass })}</pre>
             </div>
           ))}
+          {instructions.classify && instructions.modes.length > 1 && (
+            <div className="muted" style={{ fontSize: 11.5, marginTop: -2 }}>
+              Classification is attached to the <b>{MODES.find((x) => x.id === instructions.modes[0])?.name}</b> container only (one scan per DB is enough).
+            </div>
+          )}
         </div>
       )}
 
@@ -323,7 +369,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
 // Build the install artifact an operator runs where the DB lives. Emits the REAL agent
 // env vars (MODE / DB_ENGINE / TARGET_HOST / TARGET_PORT / AGENT_ENROLL_TOKEN /
 // CONTROL_PLANE) for the chosen deployment format.
-function buildInstall(format, mode, target, token, cp, engine, image) {
+function buildInstall(format, mode, target, token, cp, engine, image, opts = {}) {
   const img = image || 'registry.toovix.security/dam-agent:latest';
   const m = mode === 'host' ? 'host' : mode === 'proxy' ? 'proxy' : 'network';
   const [host, port] = String(target || '').split(':');
@@ -336,6 +382,16 @@ function buildInstall(format, mode, target, token, cp, engine, image) {
     `AGENT_ENROLL_TOKEN=${token}`,
     `CONTROL_PLANE=${cp}`,
   ];
+  // Data classification (optional) — the agent logs into the DB as a least-privilege
+  // reader and classifies columns. Attached to a single container by the caller.
+  if (opts.classify) {
+    env.push(
+      'CLASSIFY=true',
+      `DB_USER=${opts.dbUser || 'dam_svc'}`,
+      `DB_PASSWORD=${opts.dbPass || '<db-reader-password>'}`,
+      'CLASSIFY_INTERVAL_MIN=30',
+    );
+  }
 
   if (format === 'docker') {
     // Network/host capture uses AF_PACKET raw sockets → needs host networking +
@@ -353,13 +409,16 @@ ${envLines.join(' \\\n')} \\
   }
 
   if (format === 'kubernetes') {
+    const classifySets = opts.classify
+      ? ` \\\n  --set classify=true --set dbUser=${opts.dbUser || 'dam_svc'} --set dbPassword=${opts.dbPass || '<db-reader-password>'}`
+      : '';
     return `helm repo add toovix oci://registry.toovix.security/charts
 helm install dam-${m} toovix/dam-agent \\
   --namespace toovix-dam --create-namespace \\
   --set token=${token} --set endpoint=${cp} \\
   --set image=${img} \\
   --set mode=${m} --set engine=${eng} \\
-  --set targetHost=${host || target} --set targetPort=${port || 3306}`;
+  --set targetHost=${host || target} --set targetPort=${port || 3306}${classifySets}`;
   }
 
   if (format === 'package') {
