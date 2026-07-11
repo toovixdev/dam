@@ -1352,6 +1352,8 @@ func detectOp(sql string) string {
 		return "UPDATE"
 	case strings.HasPrefix(u, "DELETE"):
 		return "DELETE"
+	case strings.HasPrefix(u, "GRANT"), strings.HasPrefix(u, "REVOKE"):
+		return "GRANT" // privilege change (GRANT/REVOKE) — drives privileged-access policies
 	case strings.HasPrefix(u, "CREATE"), strings.HasPrefix(u, "ALTER"), strings.HasPrefix(u, "DROP"):
 		return "DDL"
 	default:
