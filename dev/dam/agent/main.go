@@ -154,7 +154,9 @@ func runNetwork(cfg Config) {
 	log.Printf("network agent sniffing %s for tcp/%d (passive capture, debug=%v)", iface, targetPort, capDebug)
 
 	conns := map[string]*connState{}
-	frame := make([]byte, 65536)
+	// Big enough for a full IPv4 packet (65535) + link header, and for loopback GSO
+	// super-segments — a too-small buffer truncates large result sets and desyncs framing.
+	frame := make([]byte, 262144)
 	var frames uint64
 	for {
 		n, from, err := syscall.Recvfrom(fd, frame, 0)
