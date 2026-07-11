@@ -2081,3 +2081,21 @@ customer network, so **0 events** ever landed and no alert could fire.
   `tenant_3e89b8bf….events` → **critical alert "dam_svc accessed honeypot orders.card_vault_decoy"**.
 - Follow-ups: network capture is plaintext-only (document/TLS-terminate); consider batching event POSTs;
   a general event→rule detection engine beyond decoys.
+
+## 61. Policy-driven alerts from real SQL — tag-based + true row-count bulk read
+
+Proved the real detection engine (`runDetectionEngine`, 7s) fires policy alerts from live captured SQL,
+and closed the gaps for volume-threshold policies.
+- **Option 2 (tag-based, no code):** created an enabled policy `{action_type: READ, object_sensitivity_tags:
+  any_of [pci,ssn,aadhaar,pii]}`. A captured `SELECT id, ship_address FROM orders…` (tagged `pii` because
+  it names an address column) → **high alert "Access to cardholder/PII data"** in ~7s.
+- **Option 1 (true row-count bulk read):** the passive network agent now parses the **server→client**
+  result set to attach a real `row_count` (reusing the proxy's result-set state machine), and tags reads
+  of a classified-sensitive table via its own scan (`classifyTags`). Two capture bugs fixed along the way:
+  loopback delivers each packet twice (skip `PACKET_OUTGOING`), and large result sets dropped frames
+  (256KB frame buffer + 64MB `SO_RCVBUFFORCE`). Seeded 20k rows into `orders.orders`; `SELECT * FROM
+  orders.orders` → event `row_count=20200, tags=['pii']` → **critical alert "Bulk read of sensitive data"
+  (rows_affected 20,200)**.
+- **Capture requirement (unchanged):** clients must connect `--ssl-mode=DISABLED` (passive agent can't
+  decode TLS). On-host SQL is captured via `CAPTURE_IFACE=lo`.
+- Follow-ups: proxy-mode row counting; dedup identical alerts within a short window; TLS-aware capture.
