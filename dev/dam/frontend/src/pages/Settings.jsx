@@ -139,6 +139,7 @@ export default function Settings() {
           sub="approved maintenance window for schema changes"
           desc={<>Schema changes (<b>DDL</b>) <b>outside</b> this approved window are flagged by <b>“DDL change control.”</b> Set the window and days your team is allowed to make changes.</>}
         />
+        <CloudProviders />
         </>
       )}
 
@@ -265,6 +266,52 @@ function WindowCard({ endpoint, title, sub, desc }) {
         </div>
         <div style={{ display: 'flex', gap: 8, paddingTop: 10, borderTop: '1px solid var(--line)' }}>
           <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : `Save ${title.toLowerCase()}`}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Cloud environment — which cloud(s) the tenant runs in (drives cloud discovery) ──
+function CloudProviders() {
+  const { data, refetch } = useApiData('/settings/cloud-providers', { poll: 0 });
+  const [sel, setSel] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const available = data?.available || [];
+
+  useEffect(() => { if (data?.providers) setSel(data.providers); }, [data]);
+  const toggle = (id) => setSel((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  const save = async () => {
+    setBusy(true);
+    const res = await apiPut('/settings/cloud-providers', { providers: sel });
+    setBusy(false);
+    if (res?.ok) { toast('Cloud environment saved', 'ok'); refetch(); }
+    else toast(res?.data?.error || 'Could not save', 'err');
+  };
+
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="card-header">
+        <span className="card-title">Cloud environment</span>
+        <span className="card-sub">which clouds to run cloud (agentless) discovery against</span>
+      </div>
+      <div className="card-body">
+        <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>
+          Select the cloud(s) your databases run in. The DAM invokes the matching <b>read-only</b>
+          discovery adapter per cloud (e.g. Cloud SQL, RDS, Azure SQL) to enumerate managed databases —
+          no network scan needed. Self-managed DBs on VMs are still found by the network scanner.
+        </p>
+        <div style={{ display: 'grid', gap: 8 }}>
+          {available.map((p) => (
+            <label key={p.id} className="approach-card" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', cursor: 'pointer' }}>
+              <input type="checkbox" checked={sel.includes(p.id)} onChange={() => toggle(p.id)} />
+              <span style={{ fontSize: 13 }}><b style={{ textTransform: 'uppercase', marginRight: 6 }}>{p.id}</b><span className="muted">{p.label}</span></span>
+            </label>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, paddingTop: 12, marginTop: 12, borderTop: '1px solid var(--line)' }}>
+          <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save cloud environment'}</button>
         </div>
       </div>
     </div>

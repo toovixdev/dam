@@ -970,6 +970,8 @@ async function runAuthMigration() {
     // Customer-configurable business hours (off-hours detection) + DDL change window.
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS business_hours JSONB`);
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS change_window JSONB`);
+    // Which cloud(s) the tenant runs in — drives which cloud-discovery adapter(s) to invoke.
+    await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cloud_providers JSONB`);
 
     // Per-database masking bypass: DB principals (least-privilege service / break-glass
     // accounts) that see UNMASKED data for a given database. Isolated/additive table.
@@ -6291,6 +6293,32 @@ app.put('/api/settings/change-window', authRequired, async (req, res) => {
   if (cw.end <= cw.start) return res.status(400).json({ error: 'End hour must be after start hour' });
   await pgPool.query('UPDATE tenants SET change_window = $2 WHERE id = $1', [req.user.tenantId, JSON.stringify(cw)]);
   res.json(cw);
+});
+
+// ── Cloud environment (which cloud discovery adapters to run) ──────────────────
+const CLOUD_PROVIDERS = [
+  { id: 'gcp', label: 'Google Cloud (Cloud SQL, AlloyDB)' },
+  { id: 'aws', label: 'AWS (RDS, Aurora, Redshift)' },
+  { id: 'azure', label: 'Azure (SQL, DB for MySQL/PostgreSQL, Cosmos)' },
+  { id: 'oci', label: 'Oracle Cloud (Autonomous, DB Systems)' },
+  { id: 'atlas', label: 'MongoDB Atlas' },
+];
+const CLOUD_PROVIDER_IDS = new Set(CLOUD_PROVIDERS.map((p) => p.id));
+async function cloudProvidersFor(tenantId) {
+  try {
+    const v = (await pgPool.query('SELECT cloud_providers FROM tenants WHERE id = $1', [tenantId])).rows[0]?.cloud_providers;
+    return Array.isArray(v) ? v.filter((p) => CLOUD_PROVIDER_IDS.has(p)) : [];
+  } catch { return []; }
+}
+app.get('/api/settings/cloud-providers', authRequired, async (req, res) => {
+  res.json({ providers: await cloudProvidersFor(req.user.tenantId), available: CLOUD_PROVIDERS });
+});
+app.put('/api/settings/cloud-providers', authRequired, async (req, res) => {
+  const list = Array.isArray(req.body?.providers)
+    ? [...new Set(req.body.providers.filter((p) => CLOUD_PROVIDER_IDS.has(p)))]
+    : [];
+  await pgPool.query('UPDATE tenants SET cloud_providers = $2 WHERE id = $1', [req.user.tenantId, JSON.stringify(list)]);
+  res.json({ providers: list });
 });
 
 // ── DDL Change Log (schema/privilege-change attestation) ──────────────────────
