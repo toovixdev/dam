@@ -2059,3 +2059,25 @@ for anyone. Rebuilt it per-tenant + token-based:
 - Verified live: minted a short-lived gcptest JWT server-side, `POST /classification/scan` →
   `{requested:true}`; agent logged `on-demand classification scan requested` on its next poll and
   re-reported (ran exactly once — consume-once confirmed).
+
+## 60. Captured SQL → audit events → alerts (outbound event ingest + TLS finding)
+
+Made a remote agent's captured queries actually reach the platform and drive detection. Previously the
+agent shipped events straight to ClickHouse (`dam-clickhouse:8123`, internal-only) — unreachable from a
+customer network, so **0 events** ever landed and no alert could fire.
+- **Backend** (`main.js`): `POST /api/agents/events` (token→tenant) writes captured events to the tenant's
+  events DB via `chInsertEvents` → `eventsDbFor(tenant)`. Outbound-only over HTTPS/Caddy; no exposed CH.
+- **Agent** [main.go](agent/main.go): `forwardEvent` now POSTs to `CONTROL_PLANE/api/agents/events`
+  instead of ClickHouse. `CAPTURE_IFACE=any|lo` support so on-host SQL (loopback) is captured.
+- **Detection**: the existing decoy/honeypot scan (`runDecoyScan`, 8s) matches captured `sql_text` against
+  armed decoys → **critical alert**. No general event-rule engine yet; decoys are the live SQL→alert path.
+- **KEY FINDING — TLS**: the passive network agent can only decode **plaintext** MySQL. MySQL 8 clients
+  default to `--ssl-mode=PREFERRED`, so traffic is TLS (payloads seen as `0x16/0x14/0x17` TLS records) and
+  undecodable. Clients must connect with `--ssl-mode=DISABLED` for network capture to work. (The inline
+  proxy also can't sit in a TLS session — same root cause for its hang.) Added `CAPTURE_DEBUG` env-gated
+  diagnostics that surfaced this.
+- Verified end-to-end on gcptest/db-vm-a: `mysql --ssl-mode=DISABLED … -e "SELECT * FROM
+  orders.card_vault_decoy"` → agent `[capture] SELECT dam_svc …` → audit event in
+  `tenant_3e89b8bf….events` → **critical alert "dam_svc accessed honeypot orders.card_vault_decoy"**.
+- Follow-ups: network capture is plaintext-only (document/TLS-terminate); consider batching event POSTs;
+  a general event→rule detection engine beyond decoys.
