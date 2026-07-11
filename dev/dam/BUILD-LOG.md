@@ -2022,3 +2022,20 @@ Classification is **orthogonal to capture mode** — the same network agent alre
   from Secret Manager `toovix-db-vm-a-dam-svc`). Agent logged `classification reported (1 db):
   {"objects":1,"columns":1}`; control DB shows `orders.orders.ship_address → {address} / medium`
   (correctly the only PII column in that seed).
+
+## 58. Classification page — real KPIs, detectors & coverage (was hardcoded)
+
+The Classification page's headline numbers and two tabs were static demo data (a fake `142` sensitive
+columns via a `|| 142` fallback, 7 `DEMO_RULES` detectors, and a `DEMO_COVERAGE` array of made-up
+databases like `finance-prod-01` at ~89%). Wired them all to real state:
+- **Agent** [main.go](agent/main.go): the scan now reports **every scanned schema** (not just ones with
+  sensitive columns) with per-database totals `columns_total` / `objects_total` / `sensitive_total`.
+- **Backend** (`main.js`): `databases` gains `classified_at` / `columns_total` / `objects_total` /
+  `sensitive_total` (written by `scan-results`). New **`/api/classification/coverage`** (per-DB real
+  coverage + fleet `coverage_pct` = scanned/total databases) and **`/api/classification/detectors`**
+  (the real 9-family detector catalog the agent runs, with live hit counts from `classified_columns`).
+- **Frontend** [Classification.jsx](../frontend/src/pages/Classification.jsx): Sensitive Columns,
+  Detectors Active, Avg Coverage KPIs + the Detection Rules and Coverage tabs now come from the API;
+  removed all `DEMO_*` arrays and the fake `142`; dropped the unbacked Custom Rules tab.
+- Verified on `gcptest`: `orders` DB → **16 columns scanned / 3 objects / 1 sensitive**, coverage 100%
+  (1/1 DBs scanned), detector `address` shows 1 hit, the other 8 detectors 0.
