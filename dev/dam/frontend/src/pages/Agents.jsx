@@ -382,6 +382,11 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     `AGENT_ENROLL_TOKEN=${token}`,
     `CONTROL_PLANE=${cp}`,
   ];
+  // CAPTURE_IFACE controls which interface the passive sniffer binds to:
+  //   any  = all interfaces → captures BOTH on-host queries (loopback) AND remote
+  //          clients connecting over the NIC (recommended — misses nothing);
+  //   <nic> (e.g. ens4/eth0) = only remote-client traffic;  lo = only on-host.
+  if (m === 'network' || m === 'host') env.push('CAPTURE_IFACE=any');
   // Data classification (optional) — the agent logs into the DB as a least-privilege
   // reader and classifies columns. Attached to a single container by the caller.
   if (opts.classify) {
@@ -399,16 +404,20 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     const needsCap = (m === 'network' || m === 'host');
     const flags = needsCap ? ' --network host --user 0 --cap-add NET_RAW --cap-add NET_ADMIN' : '';
     const envLines = env.map((e) => `  -e ${e}`);
-    if (needsCap) envLines.push("  -e CAPTURE_IFACE=$(ip -o -4 route show to default | awk '{print $5; exit}')");
+    const capNote = needsCap ? `# CAPTURE_IFACE=any sniffs all interfaces (on-host + remote clients). Narrow it to a
+#   specific NIC (e.g. eth0/ens4) for remote-only, or 'lo' for on-host only. Note:
+#   the passive sniffer reads PLAINTEXT — TLS-encrypted client sessions aren't decoded.
+` : '';
     return `# Prerequisite: Docker must be installed on the VM / bare-metal host.
 #   Debian/Ubuntu:  curl -fsSL https://get.docker.com | sudo sh
 #   RHEL/Rocky:     sudo dnf install -y docker && sudo systemctl enable --now docker
-docker run -d --name toovix-agent-${m} --restart unless-stopped${flags} \\
+${capNote}docker run -d --name toovix-agent-${m} --restart unless-stopped${flags} \\
 ${envLines.join(' \\\n')} \\
   ${img}`;
   }
 
   if (format === 'kubernetes') {
+    const capSet = (m === 'network' || m === 'host') ? ' --set captureIface=any' : '';
     const classifySets = opts.classify
       ? ` \\\n  --set classify=true --set dbUser=${opts.dbUser || 'dam_svc'} --set dbPassword=${opts.dbPass || '<db-reader-password>'}`
       : '';
@@ -418,7 +427,7 @@ helm install dam-${m} toovix/dam-agent \\
   --set token=${token} --set endpoint=${cp} \\
   --set image=${img} \\
   --set mode=${m} --set engine=${eng} \\
-  --set targetHost=${host || target} --set targetPort=${port || 3306}${classifySets}`;
+  --set targetHost=${host || target} --set targetPort=${port || 3306}${capSet}${classifySets}`;
   }
 
   if (format === 'package') {
