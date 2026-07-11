@@ -1997,3 +1997,28 @@ A second, general-purpose chatbot for everyday questions — not tied to the ten
   it (config still admin-only). No new config/UI to manage — configure once, both chats light up.
 - Verified: status `ready:true` after config; general chat reached Anthropic (dummy key → "invalid
   x-api-key", proving the ungrounded path builds its prompt and calls the provider). Dummy config removed.
+
+## 57. Agent data classification — schema scan reports PII/PCI columns
+
+Made the **agent** classify sensitive data, so the Classification page populates from a real deployed
+agent (previously only the standalone collector could classify, and it couldn't reach private DB hosts).
+Classification is **orthogonal to capture mode** — the same network agent already on a DB host does it.
+- **Agent** [main.go](agent/main.go): new `classifyLoop`/`runClassificationScan`. On `CLASSIFY=true` +
+  `DB_USER`/`DB_PASSWORD`, the agent opens an **outbound** MySQL connection as the least-privilege reader,
+  reads `information_schema.columns`, matches names against a 12-pattern PII/PCI library
+  (Aadhaar, SSN, card number/CVV/expiry, email, name, DOB, passport/tax-id, phone, address), rolls
+  sensitivity up to the object, and POSTs `{token, host, port, engine, databases[]}` to the control plane.
+  Re-scans every `CLASSIFY_INTERVAL_MIN` min (default 30). First real agent dependency:
+  `go-sql-driver/mysql` — both Dockerfiles run `go mod tidy` at build (no local Go toolchain).
+- **Backend** (`main.js` `/api/classification/scan-results`): now resolves the tenant from the per-tenant
+  enroll token (legacy global token → oldest tenant) and **find-or-creates** the `db_instances` +
+  `databases` rows (tenant-scoped) from the reported host/port/engine, so a discovered schema shows up
+  automatically. (Fixed a `uuid = integer` cast bug — `instance_id` is a uuid.)
+- **Docs**: [capture-modes.md](docs/capture-modes.md) + the in-app **Capture Modes** page
+  ([CaptureModes.jsx](../frontend/src/pages/CaptureModes.jsx)) gained a "Data classification" section;
+  KB §7.3 added.
+- Verified live on GCP: rebuilt + pushed the agent image to the self-hosted registry, re-ran the
+  `toovix-agent-network` container on private `db-vm-a` with `CLASSIFY=true DB_USER=dam_svc` (password
+  from Secret Manager `toovix-db-vm-a-dam-svc`). Agent logged `classification reported (1 db):
+  {"objects":1,"columns":1}`; control DB shows `orders.orders.ship_address → {address} / medium`
+  (correctly the only PII column in that seed).
