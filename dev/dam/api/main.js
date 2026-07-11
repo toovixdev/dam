@@ -185,6 +185,10 @@ async function loadPlatformSettings() {
 function controlPlaneUrl() {
   return (platformSettings.control_plane_url || process.env.PUBLIC_CONTROL_PLANE || 'meridian.toovix.security');
 }
+// The container image reference for the agent (Docker/Helm installs): admin setting → env → placeholder.
+function agentImageRef() {
+  return (platformSettings.agent_image || process.env.AGENT_IMAGE || 'registry.toovix.security/dam-agent:latest');
+}
 
 function activePlatformSmtp() {
   if (platformSmtpConfig && platformSmtpConfig.host) {
@@ -2492,31 +2496,46 @@ app.post('/api/admin/tenants', async (req, res) => {
 });
 
 // ── Admin · Platform settings (super-admin console) ──────────────────────────
-// Currently: the public control-plane URL agents enroll/report to.
+// The public control-plane URL + the agent image ref used in Deploy-agent instructions.
 app.get('/api/admin/platform/settings', async (req, res) => {
   try {
     res.json({
       controlPlane: controlPlaneUrl(),
       controlPlaneSource: platformSettings.control_plane_url ? 'database' : (process.env.PUBLIC_CONTROL_PLANE ? 'env' : 'default'),
+      agentImage: agentImageRef(),
+      agentImageSource: platformSettings.agent_image ? 'database' : (process.env.AGENT_IMAGE ? 'env' : 'default'),
     });
   } catch (e) { res.status(500).json({ error: 'Failed to load platform settings' }); }
 });
 
 app.put('/api/admin/platform/settings', async (req, res) => {
-  const raw = (req.body && req.body.controlPlane != null) ? String(req.body.controlPlane).trim() : '';
-  if (!raw) return res.status(400).json({ error: 'Control plane URL is required' });
-  // Normalise: require an https/http URL (agents dial it over TLS in production).
-  let url = raw.replace(/\/+$/, '');
-  if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
-  try { new URL(url); } catch { return res.status(400).json({ error: 'Enter a valid URL, e.g. https://dam.example.com' }); }
+  const b = req.body || {};
+  const actor = b.actor || 'Platform Ops';
+  const updates = [];
+  // Control-plane URL (optional) — normalise to an http(s) URL.
+  if (b.controlPlane != null && String(b.controlPlane).trim() !== '') {
+    let url = String(b.controlPlane).trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(url)) url = 'https://' + url;
+    try { new URL(url); } catch { return res.status(400).json({ error: 'Enter a valid control-plane URL, e.g. https://dam.example.com' }); }
+    updates.push(['control_plane_url', url]);
+  }
+  // Agent image reference (optional) — host/name[:tag], no whitespace.
+  if (b.agentImage != null && String(b.agentImage).trim() !== '') {
+    const img = String(b.agentImage).trim();
+    if (/\s/.test(img)) return res.status(400).json({ error: 'Enter a valid image reference, e.g. dam.example.com/dam-agent:latest' });
+    updates.push(['agent_image', img]);
+  }
+  if (!updates.length) return res.status(400).json({ error: 'Nothing to update' });
   try {
-    await pgPool.query(
-      `INSERT INTO platform_settings (key, value, updated_at, updated_by) VALUES ('control_plane_url', $1, now(), $2)
-       ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = now(), updated_by = $2`,
-      [url, (req.body && req.body.actor) || 'Platform Ops']);
+    for (const [key, value] of updates) {
+      await pgPool.query(
+        `INSERT INTO platform_settings (key, value, updated_at, updated_by) VALUES ($1, $2, now(), $3)
+         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now(), updated_by = $3`,
+        [key, value, actor]);
+    }
     await loadPlatformSettings();
-    try { await logPlatformAudit({ actor: (req.body && req.body.actor) || 'Platform Ops', action: 'platform.settings.update', resource: 'platform/control_plane_url', ip: req.ip, details: url }); } catch (e) { /* best-effort */ }
-    res.json({ ok: true, controlPlane: controlPlaneUrl() });
+    try { await logPlatformAudit({ actor, action: 'platform.settings.update', resource: 'platform/settings', ip: req.ip, details: updates.map((u) => u[0]).join(',') }); } catch (e) { /* best-effort */ }
+    res.json({ ok: true, controlPlane: controlPlaneUrl(), agentImage: agentImageRef() });
   } catch (err) { console.error('[Admin] platform settings save failed:', err.message); res.status(500).json({ error: 'Failed to save platform settings' }); }
 });
 
@@ -4143,6 +4162,7 @@ app.get('/api/agents/enroll-token', authRequired, async (req, res) => {
   res.json({
     token,
     control_plane: controlPlaneUrl(),
+    agent_image: agentImageRef(),
   });
 });
 

@@ -216,7 +216,8 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
     const res = await apiFetch('/agents/enroll-token');
     const token = (res && res.token) || ('tvx_enroll_' + Math.random().toString(36).slice(2, 14));
     const cp = (res && res.control_plane) || 'meridian.toovix.security';
-    setInstructions({ token, cp, modes: [...modes], platform, target: instance?.instance || instance?.name, engine: instance?.engine });
+    const image = (res && res.agent_image) || 'registry.toovix.security/dam-agent:latest';
+    setInstructions({ token, cp, image, modes: [...modes], platform, target: instance?.instance || instance?.name, engine: instance?.engine });
   };
   const done = () => { onDeployed(); onClose(); };
 
@@ -303,7 +304,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
           {instructions.modes.map((m) => (
             <div key={m} style={{ marginBottom: 10 }}>
               <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{MODES.find((x) => x.id === m)?.name}</div>
-              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine)}</pre>
+              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image)}</pre>
             </div>
           ))}
         </div>
@@ -322,7 +323,8 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
 // Build the install artifact an operator runs where the DB lives. Emits the REAL agent
 // env vars (MODE / DB_ENGINE / TARGET_HOST / TARGET_PORT / AGENT_ENROLL_TOKEN /
 // CONTROL_PLANE) for the chosen deployment format.
-function buildInstall(format, mode, target, token, cp, engine) {
+function buildInstall(format, mode, target, token, cp, engine, image) {
+  const img = image || 'registry.toovix.security/dam-agent:latest';
   const m = mode === 'host' ? 'host' : mode === 'proxy' ? 'proxy' : 'network';
   const [host, port] = String(target || '').split(':');
   const eng = engine || 'mysql';
@@ -347,7 +349,7 @@ function buildInstall(format, mode, target, token, cp, engine) {
 #   RHEL/Rocky:     sudo dnf install -y docker && sudo systemctl enable --now docker
 docker run -d --name toovix-agent-${m} --restart unless-stopped${flags} \\
 ${envLines.join(' \\\n')} \\
-  registry.toovix.security/dam-agent:latest   # or your own registry`;
+  ${img}`;
   }
 
   if (format === 'kubernetes') {
@@ -355,6 +357,7 @@ ${envLines.join(' \\\n')} \\
 helm install dam-${m} toovix/dam-agent \\
   --namespace toovix-dam --create-namespace \\
   --set token=${token} --set endpoint=${cp} \\
+  --set image=${img} \\
   --set mode=${m} --set engine=${eng} \\
   --set targetHost=${host || target} --set targetPort=${port || 3306}`;
   }

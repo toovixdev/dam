@@ -17,12 +17,13 @@ export default function PlatformEmail() {
   // Platform control-plane URL (the public endpoint agents enroll/report to).
   const { data: settings, refetch: refetchSettings } = useApiData('/admin/platform/settings', { poll: 0 });
   const [cp, setCp] = useState('');
+  const [img, setImg] = useState('');
   const [cpBusy, setCpBusy] = useState(false);
 
   useEffect(() => {
     if (data) setF({ host: data.host || '', port: data.port || 587, secure: !!data.secure, username: data.username || '', password: '', from: data.from || '' });
   }, [data]);
-  useEffect(() => { if (settings?.controlPlane) setCp(settings.controlPlane); }, [settings]);
+  useEffect(() => { if (settings?.controlPlane) setCp(settings.controlPlane); if (settings?.agentImage) setImg(settings.agentImage); }, [settings]);
 
   const set = (k, v) => setF((p) => ({ ...p, [k]: v }));
 
@@ -47,9 +48,9 @@ export default function PlatformEmail() {
   const saveCp = async () => {
     if (!cp.trim()) return toast('Enter the control-plane URL', 'err');
     setCpBusy(true);
-    const res = await apiPut('/admin/platform/settings', { controlPlane: cp.trim(), actor: 'Platform Ops' });
+    const res = await apiPut('/admin/platform/settings', { controlPlane: cp.trim(), agentImage: img.trim() || undefined, actor: 'Platform Ops' });
     setCpBusy(false);
-    if (res?.ok) { toast('Control-plane URL saved', 'ok'); setCp(res.data.controlPlane || cp.trim()); refetchSettings(); }
+    if (res?.ok) { toast('Platform settings saved', 'ok'); setCp(res.data.controlPlane || cp.trim()); setImg(res.data.agentImage || img.trim()); refetchSettings(); }
     else toast(res?.data?.error || 'Save failed', 'err');
   };
 
@@ -59,11 +60,11 @@ export default function PlatformEmail() {
 
   return (
     <Layout>
-      <PageHeader title="Platform Settings" meta={['Control-plane URL · system SMTP']}>{badge}</PageHeader>
+      <PageHeader title="Platform Settings" meta={['Agent deployment · system SMTP']}>{badge}</PageHeader>
 
       <div className="card" style={{ maxWidth: 640, marginBottom: 16 }}>
         <div className="card-body">
-          <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>Agent control-plane URL</h3>
+          <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>Agent deployment</h3>
           <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>
             The public HTTPS endpoint agents enroll and report to — it's baked into the install instructions
             in each tenant's <b>Deploy monitoring</b> flow. Agents dial this outbound.
@@ -73,8 +74,15 @@ export default function PlatformEmail() {
             <input value={cp} onChange={(e) => setCp(e.target.value)} placeholder="https://dam.yourcompany.com" />
             <span className="muted" style={{ fontSize: 11 }}>The DAM's public address, reachable from customer networks (e.g. https://dam.suchirasoistories.in).</span>
           </div>
+          <div className="form-field"><label>Agent image</label>
+            <input value={img} onChange={(e) => setImg(e.target.value)} placeholder="dam.yourcompany.com/dam-agent:latest" />
+            <span className="muted" style={{ fontSize: 11 }}>
+              Container image used in the Docker/Helm Deploy-agent instructions (e.g. dam.suchirasoistories.in/dam-agent:latest).
+              {settings?.agentImageSource && <> Current source: <b>{settings.agentImageSource}</b>.</>}
+            </span>
+          </div>
           <div style={{ display: 'flex', gap: 10, paddingTop: 10, borderTop: '1px solid var(--line)', marginTop: 6 }}>
-            <button className="btn-primary" disabled={cpBusy} onClick={saveCp}>{cpBusy ? 'Saving…' : 'Save control-plane URL'}</button>
+            <button className="btn-primary" disabled={cpBusy} onClick={saveCp}>{cpBusy ? 'Saving…' : 'Save platform settings'}</button>
           </div>
         </div>
       </div>
