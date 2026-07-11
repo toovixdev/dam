@@ -9246,8 +9246,9 @@ async function runDetectionEngine() {
       const pols = (await pgPool.query(`SELECT * FROM policies WHERE tenant_id = $1 AND status = 'enabled'`, [tenantId])).rows;
       if (!pols.length) continue;
       const evDb = await eventsDbFor(tenantId);
-      const dbByName = {};
-      (await pgPool.query('SELECT id, name FROM databases WHERE tenant_id = $1', [tenantId])).rows.forEach((d) => { dbByName[d.name] = d.id; });
+      const dbByName = {}, dbByHost = {};
+      (await pgPool.query('SELECT d.id, d.name, i.host FROM databases d LEFT JOIN db_instances i ON d.instance_id = i.id WHERE d.tenant_id = $1', [tenantId]))
+        .rows.forEach((d) => { dbByName[d.name] = d.id; if (d.host && !dbByHost[d.host]) dbByHost[d.host] = d.id; });
       const supp = (await pgPool.query(`SELECT rule, principal, object_name, database_name FROM alert_suppressions WHERE tenant_id = $1 AND status = 'active' AND (expires_at IS NULL OR expires_at > now())`, [tenantId])).rows;
       const suppressed = (rule, principal, object, database) => supp.some((s) =>
         s.rule === rule
@@ -9263,7 +9264,7 @@ async function runDetectionEngine() {
         const whereSql = [`tenant_id = '${chEsc(tenantId)}'`, `timestamp > '${chEsc(lo)}'`, `timestamp <= '${chEsc(hi)}'`, ...where].join(' AND ');
         let evs;
         try {
-          evs = await chQuery(`SELECT principal, database_name, schema_name, table_name, operation, row_count, sql_text, anomaly_score, tags, client_ip
+          evs = await chQuery(`SELECT principal, database_name, schema_name, table_name, operation, row_count, sql_text, anomaly_score, tags, client_ip, source_host
                                FROM ${evDb}.events WHERE ${whereSql} ORDER BY timestamp LIMIT 200`);
         } catch (e) { continue; }
         if (!Array.isArray(evs)) continue;
@@ -9276,7 +9277,7 @@ async function runDetectionEngine() {
             `INSERT INTO alerts (tenant_id, database_id, policy_id, severity, principal, summary, raw_sql, anomaly_score, status,
                                  rule, action, subtype, object_name, rows_affected, client_ip, sensitivity_tags, why, rule_condition)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id, created_at`,
-            [tenantId, dbByName[ev.database_name] || null, p.id, p.severity, ev.principal, p.name, ev.sql_text, score,
+            [tenantId, dbByName[ev.database_name] || dbByHost[ev.source_host] || null, p.id, p.severity, ev.principal, p.name, ev.sql_text, score,
              p.name, ev.operation, ev.operation, object, rowsTxt, ev.client_ip || '', ev.tags || [], p.description,
              typeof p.rule_definition === 'string' ? p.rule_definition : JSON.stringify(p.rule_definition || {})]
           );
