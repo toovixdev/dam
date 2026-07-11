@@ -2117,3 +2117,17 @@ Made two more default policies fire from real captured SQL, and turned off-hours
   window → 27 matches (backtest).
 - Caveat: `principal_user_type: 'dba'` is still benign-ignorable (matches any principal) — true
   privileged-user detection is a later enhancement, so the rule is effectively "sensitive access off-hours".
+
+## 63. DDL change control — configurable change/maintenance window
+
+Mirror of off-hours but inverted: a **change window** is the *approved* window for schema changes, and
+DDL **outside** it is the violation.
+- Implemented `outside_change_window` in `policyToClickhouse` (shared `outsideWindowClause()` helper,
+  timezone-aware). `tenants.change_window` JSONB + `GET/PUT /api/settings/change-window`. Per-policy
+  `change_window` overrides. Default window: weekend 00:00–06:00 UTC.
+- Settings uses a reusable `WindowCard` — now renders both **Business hours** and **DDL change window**.
+- The agent already tags CREATE/ALTER/DROP as `DDL`, so no agent change. Verified: `CREATE TABLE …` at
+  Sat 13:00 (outside the weekend early-morning window; denied to dam_svc but captured on the wire) →
+  **high alert "DDL change control"**.
+- Caveat: the policy's "…with no linked change ticket" clause isn't implemented (no change/ITSM ticket
+  integration yet) — currently it's purely "DDL outside the approved window".
