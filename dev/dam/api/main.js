@@ -6521,10 +6521,23 @@ function mysqlCmdToOp(cmd) {
   return 'OTHER';
 }
 // A Cloud Logging LogEntry (with a MysqlAuditEntry) → a DAM event row.
+const SYS_SCHEMAS = new Set(['mysql', 'performance_schema', 'information_schema', 'sys']);
+// Cloud SQL emits constant internal traffic (replication heartbeat, @@version / SELECT 1
+// health probes, perf/metadata polls) under its maintenance users. That is not customer
+// activity — drop it so the Audit Trail and detection see real queries only.
+function isSystemNoise(principal, schema, sql) {
+  const p = String(principal || '').toLowerCase();
+  const u = String(sql || '').trim().toLowerCase();
+  if (u.startsWith('select @@') || /^select\s+1\s*;?$/.test(u) || u.includes('mysql.heartbeat')) return true;
+  if (p.startsWith('cloudsql') || p.startsWith('mysql.')) return true; // internal maintenance users
+  if (p === 'root' && (SYS_SCHEMAS.has(String(schema || '').toLowerCase()) || !schema)) return true;
+  return false;
+}
 function logEntryToEvent(entry) {
   const req = (entry.protoPayload && entry.protoPayload.request) || {};
   if (!req.query) return null; // only statement records
   const obj = (Array.isArray(req.objects) && req.objects[0]) || {};
+  if (isSystemNoise(req.user || req.privUser, obj.db, req.query)) return null; // drop Cloud SQL internal noise
   const instId = (entry.resource && entry.resource.labels && entry.resource.labels.database_id) || '';
   const instName = instId.split(':').pop();
   const ts = req.date || entry.timestamp || new Date().toISOString();
