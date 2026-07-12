@@ -43,6 +43,28 @@ variable "rds" {
   default = {}
 }
 
+# Postgres-on-EC2 database — its own private subnet of the shared VPC. SSM admin.
+variable "pg_vm" {
+  type = object({
+    name           = optional(string, "db-vm-pg")
+    machine_type   = optional(string, "t3.small")
+    db_name        = optional(string, "inventory")
+    private_subnet = optional(string, "10.0.3.0/24")
+  })
+  default = {}
+}
+
+# The RDS (PaaS) Postgres database — private, reuses the shared RDS multi-AZ subnet group.
+variable "rds_pg" {
+  type = object({
+    name           = optional(string, "db-paas-pg")
+    engine_version = optional(string, "16")
+    instance_class = optional(string, "db.t3.micro")
+    db_name        = optional(string, "analytics")
+  })
+  default = {}
+}
+
 variable "deploy_agents" {
   type        = bool
   default     = false

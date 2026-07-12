@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update -y
+apt-get install -y postgresql postgresql-contrib
+
+PG_HBA=$(find /etc/postgresql -name pg_hba.conf | head -1)
+PG_CONF=$(find /etc/postgresql -name postgresql.conf | head -1)
+sed -i "s/^#listen_addresses.*/listen_addresses = '*'/" "$PG_CONF" || true
+echo "host all all 10.0.0.0/16 md5" >> "$PG_HBA"
+systemctl enable postgresql
+systemctl restart postgresql
+for i in $(seq 1 30); do sudo -u postgres pg_isready >/dev/null 2>&1 && break; sleep 2; done
+
+sudo -u postgres psql -v ON_ERROR_STOP=0 <<EOSQL
+ALTER USER postgres WITH PASSWORD '${root_password}';
+CREATE DATABASE ${db_name};
+CREATE USER app WITH PASSWORD '${root_password}';
+GRANT ALL PRIVILEGES ON DATABASE ${db_name} TO app;
+CREATE USER dam_svc WITH PASSWORD '${root_password}';
+GRANT pg_read_all_data TO dam_svc;
+EOSQL
+
+%{ if seed_b64 != "" ~}
+echo '${seed_b64}' | base64 --decode > /tmp/seed.sql
+sudo -u postgres psql -d ${db_name} -f /tmp/seed.sql
+%{ endif ~}
+
+%{ if pg_rds_seed_b64 != "" ~}
+# Seed the RDS Postgres 'analytics' DB from this box (retry until reachable).
+echo '${pg_rds_seed_b64}' | base64 --decode > /tmp/analytics.sql
+export PGPASSWORD='${pg_rds_password}'
+for i in $(seq 1 90); do
+  if psql -h '${pg_rds_endpoint}' -U '${pg_rds_user}' -d '${pg_rds_db}' -c "SELECT 1" >/dev/null 2>&1; then
+    psql -h '${pg_rds_endpoint}' -U '${pg_rds_user}' -d '${pg_rds_db}' -f /tmp/analytics.sql && break
+  fi
+  sleep 10
+done
+%{ endif ~}
+
+# ── Install Docker (so the TooVix DAM agent can run as a container) — as on the MySQL hosts ──
+apt-get install -y ca-certificates curl gnupg
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || true
+chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release; echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -y && apt-get install -y docker-ce docker-ce-cli containerd.io || apt-get install -y docker.io
+systemctl enable --now docker

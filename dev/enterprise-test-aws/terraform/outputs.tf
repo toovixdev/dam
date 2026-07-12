@@ -19,6 +19,25 @@ output "rds" {
   }
 }
 
+output "pg_vm" {
+  value = {
+    instance_id = aws_instance.pg_vm.id
+    private_ip  = aws_instance.pg_vm.private_ip
+    db_name     = var.pg_vm.db_name
+    engine      = "PostgreSQL on EC2"
+  }
+}
+
+output "rds_pg" {
+  value = {
+    identifier = aws_db_instance.pg.identifier
+    endpoint   = aws_db_instance.pg.address
+    db_name    = var.rds_pg.db_name
+    admin      = "dbadmin"
+    engine     = "PostgreSQL on RDS"
+  }
+}
+
 output "how_to_connect" {
   value = <<-EOT
     # No SSH keys / no public IPs — connect via SSM Session Manager.
@@ -28,12 +47,19 @@ output "how_to_connect" {
     aws ssm start-session --target ${aws_instance.vm["db-vm-a"].id}
     #   then on the box:  mysql -u root -p    (password below)
 
-    # --- RDS 'billing' (via the seeder EC2) ---
+    # --- Postgres EC2 (db-vm-pg / inventory) — also fronts the Postgres RDS ---
+    aws ssm start-session --target ${aws_instance.pg_vm.id}
+    #   local:            sudo -u postgres psql -d ${var.pg_vm.db_name}
+    #   RDS 'analytics':  psql -h ${aws_db_instance.pg.address} -U dbadmin -d ${var.rds_pg.db_name}
+
+    # --- RDS MySQL 'billing' (via the seeder EC2) ---
     aws ssm start-session --target ${aws_instance.seeder.id}
-    #   then:  mysql -h ${aws_db_instance.paas.address} -u dbadmin -p ${var.rds.db_name}
+    #   MySQL:  mysql -h ${aws_db_instance.paas.address} -u dbadmin -p ${var.rds.db_name}
 
     # Passwords:
     aws secretsmanager get-secret-value --secret-id toovix-db-vm-a-root  --query SecretString --output text
+    aws secretsmanager get-secret-value --secret-id toovix-${var.pg_vm.name}-root --query SecretString --output text
     aws secretsmanager get-secret-value --secret-id toovix-${var.rds.name}-admin --query SecretString --output text
+    aws secretsmanager get-secret-value --secret-id toovix-${var.rds_pg.name}-admin --query SecretString --output text
   EOT
 }
