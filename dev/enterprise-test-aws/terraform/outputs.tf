@@ -3,7 +3,7 @@ output "vm_databases" {
     for k, v in aws_instance.vm : k => {
       instance_id = v.id
       private_ip  = v.private_ip
-      vpc         = aws_vpc.vm[k].id
+      vpc         = aws_vpc.main.id
       db_name     = var.vm_databases[k].db_name
     }
   }
@@ -16,6 +16,18 @@ output "rds" {
     db_name    = var.rds.db_name
     admin      = "dbadmin"
     seeder_id  = aws_instance.seeder.id
+  }
+}
+
+output "mssql" {
+  value = {
+    instance_id = aws_instance.mssql.id
+    private_ip  = aws_instance.mssql.private_ip
+    vpc         = aws_vpc.main.id
+    db_name     = var.mssql.db_name
+    edition     = "SQL Server 2022 Standard (Windows)"
+    sa_login    = "sa"
+    ro_login    = "dam_svc"
   }
 }
 
@@ -32,8 +44,16 @@ output "how_to_connect" {
     aws ssm start-session --target ${aws_instance.seeder.id}
     #   then:  mysql -h ${aws_db_instance.paas.address} -u dbadmin -p ${var.rds.db_name}
 
+    # --- SQL Server on Windows (${var.mssql.name} / ${var.mssql.db_name}) ---
+    # Admin via SSM (shell as SYSTEM), or tunnel 1433 locally then use SSMS/sqlcmd:
+    aws ssm start-session --target ${aws_instance.mssql.id} \
+      --document-name AWS-StartPortForwardingSession \
+      --parameters '{"portNumber":["1433"],"localPortNumber":["1433"]}'
+    #   then:  sqlcmd -S 127.0.0.1,1433 -U sa -P '<sa-password>' -C -d ${var.mssql.db_name}
+
     # Passwords:
     aws secretsmanager get-secret-value --secret-id toovix-db-vm-a-root  --query SecretString --output text
     aws secretsmanager get-secret-value --secret-id toovix-${var.rds.name}-admin --query SecretString --output text
+    aws secretsmanager get-secret-value --secret-id toovix-${var.mssql.name}-sa --query SecretString --output text
   EOT
 }
