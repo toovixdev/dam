@@ -321,16 +321,20 @@ function CloudConnectors({ tenantClouds, cloudLabel, onChanged }) {
       </div>
       <div className="card-body no-pad">
         <table className="data-table">
-          <thead><tr><th>Cloud</th><th>Project / account</th><th>Identity</th><th>Status</th><th>Last run</th><th /></tr></thead>
+          <thead><tr><th>Cloud</th><th>Project / account</th><th>Identity</th><th>Status</th><th>Agentless ingest</th><th>Last run</th><th /></tr></thead>
           <tbody>
-            {connectors.length === 0 && <tr><td colSpan={6} className="chart-empty">No cloud connectors. Add one to enumerate managed databases (Cloud SQL, RDS…) without a network scan.</td></tr>}
+            {connectors.length === 0 && <tr><td colSpan={7} className="chart-empty">No cloud connectors. Add one to enumerate managed databases (Cloud SQL, RDS…) without a network scan.</td></tr>}
             {connectors.map((c) => (
               <tr key={c.id}>
                 <td><b style={{ textTransform: 'uppercase' }}>{c.provider}</b></td>
                 <td className="mono" style={{ fontSize: 12 }}>{c.project || '—'}</td>
                 <td className="mono" style={{ fontSize: 11.5 }}>{c.identity || '—'}</td>
                 <td>{c.status === 'ok' ? <span className="badge green dot">ok</span> : c.status === 'error' ? <span className="badge red dot" title={c.last_result}>error</span> : <span className="badge">configured</span>}</td>
-                <td style={{ fontSize: 12 }} title={c.last_result || ''}>{c.last_run_at ? new Date(c.last_run_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                <td style={{ fontSize: 12 }}>{!c.subscription ? <span className="muted">off</span>
+                  : c.ingest_status === 'ok' ? <span className="badge green dot" title={`${c.subscription}\n${c.last_result || ''}`}>streaming</span>
+                  : c.ingest_status === 'error' ? <span className="badge red dot" title={c.last_result}>error</span>
+                  : <span className="badge" title={c.subscription}>configured</span>}</td>
+                <td style={{ fontSize: 12 }} title={c.last_result || ''}>{c.last_ingest_at || c.last_run_at ? new Date(c.last_ingest_at || c.last_run_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} disabled={busy === c.id} onClick={() => test(c.id)}>Test</button>{' '}
                   <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }} disabled={busy === c.id} onClick={() => remove(c.id)}>Remove</button>
@@ -365,13 +369,14 @@ function AddConnector({ tenantClouds, cloudLabel, onClose, onSaved }) {
   const [project, setProject] = useState('');
   const [credential, setCredential] = useState('');
   const [keyless, setKeyless] = useState(false);
+  const [subscription, setSubscription] = useState('');
   const [busy, setBusy] = useState(false);
 
   const save = async () => {
     if (!keyless && !credential.trim()) return toast('Paste the read-only credential (key JSON) or enable keyless', 'err');
     if (keyless && !project.trim()) return toast('Project id is required for keyless', 'err');
     setBusy(true);
-    const res = await apiPost('/discovery/connectors', { provider, project: project.trim() || undefined, keyless, credential: keyless ? undefined : credential });
+    const res = await apiPost('/discovery/connectors', { provider, project: project.trim() || undefined, keyless, credential: keyless ? undefined : credential, subscription: subscription.trim() || undefined });
     setBusy(false);
     if (res?.ok) { toast('Cloud connector saved', 'ok'); onSaved(); }
     else toast(res?.data?.error || 'Could not save connector', 'err');
@@ -412,6 +417,10 @@ function AddConnector({ tenantClouds, cloudLabel, onClose, onSaved }) {
           <span className="muted" style={{ fontSize: 11 }}>Paste the key file contents. Stored write-only; used read-only against the cloud API.</span>
         </div>
       )}
+      <div className="form-field"><label>Agentless ingestion — Pub/Sub subscription <span className="muted">(optional)</span></label>
+        <input value={subscription} onChange={(e) => setSubscription(e.target.value)} placeholder="toovix-dam-db-audit-sub (or projects/…/subscriptions/…)" />
+        <span className="muted" style={{ fontSize: 11 }}>The subscription the DAM pulls managed-DB audit events from (Cloud Logging → Pub/Sub). Leave blank for discovery-only.</span>
+      </div>
       <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end', gap: 8 }}>
         <button className="btn-secondary" onClick={onClose}>Cancel</button>
         <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save connector'}</button>

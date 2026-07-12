@@ -568,6 +568,10 @@ async function runAuthMigration() {
       created_at    TIMESTAMPTZ DEFAULT now(),
       UNIQUE (tenant_id, provider, project)
     )`);
+    // Pub/Sub subscription the agentless collector pulls DB audit events from (per connector).
+    await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS subscription VARCHAR(300)`);
+    await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS ingest_status VARCHAR(20)`);
+    await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS last_ingest_at TIMESTAMPTZ`);
     // Reachability tracking: when a scan no longer sees a known candidate, we flag
     // it unreachable rather than re-discovering or silently keeping it as "new".
     await client.query(`ALTER TABLE discovery_candidates ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ`);
@@ -6350,12 +6354,12 @@ app.put('/api/settings/cloud-providers', authRequired, async (req, res) => {
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
 // GCP: sign a JWT with the service-account key → exchange for an access token (no SDK).
-async function gcpAccessToken(sa) {
+async function gcpAccessToken(sa, scope = 'https://www.googleapis.com/auth/cloud-platform.read-only') {
   if (!sa || !sa.client_email || !sa.private_key) throw new Error('Invalid service-account key (need client_email + private_key)');
   const now = Math.floor(Date.now() / 1000);
   const header = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const claims = b64url(JSON.stringify({
-    iss: sa.client_email, scope: 'https://www.googleapis.com/auth/cloud-platform.read-only',
+    iss: sa.client_email, scope,
     aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600,
   }));
   const sig = require('crypto').createSign('RSA-SHA256').update(`${header}.${claims}`).sign(sa.private_key);
@@ -6383,12 +6387,17 @@ async function gcpTokenFromMetadata() {
   if (!j.access_token) throw new Error('Keyless (ADC) token failed — the control plane needs a GCP service account with roles/cloudsql.viewer');
   return j.access_token;
 }
-async function gcpEnumerate(connector) {
+// Resolve a GCP token for a connector — keyless (control-plane identity) or SA-key.
+async function gcpTokenFor(connector, scope) {
   const sa = connector.credential || {};
   const useAdc = sa.mode === 'adc' || (!sa.client_email && !sa.private_key);
+  return useAdc ? gcpTokenFromMetadata() : gcpAccessToken(sa, scope);
+}
+async function gcpEnumerate(connector) {
+  const sa = connector.credential || {};
   const project = connector.project || sa.project_id;
   if (!project) throw new Error('No GCP project id');
-  const token = useAdc ? await gcpTokenFromMetadata() : await gcpAccessToken(sa);
+  const token = await gcpTokenFor(connector, 'https://www.googleapis.com/auth/cloud-platform.read-only');
   const resp = await fetch(`https://sqladmin.googleapis.com/v1/projects/${encodeURIComponent(project)}/instances`, { headers: { Authorization: `Bearer ${token}` } });
   const j = await resp.json().catch(() => ({}));
   if (j.error) throw new Error(j.error.message || 'Cloud SQL list failed');
@@ -6447,13 +6456,13 @@ async function runCloudDiscovery(tenantId, providers, jobId) {
 // ── Cloud connectors CRUD (credential is write-only) ──
 app.get('/api/discovery/connectors', authRequired, async (req, res) => {
   const rows = (await pgPool.query(
-    `SELECT id, provider, project, identity, status, last_run_at, last_result, created_at FROM cloud_connectors WHERE tenant_id = $1 ORDER BY created_at DESC`,
+    `SELECT id, provider, project, identity, status, last_run_at, last_result, subscription, ingest_status, last_ingest_at, created_at FROM cloud_connectors WHERE tenant_id = $1 ORDER BY created_at DESC`,
     [req.user.tenantId]
   )).rows;
   res.json(rows);
 });
 app.post('/api/discovery/connectors', authRequired, async (req, res) => {
-  const { provider, project } = req.body || {};
+  const { provider, project, subscription } = req.body || {};
   if (!CLOUD_PROVIDER_IDS.has(provider)) return res.status(400).json({ error: 'Unsupported provider' });
   let cred = req.body.credential;
   if (typeof cred === 'string') { try { cred = JSON.parse(cred); } catch { return res.status(400).json({ error: 'Credential must be valid JSON (the service-account key file)' }); } }
@@ -6463,12 +6472,16 @@ app.post('/api/discovery/connectors', authRequired, async (req, res) => {
   const identity = keyless ? 'control-plane identity (keyless)' : (cred.client_email || cred.clientId || null);
   const proj = project || cred.project_id || null;
   if (!proj) return res.status(400).json({ error: 'Project id is required' });
+  // Normalize a subscription to the full projects/P/subscriptions/S form.
+  let sub = (typeof subscription === 'string' && subscription.trim()) ? subscription.trim() : null;
+  if (sub && !sub.startsWith('projects/')) sub = `projects/${proj}/subscriptions/${sub}`;
   const row = (await pgPool.query(
-    `INSERT INTO cloud_connectors (tenant_id, provider, project, identity, credential, status)
-     VALUES ($1,$2,$3,$4,$5,'configured')
-     ON CONFLICT (tenant_id, provider, project) DO UPDATE SET identity = EXCLUDED.identity, credential = EXCLUDED.credential, status = 'configured'
-     RETURNING id, provider, project, identity, status, created_at`,
-    [req.user.tenantId, provider, proj, identity, JSON.stringify(cred)]
+    `INSERT INTO cloud_connectors (tenant_id, provider, project, identity, credential, subscription, status)
+     VALUES ($1,$2,$3,$4,$5,$6,'configured')
+     ON CONFLICT (tenant_id, provider, project) DO UPDATE SET identity = EXCLUDED.identity, credential = EXCLUDED.credential,
+       subscription = COALESCE(EXCLUDED.subscription, cloud_connectors.subscription), status = 'configured'
+     RETURNING id, provider, project, identity, subscription, status, created_at`,
+    [req.user.tenantId, provider, proj, identity, JSON.stringify(cred), sub]
   )).rows[0];
   res.status(201).json(row);
 });
@@ -6491,6 +6504,110 @@ app.delete('/api/discovery/connectors/:id', authRequired, async (req, res) => {
   if (!rowCount) return res.status(404).json({ error: 'Connector not found' });
   res.json({ ok: true });
 });
+
+// ── Agentless ingestion: pull DB audit events from a Pub/Sub subscription ──────
+// The audit plugin (Cloud SQL) → Cloud Logging → Log Sink → Pub/Sub. We PULL (outbound,
+// no inbound), decode each LogEntry's MysqlAuditEntry, normalize, and write to events.
+const CMD_OP = {
+  select: 'SELECT', insert: 'INSERT', insert_select: 'INSERT', replace: 'INSERT', replace_select: 'INSERT',
+  update: 'UPDATE', update_multi: 'UPDATE', delete: 'DELETE', delete_multi: 'DELETE', truncate: 'DDL',
+  grant: 'GRANT', revoke: 'GRANT', revoke_all: 'GRANT', connect: 'LOGIN', disconnect: 'LOGIN',
+};
+function mysqlCmdToOp(cmd) {
+  const c = String(cmd || '').toLowerCase();
+  if (CMD_OP[c]) return CMD_OP[c];
+  if (c.startsWith('create') || c.startsWith('drop') || c.startsWith('alter') || c.startsWith('rename')) return 'DDL';
+  if (c.startsWith('show') || c === 'call' || c === 'call_procedure') return 'OTHER';
+  return 'OTHER';
+}
+// A Cloud Logging LogEntry (with a MysqlAuditEntry) → a DAM event row.
+function logEntryToEvent(entry) {
+  const req = (entry.protoPayload && entry.protoPayload.request) || {};
+  if (!req.query) return null; // only statement records
+  const obj = (Array.isArray(req.objects) && req.objects[0]) || {};
+  const instId = (entry.resource && entry.resource.labels && entry.resource.labels.database_id) || '';
+  const instName = instId.split(':').pop();
+  const ts = req.date || entry.timestamp || new Date().toISOString();
+  return {
+    database_name: obj.db || instName || '',
+    timestamp: new Date(ts).toISOString().slice(0, 19).replace('T', ' '),
+    principal: req.user || req.privUser || 'unknown',
+    client_ip: req.ip || req.host || '',
+    operation: mysqlCmdToOp(req.cmd),
+    schema_name: obj.db || '',
+    table_name: obj.name || '',
+    columns_accessed: [],
+    row_count: 0,
+    sql_text: String(req.query).slice(0, 500),
+    anomaly_score: 0,
+    tags: detectTagsSql(req.query),
+    agent_type: 'agentless',
+    source_host: instName || instId,
+  };
+}
+// Light PII/PCI tagging from SQL text (mirrors the agent's detectTags) so agentless
+// events feed the same tag-based policies.
+function detectTagsSql(sql) {
+  const u = String(sql || '').toUpperCase(); const t = [];
+  if (u.includes('SSN') || u.includes('SOCIAL_SECURITY')) t.push('ssn');
+  if (u.includes('CARD') || u.includes('PAN_VAULT')) t.push('pci');
+  if (u.includes('AADHAAR')) t.push('aadhaar');
+  if (u.includes('EMAIL') || u.includes('PHONE') || u.includes('ADDRESS') || u.includes('DOB')) t.push('pii');
+  return t;
+}
+
+async function pubSubPullOnce(tenantId, connector) {
+  if (!connector.subscription) return 0;
+  const token = await gcpTokenFor(connector, 'https://www.googleapis.com/auth/pubsub');
+  const base = `https://pubsub.googleapis.com/v1/${connector.subscription}`;
+  const pr = await fetch(`${base}:pull`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ maxMessages: 200 }),
+  });
+  const pj = await pr.json().catch(() => ({}));
+  if (pj.error) throw new Error(pj.error.message || 'pull failed');
+  const msgs = pj.receivedMessages || [];
+  if (!msgs.length) return 0;
+  const ackIds = [], evs = [];
+  for (const m of msgs) {
+    ackIds.push(m.ackId);
+    try {
+      const entry = JSON.parse(Buffer.from(m.message.data, 'base64').toString('utf8'));
+      const ev = logEntryToEvent(entry);
+      if (ev) evs.push(ev);
+    } catch (e) { /* skip malformed */ }
+  }
+  if (evs.length) await chInsertEvents(tenantId, evs);
+  // ack in batches (acknowledge caps the ackIds per call)
+  for (let i = 0; i < ackIds.length; i += 500) {
+    await fetch(`${base}:acknowledge`, {
+      method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ackIds: ackIds.slice(i, i + 500) }),
+    });
+  }
+  return evs.length;
+}
+
+let _pubsubBusy = false;
+async function runPubSubIngest() {
+  if (_pubsubBusy) return; _pubsubBusy = true;
+  try {
+    const conns = (await pgPool.query(`SELECT * FROM cloud_connectors WHERE subscription IS NOT NULL`)).rows;
+    for (const c of conns) {
+      try {
+        let total = 0, n;
+        do { n = await pubSubPullOnce(c.tenant_id, c); total += n; } while (n >= 200); // drain backlog
+        await pgPool.query(`UPDATE cloud_connectors SET ingest_status='ok', last_ingest_at=now(), last_result=$2 WHERE id=$1`,
+          [c.id, total ? `ingested ${total} event(s)` : (c.last_result || 'ok')]);
+      } catch (e) {
+        await pgPool.query(`UPDATE cloud_connectors SET ingest_status='error', last_ingest_at=now(), last_result=$2 WHERE id=$1`,
+          [c.id, e.message.slice(0, 380)]);
+      }
+    }
+  } catch (e) { /* non-fatal */ } finally { _pubsubBusy = false; }
+}
+setInterval(runPubSubIngest, 10000);
+setTimeout(runPubSubIngest, 12000);
 
 // ── DDL Change Log (schema/privilege-change attestation) ──────────────────────
 // Best-effort extraction of the target object from a DDL statement.
