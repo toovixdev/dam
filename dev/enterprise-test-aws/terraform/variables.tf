@@ -51,7 +51,7 @@ variable "mssql" {
     instance_type  = optional(string, "t3.medium") # 2 vCPU / 4 GB — min for Windows + SQL Standard
     db_name        = optional(string, "salesdb")
     private_subnet = optional(string, "10.0.21.0/24")
-    volume_size    = optional(number, 50) # GB, Windows + SQL need headroom
+    volume_size    = optional(number, 80) # GB, must be >= the Windows+SQL AMI snapshot (75 GB)
   })
   default = {}
 }
