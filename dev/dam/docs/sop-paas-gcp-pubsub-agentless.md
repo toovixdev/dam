@@ -12,6 +12,10 @@ audit source + stream service; see Appendix C.)
 
 ## 1. Architecture (detailed) + security touchpoints
 
+![Agentless Cloud SQL → Pub/Sub → DAM architecture](sop-paas-gcp-pubsub-agentless.png)
+
+<sub>(Text version below; editable Word copy: `TooVix-DAM-SOP-Agentless-Cloud-SQL-PubSub.docx`)</sub>
+
 ```
         CUSTOMER LANDING ZONE (their GCP org/project)                 GOOGLE-MANAGED (global,          DAM LANDING ZONE (SaaS org — GCP or AWS/Azure)
                                                                         serverless, VPC-less)
