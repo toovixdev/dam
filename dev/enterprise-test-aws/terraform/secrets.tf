@@ -21,13 +21,3 @@ resource "aws_secretsmanager_secret_version" "rds_admin" {
   secret_id     = aws_secretsmanager_secret.rds_admin.id
   secret_string = random_password.rds_admin.result
 }
-
-resource "aws_secretsmanager_secret" "mssql_admin" {
-  name                    = "toovix-${var.mssql.name}-sa"
-  recovery_window_in_days = 0
-}
-
-resource "aws_secretsmanager_secret_version" "mssql_admin" {
-  secret_id     = aws_secretsmanager_secret.mssql_admin.id
-  secret_string = random_password.mssql_admin.result
-}

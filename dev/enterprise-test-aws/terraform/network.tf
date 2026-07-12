@@ -103,19 +103,6 @@ resource "aws_db_subnet_group" "rds" {
   tags       = { Name = "${var.rds.name}-subnets" }
 }
 
-# ---------- SQL-Server-on-Windows private subnet ----------
-resource "aws_subnet" "mssql_private" {
-  vpc_id            = aws_vpc.main.id
-  cidr_block        = var.mssql.private_subnet
-  availability_zone = data.aws_availability_zones.available.names[0]
-  tags              = { Name = "snet-${var.mssql.name}-private" }
-}
-
-resource "aws_route_table_association" "mssql_private" {
-  subnet_id      = aws_subnet.mssql_private.id
-  route_table_id = aws_route_table.private.id
-}
-
 # ===================== Security groups (per-DB isolation within the shared VPC) =====================
 # Each DB only accepts its port from its OWN subnet, so sharing a VPC doesn't let the DBs reach each other.
 resource "aws_security_group" "vm" {
@@ -172,24 +159,4 @@ resource "aws_security_group" "rds" {
     cidr_blocks = ["0.0.0.0/0"]
   }
   tags = { Name = "sg-${var.rds.name}-rds" }
-}
-
-resource "aws_security_group" "mssql" {
-  name        = "${var.mssql.name}-mssql-sg"
-  description = "SQL Server EC2 - 1433 from its own subnet only"
-  vpc_id      = aws_vpc.main.id
-  ingress {
-    description = "SQL Server from own subnet only"
-    from_port   = 1433
-    to_port     = 1433
-    protocol    = "tcp"
-    cidr_blocks = [var.mssql.private_subnet]
-  }
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  tags = { Name = "sg-${var.mssql.name}" }
 }

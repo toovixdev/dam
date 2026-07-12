@@ -43,19 +43,6 @@ variable "rds" {
   default = {}
 }
 
-# SQL-Server-on-Windows EC2 (License-Included AMI). Private subnet of the shared VPC,
-# SSM admin, seeded T-SQL data, Docker (Windows containers) installed.
-variable "mssql" {
-  type = object({
-    name           = optional(string, "db-win-mssql")
-    instance_type  = optional(string, "t3.xlarge") # 4 vCPU / 16 GB — AWS requires >=4 vCPU for SQL Server AMIs
-    db_name        = optional(string, "salesdb")
-    private_subnet = optional(string, "10.0.21.0/24")
-    volume_size    = optional(number, 80) # GB, must be >= the Windows+SQL AMI snapshot (75 GB)
-  })
-  default = {}
-}
-
 variable "deploy_agents" {
   type        = bool
   default     = false
