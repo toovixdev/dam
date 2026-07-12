@@ -103,11 +103,15 @@ Connect via the bastion (private IP) as the Cloud SQL admin user:
 mysql -h <PRIVATE_IP> -u admin -p
 ```
 ```sql
-CALL mysql.cloudsql_create_audit_rule('`%`@`%`', '`%`', '`%`', 'connect,dql,dml,ddl,dcl', 'B', 1, @rc, @msg);
-SELECT @rc, @msg;   -- 0 / NULL = success
+CALL mysql.cloudsql_create_audit_rule('*', '*', '*', '*', 'B', 1, @rc, @msg);
+SELECT @rc, @msg;                         -- 0 / NULL = success
+CALL mysql.cloudsql_reload_audit_rule(1); -- activate the rule (reload_mode arg is required)
 ```
-Gotchas: **8 arguments**; wildcards **backtick-quoted** (`` `%`@`%` ``, `` `%` ``); `op_result='B'` (both
-success+fail); `ops` are **categories** (`connect,dql,dml,ddl,dcl`), not `all`. Verify: `SELECT * FROM mysql.audit_log_rules;`
+Params: `(user, db, object, ops, op_result, reload_mode, @out, @out)`. **⚠ The wildcard is `*` (asterisk),
+NOT `%`** — `%` only works for the *host* part of `user@host`. A rule written with `` `%` `` matches objects
+*literally named* "%", so **no user queries are ever audited** (only Cloud SQL's always-on audit-config events
+appear). `op_result='B'` = success+fail; `ops='*'` = all operations. Verify (dbname/object must show `*`):
+`SELECT * FROM mysql.audit_log_rules;`  ·  Delete a rule by id: `CALL mysql.cloudsql_delete_audit_rule('5',1,@rc,@msg);`
 
 ### A3. Enable Data Access audit logs (⚠ REQUIRED for user-data queries)
 Without this, only admin/system queries are logged; **reads/writes on user tables won't appear**.
@@ -211,9 +215,11 @@ In the DAM UI: **Discovery → Cloud connectors → Connect a cloud**:
 |---|---|---|
 | `on was not an expected string` (flag) | Flag value must be **uppercase** | Use `cloudsql_mysql_audit=ON` |
 | `zsh: unknown file attribute: *` | Ran the `CALL` in the **shell** | Run it **inside `mysql>`** |
-| `expected 8, got 6` / `op_result should be 'S'/'U'/'B'/'E'` / `Special characters only between backticks` / `operation "all" not supported` | Wrong `create_audit_rule` args | 8 args; `op_result='B'`; backtick wildcards; ops = `connect,dql,dml,ddl,dcl` |
+| `op_result should be 'S'/'U'/'B'/'E'` / bad `create_audit_rule` args | Wrong args | 8 args; `op_result='B'`; ops=`*`; `reload_mode`=1 |
 | Pull error: *Pub/Sub API not enabled* | API just enabled | `gcloud services enable pubsub.googleapis.com`; wait a few min (loop retries) |
-| **System queries flow, but user-table queries don't** | **Data Access audit logs OFF** (`auditConfigs` null) | Do **A3**; wait for propagation (~10 min) |
+| **Only `mysql`-schema / audit-config ops audited; NO user-table events (`billing.*` etc.)** | **Wrong wildcard in the rule** — used `%` instead of `*`; `%` matches nothing for db/object | Recreate the rule with `*`: `CALL mysql.cloudsql_create_audit_rule('*','*','*','*','B',1,@rc,@msg);` then `cloudsql_reload_audit_rule(1)`. (The `mysql`-schema entries you see are Cloud SQL's always-on audit-config logging, not your rule.) |
+| **System queries flow, but user-table queries don't** | **Data Access audit logs OFF** (`auditConfigs` null) | Do **A3**; wait for propagation (~10 min); restart instance if still stalled |
+| **Audit Trail flooded with `root` heartbeat / `@@version` / `performance_schema` noise** | `*` rule audits Cloud SQL internal traffic too | Scope the rule's db to user DBs (e.g. `'billing'`), and/or filter system-user/system-schema events on ingest |
 | Records lag / appear in bursts | Audit buffer flush period | Set `cloudsql_mysql_audit_log_write_period=1` (A1) |
 | Access denied connecting as admin | Cloud SQL admin user is `admin` (not `root`); secret mismatch | `gcloud sql users set-password admin --host=% --instance=$INSTANCE --password=…` |
 
