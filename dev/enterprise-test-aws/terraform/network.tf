@@ -125,7 +125,7 @@ resource "aws_security_group" "vm" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    description = "MySQL from this DB's own subnet"
+    description = "MySQL from own subnet only"
     from_port   = 3306
     to_port     = 3306
     protocol    = "tcp"
@@ -179,7 +179,7 @@ resource "aws_security_group" "mssql" {
   description = "SQL Server EC2 - 1433 from its own subnet only"
   vpc_id      = aws_vpc.main.id
   ingress {
-    description = "SQL Server from this DB's own subnet"
+    description = "SQL Server from own subnet only"
     from_port   = 1433
     to_port     = 1433
     protocol    = "tcp"
