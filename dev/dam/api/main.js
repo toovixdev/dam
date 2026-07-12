@@ -989,6 +989,8 @@ async function runAuthMigration() {
     // Customer-configurable business hours (off-hours detection) + DDL change window.
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS business_hours JSONB`);
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS change_window JSONB`);
+    // Customer-configurable financial assumptions behind the Dashboard ROI cards.
+    await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS financial_assumptions JSONB`);
     // Which cloud(s) the tenant runs in — drives which cloud-discovery adapter(s) to invoke.
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cloud_providers JSONB`);
 
@@ -6313,6 +6315,25 @@ async function changeWindowFor(tenantId) {
     return normalizeWindow(r && r.change_window, DEFAULT_CHANGE_WINDOW);
   } catch { return { ...DEFAULT_CHANGE_WINDOW }; }
 }
+
+// Configurable assumptions behind the Dashboard's ROI estimate cards. Defaults are the
+// prior hardcoded industry figures; a tenant can override them so the numbers are THEIRS.
+const DEFAULT_FINANCIAL_ASSUMPTIONS = { breach_cost_per_db: 22000, fine_per_framework: 400000, siem_cost_per_event: 0.00033 };
+function normalizeFinancialAssumptions(raw) {
+  const b = (raw && typeof raw === 'object') ? raw : {};
+  const num = (v, d) => (typeof v === 'number' && isFinite(v) && v >= 0) ? v : d;
+  return {
+    breach_cost_per_db: num(b.breach_cost_per_db, DEFAULT_FINANCIAL_ASSUMPTIONS.breach_cost_per_db),
+    fine_per_framework: num(b.fine_per_framework, DEFAULT_FINANCIAL_ASSUMPTIONS.fine_per_framework),
+    siem_cost_per_event: num(b.siem_cost_per_event, DEFAULT_FINANCIAL_ASSUMPTIONS.siem_cost_per_event),
+  };
+}
+async function financialAssumptionsFor(tenantId) {
+  try {
+    const r = (await pgPool.query('SELECT financial_assumptions FROM tenants WHERE id = $1', [tenantId])).rows[0];
+    return normalizeFinancialAssumptions(r && r.financial_assumptions);
+  } catch { return { ...DEFAULT_FINANCIAL_ASSUMPTIONS }; }
+}
 // ClickHouse predicate: the event timestamp is OUTSIDE the given window (in its timezone).
 function outsideWindowClause(win) {
   const tz = VALID_TIMEZONES.has(win.timezone) ? win.timezone : 'UTC';
@@ -6340,6 +6361,15 @@ app.put('/api/settings/change-window', authRequired, async (req, res) => {
   if (cw.end <= cw.start) return res.status(400).json({ error: 'End hour must be after start hour' });
   await pgPool.query('UPDATE tenants SET change_window = $2 WHERE id = $1', [req.user.tenantId, JSON.stringify(cw)]);
   res.json(cw);
+});
+// Financial assumptions behind the Dashboard ROI cards (breach cost / fine / SIEM $-per-event).
+app.get('/api/settings/financial-assumptions', authRequired, async (req, res) => {
+  res.json({ ...(await financialAssumptionsFor(req.user.tenantId)), defaults: DEFAULT_FINANCIAL_ASSUMPTIONS });
+});
+app.put('/api/settings/financial-assumptions', authRequired, async (req, res) => {
+  const fa = normalizeFinancialAssumptions(req.body);
+  await pgPool.query('UPDATE tenants SET financial_assumptions = $2 WHERE id = $1', [req.user.tenantId, JSON.stringify(fa)]);
+  res.json(fa);
 });
 
 // ── Cloud environment (which cloud discovery adapters to run) ──────────────────
@@ -8756,7 +8786,7 @@ async function computeFleetRisk(pgPool, T) {
 app.get('/api/dashboard/kpis', authRequired, async (req, res) => {
   const T = req.user.tenantId;
   try {
-    const dbs = await pgPool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id)) as monitored FROM databases d WHERE d.tenant_id = $1`, [T]);
+    const dbs = await pgPool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE ${MONITORED_SQL}) as monitored FROM databases d WHERE d.tenant_id = $1`, [T]);
     const alerts = await pgPool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE severity = 'critical') as critical, COUNT(*) FILTER (WHERE severity = 'high') as high FROM alerts WHERE status = 'open' AND tenant_id = $1`, [T]);
     const users = await pgPool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'active') as active FROM users WHERE tenant_id = $1`, [T]);
     const agents = await pgPool.query(`SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE status = 'online') as online FROM agents WHERE tenant_id = $1`, [T]);
@@ -8773,8 +8803,12 @@ app.get('/api/dashboard/kpis', authRequired, async (req, res) => {
 
     const dbRow = dbs.rows[0];
     const alRow = alerts.rows[0];
+    const monitoredDbs = parseInt(dbRow.monitored);
+    // REAL platform cost = the actual invoice basis: base fee + monitored DBs × rate card.
+    const monthlyPlatformCost = BILLING_PLAN.baseFee + monitoredDbs * BILLING_RATES.perDatabase;
+    const financialAssumptions = await financialAssumptionsFor(T); // configurable ROI coefficients
     res.json({
-      databases: { total: parseInt(dbRow.total), monitored: parseInt(dbRow.monitored) },
+      databases: { total: parseInt(dbRow.total), monitored: monitoredDbs },
       alerts: { total: parseInt(alRow.total), critical: parseInt(alRow.critical), high: parseInt(alRow.high) },
       users: { total: parseInt(users.rows[0].total), active: parseInt(users.rows[0].active) },
       agents: { total: parseInt(agents.rows[0].total), online: parseInt(agents.rows[0].online) },
@@ -8783,6 +8817,8 @@ app.get('/api/dashboard/kpis', authRequired, async (req, res) => {
       quarantined,
       fleetRisk: fleetRisk.score,
       fleetRiskFactors: fleetRisk.factors,
+      monthlyPlatformCost,
+      financialAssumptions,
     });
   } catch(err) {
     res.status(500).json({ error: err.message });

@@ -140,6 +140,7 @@ export default function Settings() {
           desc={<>Schema changes (<b>DDL</b>) <b>outside</b> this approved window are flagged by <b>“DDL change control.”</b> Set the window and days your team is allowed to make changes.</>}
         />
         <CloudProviders />
+        <FinancialAssumptions />
         </>
       )}
 
@@ -312,6 +313,71 @@ function CloudProviders() {
         </div>
         <div style={{ display: 'flex', gap: 8, paddingTop: 12, marginTop: 12, borderTop: '1px solid var(--line)' }}>
           <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save cloud environment'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Financial assumptions — the configurable coefficients behind the Dashboard ROI cards ──
+function FinancialAssumptions() {
+  const { data, refetch } = useApiData('/settings/financial-assumptions', { poll: 0 });
+  const [breach, setBreach] = useState('');
+  const [fine, setFine] = useState('');
+  const [siem, setSiem] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (data) {
+      setBreach(data.breach_cost_per_db ?? '');
+      setFine(data.fine_per_framework ?? '');
+      setSiem(data.siem_cost_per_event ?? '');
+    }
+  }, [data]);
+
+  const save = async () => {
+    setBusy(true);
+    const res = await apiPut('/settings/financial-assumptions', {
+      breach_cost_per_db: Number(breach),
+      fine_per_framework: Number(fine),
+      siem_cost_per_event: Number(siem),
+    });
+    setBusy(false);
+    if (res?.ok) { toast('Financial assumptions saved', 'ok'); refetch(); }
+    else toast(res?.data?.error || 'Could not save', 'err');
+  };
+
+  const inputStyle = { width: 220, padding: '7px 10px', border: '1px solid var(--line)', borderRadius: 6, background: 'var(--bg)', color: 'var(--ink)', fontSize: 13 };
+
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="card-header">
+        <span className="card-title">Financial assumptions</span>
+        <span className="card-sub">the coefficients behind the Dashboard ROI cards</span>
+      </div>
+      <div className="card-body">
+        <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>
+          The Dashboard’s <b>Breach Exposure</b>, <b>Compliance Fines Risk</b> and <b>SIEM Cost Saved</b> cards
+          are <b>estimates</b> — live data × these per-unit assumptions. Set them to your organisation’s own
+          figures. (<b>Monthly Platform Cost</b> is your actual billed amount, not an assumption.)
+        </p>
+        <label style={{ display: 'block', marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 2 }}>Breach cost per database ($)</div>
+          <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>assumed loss if a database is breached</div>
+          <input type="number" min="0" step="1000" value={breach} onChange={(e) => setBreach(e.target.value)} style={inputStyle} />
+        </label>
+        <label style={{ display: 'block', marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 2 }}>Compliance fine per framework ($)</div>
+          <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>assumed fine per framework scoring below 90%</div>
+          <input type="number" min="0" step="10000" value={fine} onChange={(e) => setFine(e.target.value)} style={inputStyle} />
+        </label>
+        <label style={{ display: 'block', marginBottom: 12 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 2 }}>SIEM cost per event ($)</div>
+          <div className="muted" style={{ fontSize: 11.5, marginBottom: 6 }}>assumed SIEM ingestion cost avoided per filtered event</div>
+          <input type="number" min="0" step="0.0001" value={siem} onChange={(e) => setSiem(e.target.value)} style={inputStyle} />
+        </label>
+        <div style={{ display: 'flex', gap: 8, paddingTop: 12, marginTop: 12, borderTop: '1px solid var(--line)' }}>
+          <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save assumptions'}</button>
         </div>
       </div>
     </div>

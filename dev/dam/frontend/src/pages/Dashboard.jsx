@@ -192,28 +192,28 @@ export default function Dashboard() {
           <KpiCard
             icon="⚡" iconBg="var(--danger-soft)" iconColor="var(--danger)"
             label="Breach Exposure"
-            value={formatCurrency((kpis?.databases?.total ?? 1) * 22000 * (fleetRisk / 100 + 0.5))}
-            detail="estimated if top-risk DB breached"
+            value={formatCurrency((kpis?.databases?.total ?? 1) * (kpis?.financialAssumptions?.breach_cost_per_db ?? 22000) * (fleetRisk / 100 + 0.5))}
+            detail="estimated · configurable in Settings"
             detailType="down"
           />
           <KpiCard
             icon="⚖" iconBg="var(--amber-soft)" iconColor="var(--amber)"
             label="Compliance Fines Risk"
-            value={formatCurrency(compliance.filter(c => c.score < 90).length * 400000)}
-            detail={`${compliance.filter(c => c.score < 90).length} frameworks below 90%`}
+            value={formatCurrency(compliance.filter(c => c.score < 90).length * (kpis?.financialAssumptions?.fine_per_framework ?? 400000))}
+            detail={`${compliance.filter(c => c.score < 90).length} frameworks below 90% · estimated`}
           />
           <KpiCard
             icon="⊘" iconBg="var(--green-soft)" iconColor="var(--green)"
             label="SIEM Cost Saved"
-            value={formatCurrency(Math.round((kpis?.eventsToday ?? 0) * 0.00033))}
-            detail="filtered low-value events"
+            value={formatCurrency(Math.round((kpis?.eventsToday ?? 0) * (kpis?.financialAssumptions?.siem_cost_per_event ?? 0.00033)))}
+            detail="filtered low-value events · estimated"
             detailType="up"
           />
           <KpiCard
             icon="◈" iconBg="var(--info-soft)" iconColor="var(--info)"
             label="Monthly Platform Cost"
-            value={formatCurrency((kpis?.databases?.total ?? 0) * 100 + (kpis?.agents?.total ?? 0) * 50)}
-            detail={`${kpis?.databases?.total ?? 0} DBs · ${kpis?.agents?.total ?? 0} agents`}
+            value={formatCurrency(kpis?.monthlyPlatformCost ?? 0)}
+            detail={`base + ${kpis?.databases?.monitored ?? 0} monitored DBs · billed`}
           />
         </section>
 
