@@ -2939,7 +2939,7 @@ app.get('/api/admin/tenants/:id/health', async (req, res) => {
       pgPool.query(`SELECT
           (SELECT COUNT(*) FROM databases d WHERE d.tenant_id = $1) AS total,
           (SELECT COUNT(*) FROM databases d WHERE d.tenant_id = $1
-             AND EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id)) AS monitored`, [id]),
+             AND ${MONITORED_SQL}) AS monitored`, [id]),
       pgPool.query(`SELECT COUNT(*) AS total,
           COUNT(*) FILTER (WHERE status = 'open') AS open,
           COUNT(*) FILTER (WHERE status <> 'open') AS handled,
@@ -3943,22 +3943,39 @@ app.post('/api/admin/approvals/:id/decision', async (req, res) => {
 // ── Databases ─────────────────────────────────────────────
 const DEP_LABEL = { onprem: 'On-prem', iaas: 'IaaS', rds: 'RDS', azuresql: 'Azure DB', cloudsql: 'Cloud SQL', atlas: 'Atlas', oci: 'OCI', saas: 'SaaS' };
 const PAAS_DEPLOYMENTS = ['rds', 'azuresql', 'cloudsql', 'atlas', 'oci'];
-const CAPTURE_LABEL = { host_ebpf: 'Host (eBPF)', network: 'Network', inline_proxy: 'Inline Proxy', audit_pull: 'Audit Pull', cloud_push: 'Cloud Push' };
+const CAPTURE_LABEL = { host_ebpf: 'Host (eBPF)', network: 'Network', inline_proxy: 'Inline Proxy', audit_pull: 'Audit Pull', cloud_push: 'Cloud Push', agentless: 'Agentless' };
+// Cloud-agnostic "is this database monitored?" (for SQL queries where databases is aliased `d`):
+// an enrolled agent on its instance, OR an active agentless cloud connector (Pub/Sub / Kinesis /
+// Event Hub) for the same tenant + cloud provider.
+const MONITORED_SQL = `(EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id) OR EXISTS (SELECT 1 FROM cloud_connectors cc JOIN db_instances di ON di.id = d.instance_id WHERE cc.tenant_id = d.tenant_id AND cc.provider = di.cloud_provider AND cc.ingest_status = 'ok' AND cc.last_ingest_at > now() - INTERVAL '15 minutes'))`;
 // Agents attach to the **instance** (a host:port server), so they cover every database/schema
-// on it. Coverage/status is derived from the agents on a database's instance_id.
-const EMPTY_INST = { types: new Set(), online: 0, total: 0, databaseCount: 0 };
+// on it. Coverage/status is derived from the agents on a database's instance_id — OR, for
+// managed/PaaS DBs, from an active agentless cloud connector (Pub/Sub, Kinesis, Event Hub).
+const EMPTY_INST = { types: new Set(), online: 0, total: 0, databaseCount: 0, agentless: false };
 
 async function loadInstanceAgents() {
   const agentRows = await pgPool.query(`SELECT instance_id, agent_type, status FROM agents WHERE instance_id IS NOT NULL`);
   const dbRows = await pgPool.query(`SELECT instance_id FROM databases WHERE instance_id IS NOT NULL`);
+  // Agentless coverage is CLOUD-AGNOSTIC: any active cloud connector (gcp Pub/Sub, aws Kinesis,
+  // azure Event Hub) marks its cloud's instances as monitored. Match on (tenant, cloud provider).
+  const connRows = await pgPool.query(`SELECT DISTINCT tenant_id, provider FROM cloud_connectors WHERE ingest_status = 'ok' AND last_ingest_at > now() - INTERVAL '15 minutes'`);
+  const activeCloud = new Set(connRows.rows.map((c) => `${c.tenant_id}:${c.provider}`));
+  const instRows = await pgPool.query(`SELECT id, tenant_id, cloud_provider FROM db_instances`);
   const byInstance = {};
-  const get = (id) => byInstance[id] || (byInstance[id] = { types: new Set(), online: 0, total: 0, databaseCount: 0 });
+  const get = (id) => byInstance[id] || (byInstance[id] = { types: new Set(), online: 0, total: 0, databaseCount: 0, agentless: false });
   dbRows.rows.forEach((d) => { get(d.instance_id).databaseCount += 1; });
   agentRows.rows.forEach((a) => {
     const inst = get(a.instance_id);
     if (a.agent_type) inst.types.add(a.agent_type);
     inst.total += 1;
     if (a.status === 'online') inst.online += 1;
+  });
+  instRows.rows.forEach((i) => {
+    if (i.cloud_provider && activeCloud.has(`${i.tenant_id}:${i.cloud_provider}`)) {
+      const inst = get(i.id);
+      inst.agentless = true;
+      inst.types.add('agentless');
+    }
   });
   return byInstance;
 }
@@ -3967,7 +3984,8 @@ function coverageFromInstance(inst) {
   const agentTypes = [...inst.types];
   const total = inst.total;
   const online = inst.online;
-  const status = total === 0 ? 'unmonitored' : online < total ? 'degraded' : 'active';
+  const monitored = total > 0 || inst.agentless;
+  const status = !monitored ? 'unmonitored' : (total > 0 && online < total) ? 'degraded' : 'active';
   return {
     status,
     agents: { total, online },
@@ -3976,7 +3994,7 @@ function coverageFromInstance(inst) {
       net: agentTypes.includes('network') || agentTypes.includes('inline_proxy'),
       host: agentTypes.includes('host_ebpf'),
       pull: agentTypes.includes('audit_pull'),
-      push: agentTypes.includes('cloud_push'),
+      push: agentTypes.includes('cloud_push') || inst.agentless,
     },
   };
 }
@@ -8781,11 +8799,11 @@ app.get('/api/dashboard/risky-databases', authRequired, async (req, res) => {
   // widget is always consistent with its own open-alert counts — no 60s staleness window.
   const { rows } = await pgPool.query(
     `SELECT d.id, d.name, d.engine, d.version, d.region,
-       CASE WHEN EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id) THEN 'monitored' ELSE 'not_monitored' END AS monitoring_status,
+       CASE WHEN ${MONITORED_SQL} THEN 'monitored' ELSE 'not_monitored' END AS monitoring_status,
        COALESCE(al.open_alerts, 0) AS open_alerts,
        LEAST(100,
          LEAST(55, COALESCE(al.crit,0)*8 + COALESCE(al.high,0)*3 + COALESCE(al.med,0)*1)
-         + CASE WHEN NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id) THEN 20 ELSE 0 END
+         + CASE WHEN NOT ${MONITORED_SQL} THEN 20 ELSE 0 END
          + CASE WHEN COALESCE(array_length(d.sensitivity_tags,1),0) > 0 THEN 15 ELSE 0 END
          + CASE WHEN EXISTS (SELECT 1 FROM classified_columns c WHERE c.database_id = d.id AND c.sensitivity IN ('high','critical')) THEN 10 ELSE 0 END
        )::int AS risk_score
@@ -9433,7 +9451,7 @@ async function recomputeDbRisk() {
         SELECT d.id,
           LEAST(100,
             LEAST(55, COALESCE(al.crit,0)*8 + COALESCE(al.high,0)*3 + COALESCE(al.med,0)*1)
-            + CASE WHEN NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id) THEN 20 ELSE 0 END
+            + CASE WHEN NOT ${MONITORED_SQL} THEN 20 ELSE 0 END
             + CASE WHEN COALESCE(array_length(d.sensitivity_tags,1),0) > 0 THEN 15 ELSE 0 END
             + CASE WHEN EXISTS (SELECT 1 FROM classified_columns c WHERE c.database_id = d.id AND c.sensitivity IN ('high','critical')) THEN 10 ELSE 0 END
           )::int AS score
