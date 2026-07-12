@@ -9363,8 +9363,8 @@ async function runDetectionEngine() {
   try {
     const tenants = (await pgPool.query('SELECT id FROM tenants')).rows;
     if (!tenants.length) return;
-    const hi = (await chQuery(`SELECT toString(now() - INTERVAL 5 SECOND)`, 'TabSeparated')).trim(); // 5s safety lag
-    if (!detectionWatermark) detectionWatermark = (await chQuery(`SELECT toString(now() - INTERVAL 2 MINUTE)`, 'TabSeparated')).trim();
+    const hi = (await chQuery(`SELECT toString(now() - INTERVAL 90 SECOND)`, 'TabSeparated')).trim(); // 90s safety lag — agentless events arrive via Pub/Sub with delay; a small lag misses them
+    if (!detectionWatermark) detectionWatermark = (await chQuery(`SELECT toString(now() - INTERVAL 12 MINUTE)`, 'TabSeparated')).trim();
     const lo = detectionWatermark;
     if (!hi || hi <= lo) return;
 
