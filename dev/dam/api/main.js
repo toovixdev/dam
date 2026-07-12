@@ -9297,6 +9297,7 @@ const sevBaseScore = (s) => (s === 'critical' ? 60 : s === 'high' ? 45 : s === '
 
 setInterval(async () => {
   try {
+    if (process.env.ENABLE_TRAFFIC_SIM !== 'true') return; // demo traffic simulator — OFF by default (was injecting synthetic 'detection-sim' events)
     const tenantId = (await pgPool.query('SELECT id FROM tenants LIMIT 1')).rows[0].id;
     // Generate a realistic, enriched event that matches one ENABLED rule, so the
     // detection engine has live traffic to evaluate (it doesn't create the alert).
