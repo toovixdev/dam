@@ -26,6 +26,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	_ "github.com/lib/pq"
 )
 
 type Config struct {
@@ -50,6 +51,7 @@ type Config struct {
 	Classify     bool
 	DBUser       string
 	DBPass       string
+	DBName       string // postgres: the database to classify (information_schema is per-DB in PG)
 	ClassifyMins int
 }
 
@@ -81,6 +83,7 @@ func loadConfig() Config {
 		Classify:  env("CLASSIFY", "false") == "true",
 		DBUser:    env("DB_USER", ""),
 		DBPass:    env("DB_PASSWORD", ""),
+		DBName:    env("DB_NAME", ""),
 		ClassifyMins: atoiDefault(env("CLASSIFY_INTERVAL_MIN", "30"), 30),
 	}
 	if c.TargetDB == "" {
@@ -106,11 +109,12 @@ func main() {
 	go heartbeatLoop(cfg, agentID)
 
 	// Classification runs alongside ANY capture mode (it just needs a DB read login).
-	if cfg.Classify && cfg.DBUser != "" && cfg.Engine == "mysql" {
+	classifiable := cfg.Engine == "mysql" || cfg.Engine == "postgresql"
+	if cfg.Classify && cfg.DBUser != "" && classifiable {
 		go classifyLoop(cfg)     // periodic (CLASSIFY_INTERVAL_MIN)
 		go scanTriggerLoop(cfg)  // on-demand — the "Run Scan" button
 	} else if cfg.Classify {
-		log.Printf("classification enabled but skipped (need DB_USER and engine=mysql in this build)")
+		log.Printf("classification enabled but skipped (need DB_USER and engine mysql|postgresql; postgres also needs DB_NAME)")
 	}
 
 	switch cfg.Mode {
@@ -638,17 +642,32 @@ func classifyLoop(cfg Config) {
 }
 
 func runClassificationScan(cfg Config) error {
+	// Same classification for both engines; only the driver/DSN and the system-schema
+	// exclusion differ. Postgres' information_schema is per-database, so it needs DB_NAME.
+	driver := "mysql"
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/information_schema?timeout=8s&readTimeout=20s&allowNativePasswords=true", cfg.DBUser, cfg.DBPass, cfg.TargetHost, cfg.TargetPort)
-	db, err := sql.Open("mysql", dsn)
+	scanQuery := `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
+		WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
+		ORDER BY table_schema, table_name, ordinal_position`
+	if cfg.Engine == "postgresql" {
+		if cfg.DBName == "" {
+			return fmt.Errorf("postgres classification needs DB_NAME (the database to scan)")
+		}
+		driver = "postgres"
+		dsn = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=8",
+			cfg.TargetHost, cfg.TargetPort, cfg.DBUser, cfg.DBPass, cfg.DBName)
+		scanQuery = `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
+			WHERE table_schema NOT IN ('pg_catalog','information_schema')
+			ORDER BY table_schema, table_name, ordinal_position`
+	}
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 	db.SetConnMaxLifetime(30 * time.Second)
 
-	rows, err := db.Query(`SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
-		WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
-		ORDER BY table_schema, table_name, ordinal_position`)
+	rows, err := db.Query(scanQuery)
 	if err != nil {
 		return err
 	}
