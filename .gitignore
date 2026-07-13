@@ -2,6 +2,7 @@
 ~$*
 .claude/
 .gstack/
+.vscode/
 
 # Environment secrets — never commit real .env files. Templates (*.example) are allowed.
 .env
