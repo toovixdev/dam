@@ -334,8 +334,8 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
               </div>
               {classifyNeedsDbName && (
                 <div className="form-field" style={{ flex: 1, minWidth: 160, margin: 0 }}>
-                  <label>Database to scan</label>
-                  <input value={dbName} onChange={(e) => { setDbName(e.target.value); setInstructions(null); }} placeholder="e.g. inventory" />
+                  <label>Database(s) to scan</label>
+                  <input value={dbName} onChange={(e) => { setDbName(e.target.value); setInstructions(null); }} placeholder="inventory  ·  inventory,billing  ·  * (all)" />
                 </div>
               )}
             </div>

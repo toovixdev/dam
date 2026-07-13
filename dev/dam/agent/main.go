@@ -641,64 +641,140 @@ func classifyLoop(cfg Config) {
 	}
 }
 
-func runClassificationScan(cfg Config) error {
-	// Same classification for both engines; only the driver/DSN and the system-schema
-	// exclusion differ. Postgres' information_schema is per-database, so it needs DB_NAME.
-	driver := "mysql"
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/information_schema?timeout=8s&readTimeout=20s&allowNativePasswords=true", cfg.DBUser, cfg.DBPass, cfg.TargetHost, cfg.TargetPort)
-	scanQuery := `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
-		WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
-		ORDER BY table_schema, table_name, ordinal_position`
-	if cfg.Engine == "postgresql" {
-		if cfg.DBName == "" {
-			return fmt.Errorf("postgres classification needs DB_NAME (the database to scan)")
+type scanTarget struct {
+	driver  string
+	dsn     string
+	query   string
+	dbLabel string // "" → MySQL (schema IS the database); else the PostgreSQL database name
+}
+
+// pgDSN builds a lib/pq DSN for one Postgres database. sslmode=disable keeps the scan in
+// cleartext (so the sniffer sees it too); scram auth still works over a non-TLS socket.
+func pgDSN(cfg Config, dbname string) string {
+	return fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=8",
+		cfg.TargetHost, cfg.TargetPort, cfg.DBUser, cfg.DBPass, dbname)
+}
+
+// resolvePGDatabases turns DB_NAME into the Postgres databases to scan:
+//   "inventory"          → [inventory]
+//   "inventory,billing"  → [inventory, billing]
+//   "" or "*"            → auto-discover every non-template, connectable database
+func resolvePGDatabases(cfg Config) ([]string, error) {
+	auto := strings.TrimSpace(cfg.DBName) == ""
+	var explicit []string
+	for _, p := range strings.Split(cfg.DBName, ",") {
+		if p = strings.TrimSpace(p); p == "*" {
+			auto = true
+		} else if p != "" {
+			explicit = append(explicit, p)
 		}
-		driver = "postgres"
-		dsn = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=8",
-			cfg.TargetHost, cfg.TargetPort, cfg.DBUser, cfg.DBPass, cfg.DBName)
-		scanQuery = `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
-			WHERE table_schema NOT IN ('pg_catalog','information_schema')
-			ORDER BY table_schema, table_name, ordinal_position`
 	}
-	db, err := sql.Open(driver, dsn)
+	if !auto {
+		return explicit, nil
+	}
+	boot := "postgres" // a database to connect to just for the discovery query
+	if len(explicit) > 0 {
+		boot = explicit[0]
+	}
+	db, err := sql.Open("postgres", pgDSN(cfg, boot))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer db.Close()
-	db.SetConnMaxLifetime(30 * time.Second)
+	rows, err := db.Query(`SELECT datname FROM pg_database WHERE datistemplate = false AND datallowconn = true ORDER BY datname`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			out = append(out, n)
+		}
+	}
+	return out, nil
+}
 
-	rows, err := db.Query(scanQuery)
+// scanTargets is the list of DB connections classification should read. MySQL is one
+// connection (its information_schema is server-wide); PostgreSQL is one per database.
+func scanTargets(cfg Config) ([]scanTarget, error) {
+	if cfg.Engine == "postgresql" {
+		dbList, err := resolvePGDatabases(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if len(dbList) == 0 {
+			return nil, fmt.Errorf("postgres classification: no databases to scan (set DB_NAME=<db>[,<db>] or '*')")
+		}
+		const q = `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
+			WHERE table_schema NOT IN ('pg_catalog','information_schema')
+			ORDER BY table_schema, table_name, ordinal_position`
+		ts := make([]scanTarget, 0, len(dbList))
+		for _, d := range dbList {
+			ts = append(ts, scanTarget{driver: "postgres", dsn: pgDSN(cfg, d), query: q, dbLabel: d})
+		}
+		return ts, nil
+	}
+	const q = `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
+		WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
+		ORDER BY table_schema, table_name, ordinal_position`
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/information_schema?timeout=8s&readTimeout=20s&allowNativePasswords=true", cfg.DBUser, cfg.DBPass, cfg.TargetHost, cfg.TargetPort)
+	return []scanTarget{{driver: "mysql", dsn: dsn, query: q, dbLabel: ""}}, nil
+}
+
+func runClassificationScan(cfg Config) error {
+	targets, err := scanTargets(cfg)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
 	type objAgg struct {
-		schema, table string
-		total         int
-		cols          []map[string]interface{}
+		dbName, schema, table string
+		total                 int
+		cols                  []map[string]interface{}
 	}
 	objs := map[string]*objAgg{}
 	var objOrder []string
-	for rows.Next() {
-		var sch, tbl, col, dt string
-		if err := rows.Scan(&sch, &tbl, &col, &dt); err != nil {
+	for _, t := range targets {
+		db, err := sql.Open(t.driver, t.dsn)
+		if err != nil {
+			log.Printf("classification: connect to %q failed: %v", t.dbLabel, err)
 			continue
 		}
-		key := sch + "\x00" + tbl
-		o := objs[key]
-		if o == nil {
-			o = &objAgg{schema: sch, table: tbl}
-			objs[key] = o
-			objOrder = append(objOrder, key)
+		db.SetConnMaxLifetime(30 * time.Second)
+		rows, err := db.Query(t.query)
+		if err != nil {
+			db.Close()
+			log.Printf("classification: query %q failed: %v", t.dbLabel, err)
+			continue
 		}
-		o.total++
-		if tag, sens, ok := classifyCol(col); ok {
-			o.cols = append(o.cols, map[string]interface{}{
-				"column_name": col, "data_type": dt, "tags": []string{tag},
-				"sensitivity": sens, "detection_method": "pattern", "confidence": 0.85, "is_masked": false,
-			})
+		for rows.Next() {
+			var sch, tbl, col, dt string
+			if err := rows.Scan(&sch, &tbl, &col, &dt); err != nil {
+				continue
+			}
+			dbName := t.dbLabel
+			if dbName == "" {
+				dbName = sch // MySQL: the schema IS the database
+			}
+			key := dbName + "\x00" + sch + "\x00" + tbl
+			o := objs[key]
+			if o == nil {
+				o = &objAgg{dbName: dbName, schema: sch, table: tbl}
+				objs[key] = o
+				objOrder = append(objOrder, key)
+			}
+			o.total++
+			if tag, sens, ok := classifyCol(col); ok {
+				o.cols = append(o.cols, map[string]interface{}{
+					"column_name": col, "data_type": dt, "tags": []string{tag},
+					"sensitivity": sens, "detection_method": "pattern", "confidence": 0.85, "is_masked": false,
+				})
+			}
 		}
+		rows.Close()
+		db.Close()
 	}
 
 	// Group by schema (= database in MySQL). We report EVERY scanned schema — including
@@ -707,18 +783,18 @@ func runClassificationScan(cfg Config) error {
 	dbs := map[string]map[string]interface{}{}
 	newSens := map[string][]string{} // table → policy tags, rebuilt each scan
 	var dbOrder []string
-	ensureDB := func(schema string) map[string]interface{} {
-		d := dbs[schema]
+	ensureDB := func(name string) map[string]interface{} {
+		d := dbs[name]
 		if d == nil {
-			d = map[string]interface{}{"name": schema, "objects": []interface{}{}, "columns_total": 0, "objects_total": 0, "sensitive_total": 0}
-			dbs[schema] = d
-			dbOrder = append(dbOrder, schema)
+			d = map[string]interface{}{"name": name, "objects": []interface{}{}, "columns_total": 0, "objects_total": 0, "sensitive_total": 0}
+			dbs[name] = d
+			dbOrder = append(dbOrder, name)
 		}
 		return d
 	}
 	for _, key := range objOrder {
 		o := objs[key]
-		d := ensureDB(o.schema)
+		d := ensureDB(o.dbName)
 		d["columns_total"] = d["columns_total"].(int) + o.total
 		d["objects_total"] = d["objects_total"].(int) + 1
 		if len(o.cols) == 0 {
@@ -748,6 +824,7 @@ func runClassificationScan(cfg Config) error {
 		}
 		newSens[strings.ToLower(o.table)] = tags
 		newSens[strings.ToLower(o.schema+"."+o.table)] = tags
+		newSens[strings.ToLower(o.dbName+"."+o.table)] = tags
 	}
 	sensTablesMu.Lock()
 	sensTables = newSens
