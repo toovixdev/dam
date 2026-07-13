@@ -79,7 +79,18 @@ export default function Settings() {
               <div className="form-field"><label>Display name</label><input defaultValue={tenant} /></div>
               <div className="form-field"><label>Data plane region</label>
                 <select defaultValue="US — Virginia (primary)">
-                  <option>US — Virginia (primary)</option><option>EU — Frankfurt</option><option>UK — London</option><option>Canada — Montreal</option><option>India — Mumbai</option>
+                  <optgroup label="Americas">
+                    <option>US — Virginia (primary)</option><option>US — Ohio</option><option>US — Oregon</option><option>US — California</option>
+                    <option>Canada — Montreal</option><option>Canada — Toronto</option><option>Brazil — São Paulo</option>
+                  </optgroup>
+                  <optgroup label="Europe / Middle East / Africa">
+                    <option>EU — Ireland</option><option>EU — Frankfurt</option><option>EU — Netherlands</option><option>EU — Paris</option><option>EU — Stockholm</option>
+                    <option>UK — London</option><option>Switzerland — Zurich</option><option>UAE — Dubai</option><option>Israel — Tel Aviv</option><option>South Africa — Johannesburg</option>
+                  </optgroup>
+                  <optgroup label="Asia Pacific">
+                    <option>India — Mumbai</option><option>India — Delhi</option><option>Singapore</option><option>Japan — Tokyo</option>
+                    <option>Korea — Seoul</option><option>Australia — Sydney</option>
+                  </optgroup>
                 </select>
               </div>
               <div className="form-field"><label>Default theme</label>
