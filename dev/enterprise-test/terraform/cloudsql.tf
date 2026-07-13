@@ -13,7 +13,7 @@ resource "google_sql_database_instance" "paas" {
 
     ip_configuration {
       ipv4_enabled    = false # no public IP
-      private_network = google_compute_network.paas.id
+      private_network = google_compute_network.main.id
     }
 
     # Audit-log option (agentless Cloud Push). Uncomment + wire a Log sink → Pub/Sub → collector.
@@ -81,7 +81,7 @@ resource "google_compute_instance" "paas_bastion" {
     enable_secure_boot = true
   }
 
-  depends_on = [google_compute_router_nat.paas, google_sql_database.paas, google_sql_user.root]
+  depends_on = [google_compute_router_nat.main, google_sql_database.paas, google_sql_user.root]
 }
 
 # ── Option 1: inline-proxy agent VM (capture + block). Apps connect to this VM:3307,
@@ -125,5 +125,5 @@ resource "google_compute_instance" "paas_proxy" {
     enable_secure_boot = true
   }
 
-  depends_on = [google_compute_router_nat.paas]
+  depends_on = [google_compute_router_nat.main]
 }

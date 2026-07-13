@@ -3,7 +3,7 @@ output "vm_databases" {
   value = {
     for k, v in google_compute_instance.vm_db : k => {
       private_ip = v.network_interface[0].network_ip
-      vpc        = google_compute_network.vm[k].name
+      vpc        = google_compute_network.main.name
       subnet     = google_compute_subnetwork.vm[k].ip_cidr_range
       zone       = v.zone
     }
@@ -15,7 +15,7 @@ output "cloudsql" {
   value = {
     name       = google_sql_database_instance.paas.name
     private_ip = google_sql_database_instance.paas.private_ip_address
-    vpc        = google_compute_network.paas.name
+    vpc        = google_compute_network.main.name
     connect    = "apps connect via the proxy VM on :3307 (if enabled), else Cloud SQL private IP:3306"
   }
 }

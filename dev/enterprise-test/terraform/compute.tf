@@ -47,5 +47,5 @@ resource "google_compute_instance" "vm_db" {
     enable_secure_boot = true
   }
 
-  depends_on = [google_compute_router_nat.vm]
+  depends_on = [google_compute_router_nat.main]
 }
