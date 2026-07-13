@@ -157,7 +157,7 @@ func runNetwork(cfg Config) {
 	}
 	targetPort := uint16(atoiDefault(cfg.TargetPort, 3306))
 	capDebug = env("CAPTURE_DEBUG", "false") == "true"
-	log.Printf("network agent sniffing %s for tcp/%d (passive capture, debug=%v)", iface, targetPort, capDebug)
+	log.Printf("network agent sniffing %s for tcp/%d engine=%s (passive capture, debug=%v)", iface, targetPort, cfg.Engine, capDebug)
 
 	conns := map[string]*connState{}
 	// Big enough for a full IPv4 packet (65535) + link header, and for loopback GSO
@@ -209,6 +209,7 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 	if len(payload) == 0 {
 		return
 	}
+	pg := cfg.Engine == "postgresql"
 	// A connection is keyed by the CLIENT's ip:port, computed the same in both directions.
 	if dstPort == targetPort { // client → server (queries)
 		key := fmt.Sprintf("%s:%d", srcIP, srcPort)
@@ -217,21 +218,30 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 			st = &connState{principal: "unknown"}
 			conns[key] = st
 		}
-		st.buf = frameAndDecode(st, append(st.buf, payload...), func(sql string) {
-			// Defer emitting until the server's response is parsed so we know the row count.
+		// Defer emitting until the server's response is parsed so we know the row count.
+		onQuery := func(sql string) {
 			st.pendingSQL = sql
 			st.pendingIP = srcIP
 			st.haveQuery = true
 			st.rs = nrIdle
 			st.rowCount = 0
-		})
+		}
+		if pg {
+			st.buf = frameAndDecodePG(st, append(st.buf, payload...), onQuery)
+		} else {
+			st.buf = frameAndDecode(st, append(st.buf, payload...), onQuery)
+		}
 	} else if srcPort == targetPort { // server → client (result sets)
 		key := fmt.Sprintf("%s:%d", dstIP, dstPort)
 		st := conns[key]
 		if st == nil {
 			return // response for a connection we never saw open — ignore
 		}
-		st.respBuf = parseResponse(cfg, st, append(st.respBuf, payload...))
+		if pg {
+			st.respBuf = parseResponsePG(cfg, st, append(st.respBuf, payload...))
+		} else {
+			st.respBuf = parseResponse(cfg, st, append(st.respBuf, payload...))
+		}
 	}
 }
 
@@ -337,6 +347,159 @@ func frameAndDecode(st *connState, buf []byte, onQuery func(sql string)) []byte 
 		buf = buf[4+plen:]
 	}
 	return buf
+}
+
+// ── PostgreSQL v3 wire decode (network mode) ─────────────────────────────────
+// Engine-branched from handleFrame (cfg.Engine == "postgresql"); the MySQL path above
+// is untouched. Passive — observes cleartext protocol only (TLS'd connections are opaque,
+// same limitation as MySQL). Simple ('Q') and extended ('P' Parse) queries are captured.
+
+func be32(b []byte) int {
+	return int(b[0])<<24 | int(b[1])<<16 | int(b[2])<<8 | int(b[3])
+}
+
+// pgStr returns the bytes up to the first NUL (Postgres strings are NUL-terminated).
+func pgStr(b []byte) string {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		return string(b[:i])
+	}
+	return string(b)
+}
+
+// lastIntInTag pulls the trailing integer from a CommandComplete tag
+// ("SELECT 5"→5, "INSERT 0 3"→3, "UPDATE 2"→2, "DELETE 1"→1); -1 if none (e.g. "CREATE TABLE").
+func lastIntInTag(tag string) int {
+	end := len(tag)
+	for end > 0 && (tag[end-1] < '0' || tag[end-1] > '9') {
+		end--
+	}
+	if end == 0 {
+		return -1
+	}
+	start := end
+	for start > 0 && tag[start-1] >= '0' && tag[start-1] <= '9' {
+		start--
+	}
+	n := 0
+	for i := start; i < end; i++ {
+		n = n*10 + int(tag[i]-'0')
+	}
+	return n
+}
+
+// frameAndDecodePG frames client→server messages. The first (untyped) startup message is
+// parsed once to pull the connecting user (principal); thereafter each message is
+// [type:1][len:4 incl. itself][body]. SQL comes from 'Q' (simple) and 'P' (Parse) bodies.
+func frameAndDecodePG(st *connState, buf []byte, onQuery func(sql string)) []byte {
+	for {
+		if !st.pgStartupDone {
+			if len(buf) < 8 {
+				return buf
+			}
+			mlen := be32(buf[0:4])
+			if mlen < 8 || mlen > 1<<20 { // not a startup we understand → treat rest as typed
+				st.pgStartupDone = true
+				continue
+			}
+			if len(buf) < mlen {
+				return buf
+			}
+			code := be32(buf[4:8])
+			body := buf[8:mlen]
+			buf = buf[mlen:]
+			switch code {
+			case 80877103, 80877102: // SSLRequest / GSSENCRequest: the server sends a 1-byte
+				// reply, then (if it declines) the REAL StartupMessage follows in cleartext.
+				// Stay in startup state so we parse that real startup next; flag the server side
+				// to consume the 1-byte reply.
+				st.pgSSLReplyPending = true
+				continue
+			case 196608: // protocol 3.0 → params are key\0value\0…\0\0
+				parts := bytes.Split(body, []byte{0})
+				for i := 0; i+1 < len(parts); i += 2 {
+					if string(parts[i]) == "user" && st.principal == "unknown" {
+						st.principal = string(parts[i+1])
+					}
+				}
+			}
+			st.pgStartupDone = true
+			continue
+		}
+		if len(buf) < 5 {
+			return buf
+		}
+		mlen := be32(buf[1:5]) // length includes these 4 bytes, excludes the 1 type byte
+		if mlen < 4 || mlen > 1<<24 {
+			return nil // desync (likely TLS/binary) — drop the buffer to resync
+		}
+		total := 1 + mlen
+		if len(buf) < total {
+			return buf
+		}
+		typ := buf[0]
+		body := buf[5:total]
+		buf = buf[total:]
+		switch typ {
+		case 'Q': // Simple Query — NUL-terminated SQL
+			if sql := pgStr(body); strings.TrimSpace(sql) != "" {
+				onQuery(strings.TrimSpace(sql))
+			}
+		case 'P': // Parse (extended) — stmtName\0 query\0 paramTypes…
+			if i := bytes.IndexByte(body, 0); i >= 0 {
+				if sql := pgStr(body[i+1:]); strings.TrimSpace(sql) != "" {
+					onQuery(strings.TrimSpace(sql))
+				}
+			}
+		}
+	}
+}
+
+// parseResponsePG frames server→client messages, counting DataRow ('D') and emitting the
+// pending query on CommandComplete ('C') — whose tag carries the authoritative row count —
+// or on ErrorResponse ('E', captured as a failed attempt with 0 rows).
+func parseResponsePG(cfg Config, st *connState, buf []byte) []byte {
+	for {
+		if st.pgSSLReplyPending { // consume the server's 1-byte SSL reply ('S'=accept, 'N'=decline)
+			if len(buf) < 1 {
+				return buf
+			}
+			ssl := buf[0]
+			buf = buf[1:]
+			st.pgSSLReplyPending = false
+			if ssl == 'S' { // SSL accepted → the rest is TLS, undecodable
+				return nil
+			}
+			// 'N' (declined) → cleartext continues; fall through to normal message parsing
+		}
+		if len(buf) < 5 {
+			return buf
+		}
+		mlen := be32(buf[1:5])
+		if mlen < 4 || mlen > 1<<24 {
+			return nil
+		}
+		total := 1 + mlen
+		if len(buf) < total {
+			return buf
+		}
+		typ := buf[0]
+		body := buf[5:total]
+		buf = buf[total:]
+		switch typ {
+		case 'D': // DataRow — fallback counter
+			st.rowCount++
+		case 'C': // CommandComplete — tag = "SELECT 5" / "INSERT 0 3" / …
+			n := lastIntInTag(pgStr(body))
+			if n < 0 {
+				n = st.rowCount
+			}
+			emitCaptured(cfg, st, n)
+			st.rowCount = 0
+		case 'E': // ErrorResponse — the query failed; still capture the attempt
+			emitCaptured(cfg, st, 0)
+			st.rowCount = 0
+		}
+	}
 }
 
 func htons(i uint16) uint16 { return (i<<8)&0xff00 | i>>8 }
@@ -676,6 +839,8 @@ type connState struct {
 	pendingSQL  string // the query awaiting its result set
 	pendingIP   string
 	haveQuery   bool
+	pgStartupDone bool // postgres: startup message consumed (principal pulled from it)
+	pgSSLReplyPending bool // postgres: client sent SSLRequest; skip the server's 1-byte reply
 }
 
 // network-mode response-parser states (mirror the proxy's masking state machine).
