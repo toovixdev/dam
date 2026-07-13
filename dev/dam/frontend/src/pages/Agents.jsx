@@ -193,11 +193,14 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const [classify, setClassify] = useState(false);
   const [dbUser, setDbUser] = useState('');
   const [dbPass, setDbPass] = useState('');
+  const [dbName, setDbName] = useState('');
   const [instructions, setInstructions] = useState(null);
 
   const instance = instances.find((i) => i.id === instId);
   const isPaas = !!instance?.is_paas;
-  const canClassify = (instance?.engine || 'mysql') === 'mysql'; // MySQL-only in this build
+  const instEngine = instance?.engine || 'mysql';
+  const canClassify = instEngine === 'mysql' || instEngine === 'postgresql'; // MySQL + PostgreSQL in this build
+  const classifyNeedsDbName = instEngine === 'postgresql'; // PG's information_schema is per-database
   const has = (m) => modes.includes(m);
   const toggle = (m) => setModes((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
   const activePreset = PRESETS.find((p) => sameSet(p.modes, modes));
@@ -223,10 +226,11 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
     const image = (res && res.agent_image) || 'registry.toovix.security/dam-agent:latest';
     const useClassify = classify && canClassify;
     if (useClassify && !dbUser.trim()) { toast('Enter the DB reader username for classification', 'err'); return; }
+    if (useClassify && classifyNeedsDbName && !dbName.trim()) { toast('Enter the database name to classify (PostgreSQL)', 'err'); return; }
     setInstructions({
       token, cp, image, modes: [...modes], platform,
       target: instance?.instance || instance?.name, engine: instance?.engine,
-      classify: useClassify, dbUser: dbUser.trim(), dbPass: dbPass.trim(),
+      classify: useClassify, dbUser: dbUser.trim(), dbPass: dbPass.trim(), dbName: dbName.trim(),
     });
   };
   const done = () => { onDeployed(); onClose(); };
@@ -313,21 +317,27 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
                 <div className="muted" style={{ fontSize: 12 }}>
                   {canClassify
                     ? 'The agent logs into the DB as a least-privilege reader, classifies columns, and populates the Classification page. Runs alongside capture over the same outbound path.'
-                    : 'Classification is available for MySQL in this build.'}
+                    : 'Classification is available for MySQL and PostgreSQL in this build.'}
                 </div>
               </div>
             </div>
           </div>
           {classify && canClassify && (
-            <div style={{ display: 'flex', gap: 10, margin: '0 0 14px' }}>
-              <div className="form-field" style={{ flex: 1, margin: 0 }}>
+            <div style={{ display: 'flex', gap: 10, margin: '0 0 14px', flexWrap: 'wrap' }}>
+              <div className="form-field" style={{ flex: 1, minWidth: 160, margin: 0 }}>
                 <label>DB reader user</label>
                 <input value={dbUser} onChange={(e) => { setDbUser(e.target.value); setInstructions(null); }} placeholder="dam_svc" />
               </div>
-              <div className="form-field" style={{ flex: 1, margin: 0 }}>
+              <div className="form-field" style={{ flex: 1, minWidth: 160, margin: 0 }}>
                 <label>DB reader password</label>
                 <input type="password" value={dbPass} onChange={(e) => { setDbPass(e.target.value); setInstructions(null); }} placeholder="least-privilege SELECT user" />
               </div>
+              {classifyNeedsDbName && (
+                <div className="form-field" style={{ flex: 1, minWidth: 160, margin: 0 }}>
+                  <label>Database to scan</label>
+                  <input value={dbName} onChange={(e) => { setDbName(e.target.value); setInstructions(null); }} placeholder="e.g. inventory" />
+                </div>
+              )}
             </div>
           )}
         </>
@@ -345,7 +355,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
                 {MODES.find((x) => x.id === m)?.name}
                 {instructions.classify && m === instructions.modes[0] && <span className="pill info" style={{ marginLeft: 6 }}>+ classification</span>}
               </div>
-              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image, { classify: instructions.classify && m === instructions.modes[0], dbUser: instructions.dbUser, dbPass: instructions.dbPass })}</pre>
+              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image, { classify: instructions.classify && m === instructions.modes[0], dbUser: instructions.dbUser, dbPass: instructions.dbPass, dbName: instructions.dbName })}</pre>
             </div>
           ))}
           {instructions.classify && instructions.modes.length > 1 && (
@@ -378,7 +388,7 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     `MODE=${m}`,
     `DB_ENGINE=${eng}`,
     `TARGET_HOST=${host || target}`,
-    `TARGET_PORT=${port || '3306'}`,
+    `TARGET_PORT=${port || (eng === 'postgresql' ? '5432' : '3306')}`,
     `AGENT_ENROLL_TOKEN=${token}`,
     `CONTROL_PLANE=${cp}`,
   ];
@@ -394,8 +404,10 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
       'CLASSIFY=true',
       `DB_USER=${opts.dbUser || 'dam_svc'}`,
       `DB_PASSWORD=${opts.dbPass || '<db-reader-password>'}`,
-      'CLASSIFY_INTERVAL_MIN=30',
     );
+    // Postgres' information_schema is per-database, so classification needs the target DB.
+    if (eng === 'postgresql') env.push(`DB_NAME=${opts.dbName || '<database-name>'}`);
+    env.push('CLASSIFY_INTERVAL_MIN=30');
   }
 
   if (format === 'docker') {
@@ -419,7 +431,7 @@ ${envLines.join(' \\\n')} \\
   if (format === 'kubernetes') {
     const capSet = (m === 'network' || m === 'host') ? ' --set captureIface=any' : '';
     const classifySets = opts.classify
-      ? ` \\\n  --set classify=true --set dbUser=${opts.dbUser || 'dam_svc'} --set dbPassword=${opts.dbPass || '<db-reader-password>'}`
+      ? ` \\\n  --set classify=true --set dbUser=${opts.dbUser || 'dam_svc'} --set dbPassword=${opts.dbPass || '<db-reader-password>'}${eng === 'postgresql' ? ` --set dbName=${opts.dbName || '<database-name>'}` : ''}`
       : '';
     return `helm repo add toovix oci://registry.toovix.security/charts
 helm install dam-${m} toovix/dam-agent \\
@@ -427,7 +439,7 @@ helm install dam-${m} toovix/dam-agent \\
   --set token=${token} --set endpoint=${cp} \\
   --set image=${img} \\
   --set mode=${m} --set engine=${eng} \\
-  --set targetHost=${host || target} --set targetPort=${port || 3306}${capSet}${classifySets}`;
+  --set targetHost=${host || target} --set targetPort=${port || (eng === 'postgresql' ? 5432 : 3306)}${capSet}${classifySets}`;
   }
 
   if (format === 'package') {
