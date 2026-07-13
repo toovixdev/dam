@@ -16,6 +16,10 @@ dev/dam/frontend/node_modules/
 dev/*/node_modules/
 node_modules/
 
+# Vite build output
+dist/
+**/dist/
+
 # Terraform
 **/.terraform/*
 *.tfstate
