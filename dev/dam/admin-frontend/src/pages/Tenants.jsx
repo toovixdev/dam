@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import KpiCard from '../components/KpiCard';
@@ -22,186 +22,6 @@ const STATUS_META = {
   suspended:   { cls: 'sev-critical',  label: 'Suspended' },
   offboarding: { cls: 'sev-critical',  label: 'Offboarding' },
 };
-// Public commercial regions per hyperscaler (region code · location). Gov/secret/
-// sovereign-partner regions (AWS GovCloud/China, Azure Gov/China, OCI gov/dedicated)
-// are intentionally omitted. Region codes are the provider's real identifiers.
-const CLOUD_REGIONS = {
-  aws: [
-    { v: 'us-east-1', l: 'us-east-1 · US East (N. Virginia)' },
-    { v: 'us-east-2', l: 'us-east-2 · US East (Ohio)' },
-    { v: 'us-west-1', l: 'us-west-1 · US West (N. California)' },
-    { v: 'us-west-2', l: 'us-west-2 · US West (Oregon)' },
-    { v: 'ca-central-1', l: 'ca-central-1 · Canada (Central)' },
-    { v: 'ca-west-1', l: 'ca-west-1 · Canada West (Calgary)' },
-    { v: 'sa-east-1', l: 'sa-east-1 · South America (São Paulo)' },
-    { v: 'mx-central-1', l: 'mx-central-1 · Mexico (Central)' },
-    { v: 'eu-west-1', l: 'eu-west-1 · Europe (Ireland)' },
-    { v: 'eu-west-2', l: 'eu-west-2 · Europe (London)' },
-    { v: 'eu-west-3', l: 'eu-west-3 · Europe (Paris)' },
-    { v: 'eu-central-1', l: 'eu-central-1 · Europe (Frankfurt)' },
-    { v: 'eu-central-2', l: 'eu-central-2 · Europe (Zurich)' },
-    { v: 'eu-north-1', l: 'eu-north-1 · Europe (Stockholm)' },
-    { v: 'eu-south-1', l: 'eu-south-1 · Europe (Milan)' },
-    { v: 'eu-south-2', l: 'eu-south-2 · Europe (Spain)' },
-    { v: 'me-south-1', l: 'me-south-1 · Middle East (Bahrain)' },
-    { v: 'me-central-1', l: 'me-central-1 · Middle East (UAE)' },
-    { v: 'il-central-1', l: 'il-central-1 · Israel (Tel Aviv)' },
-    { v: 'af-south-1', l: 'af-south-1 · Africa (Cape Town)' },
-    { v: 'ap-east-1', l: 'ap-east-1 · Asia Pacific (Hong Kong)' },
-    { v: 'ap-south-1', l: 'ap-south-1 · Asia Pacific (Mumbai)' },
-    { v: 'ap-south-2', l: 'ap-south-2 · Asia Pacific (Hyderabad)' },
-    { v: 'ap-southeast-1', l: 'ap-southeast-1 · Asia Pacific (Singapore)' },
-    { v: 'ap-southeast-2', l: 'ap-southeast-2 · Asia Pacific (Sydney)' },
-    { v: 'ap-southeast-3', l: 'ap-southeast-3 · Asia Pacific (Jakarta)' },
-    { v: 'ap-southeast-4', l: 'ap-southeast-4 · Asia Pacific (Melbourne)' },
-    { v: 'ap-southeast-5', l: 'ap-southeast-5 · Asia Pacific (Malaysia)' },
-    { v: 'ap-southeast-7', l: 'ap-southeast-7 · Asia Pacific (Thailand)' },
-    { v: 'ap-northeast-1', l: 'ap-northeast-1 · Asia Pacific (Tokyo)' },
-    { v: 'ap-northeast-2', l: 'ap-northeast-2 · Asia Pacific (Seoul)' },
-    { v: 'ap-northeast-3', l: 'ap-northeast-3 · Asia Pacific (Osaka)' },
-  ],
-  gcp: [
-    { v: 'us-east1', l: 'us-east1 · South Carolina' },
-    { v: 'us-east4', l: 'us-east4 · N. Virginia' },
-    { v: 'us-east5', l: 'us-east5 · Columbus' },
-    { v: 'us-central1', l: 'us-central1 · Iowa' },
-    { v: 'us-south1', l: 'us-south1 · Dallas' },
-    { v: 'us-west1', l: 'us-west1 · Oregon' },
-    { v: 'us-west2', l: 'us-west2 · Los Angeles' },
-    { v: 'us-west3', l: 'us-west3 · Salt Lake City' },
-    { v: 'us-west4', l: 'us-west4 · Las Vegas' },
-    { v: 'northamerica-northeast1', l: 'northamerica-northeast1 · Montréal' },
-    { v: 'northamerica-northeast2', l: 'northamerica-northeast2 · Toronto' },
-    { v: 'northamerica-south1', l: 'northamerica-south1 · Mexico' },
-    { v: 'southamerica-east1', l: 'southamerica-east1 · São Paulo' },
-    { v: 'southamerica-west1', l: 'southamerica-west1 · Santiago' },
-    { v: 'europe-west1', l: 'europe-west1 · Belgium' },
-    { v: 'europe-west2', l: 'europe-west2 · London' },
-    { v: 'europe-west3', l: 'europe-west3 · Frankfurt' },
-    { v: 'europe-west4', l: 'europe-west4 · Netherlands' },
-    { v: 'europe-west6', l: 'europe-west6 · Zurich' },
-    { v: 'europe-west8', l: 'europe-west8 · Milan' },
-    { v: 'europe-west9', l: 'europe-west9 · Paris' },
-    { v: 'europe-west10', l: 'europe-west10 · Berlin' },
-    { v: 'europe-west12', l: 'europe-west12 · Turin' },
-    { v: 'europe-central2', l: 'europe-central2 · Warsaw' },
-    { v: 'europe-north1', l: 'europe-north1 · Finland' },
-    { v: 'europe-north2', l: 'europe-north2 · Stockholm' },
-    { v: 'europe-southwest1', l: 'europe-southwest1 · Madrid' },
-    { v: 'asia-east1', l: 'asia-east1 · Taiwan' },
-    { v: 'asia-east2', l: 'asia-east2 · Hong Kong' },
-    { v: 'asia-northeast1', l: 'asia-northeast1 · Tokyo' },
-    { v: 'asia-northeast2', l: 'asia-northeast2 · Osaka' },
-    { v: 'asia-northeast3', l: 'asia-northeast3 · Seoul' },
-    { v: 'asia-south1', l: 'asia-south1 · Mumbai' },
-    { v: 'asia-south2', l: 'asia-south2 · Delhi' },
-    { v: 'asia-southeast1', l: 'asia-southeast1 · Singapore' },
-    { v: 'asia-southeast2', l: 'asia-southeast2 · Jakarta' },
-    { v: 'australia-southeast1', l: 'australia-southeast1 · Sydney' },
-    { v: 'australia-southeast2', l: 'australia-southeast2 · Melbourne' },
-    { v: 'me-central1', l: 'me-central1 · Doha' },
-    { v: 'me-central2', l: 'me-central2 · Dammam' },
-    { v: 'me-west1', l: 'me-west1 · Tel Aviv' },
-    { v: 'africa-south1', l: 'africa-south1 · Johannesburg' },
-  ],
-  azure: [
-    { v: 'eastus', l: 'eastus · East US (Virginia)' },
-    { v: 'eastus2', l: 'eastus2 · East US 2 (Virginia)' },
-    { v: 'centralus', l: 'centralus · Central US (Iowa)' },
-    { v: 'northcentralus', l: 'northcentralus · North Central US (Illinois)' },
-    { v: 'southcentralus', l: 'southcentralus · South Central US (Texas)' },
-    { v: 'westcentralus', l: 'westcentralus · West Central US (Wyoming)' },
-    { v: 'westus', l: 'westus · West US (California)' },
-    { v: 'westus2', l: 'westus2 · West US 2 (Washington)' },
-    { v: 'westus3', l: 'westus3 · West US 3 (Arizona)' },
-    { v: 'canadacentral', l: 'canadacentral · Canada Central (Toronto)' },
-    { v: 'canadaeast', l: 'canadaeast · Canada East (Québec)' },
-    { v: 'brazilsouth', l: 'brazilsouth · Brazil South (São Paulo)' },
-    { v: 'brazilsoutheast', l: 'brazilsoutheast · Brazil Southeast (Rio)' },
-    { v: 'mexicocentral', l: 'mexicocentral · Mexico Central' },
-    { v: 'northeurope', l: 'northeurope · North Europe (Ireland)' },
-    { v: 'westeurope', l: 'westeurope · West Europe (Netherlands)' },
-    { v: 'uksouth', l: 'uksouth · UK South (London)' },
-    { v: 'ukwest', l: 'ukwest · UK West (Cardiff)' },
-    { v: 'francecentral', l: 'francecentral · France Central (Paris)' },
-    { v: 'francesouth', l: 'francesouth · France South (Marseille)' },
-    { v: 'germanywestcentral', l: 'germanywestcentral · Germany West Central (Frankfurt)' },
-    { v: 'germanynorth', l: 'germanynorth · Germany North (Berlin)' },
-    { v: 'switzerlandnorth', l: 'switzerlandnorth · Switzerland North (Zurich)' },
-    { v: 'switzerlandwest', l: 'switzerlandwest · Switzerland West (Geneva)' },
-    { v: 'norwayeast', l: 'norwayeast · Norway East (Oslo)' },
-    { v: 'norwaywest', l: 'norwaywest · Norway West (Stavanger)' },
-    { v: 'swedencentral', l: 'swedencentral · Sweden Central (Gävle)' },
-    { v: 'polandcentral', l: 'polandcentral · Poland Central (Warsaw)' },
-    { v: 'italynorth', l: 'italynorth · Italy North (Milan)' },
-    { v: 'spaincentral', l: 'spaincentral · Spain Central (Madrid)' },
-    { v: 'austriaeast', l: 'austriaeast · Austria East (Vienna)' },
-    { v: 'uaenorth', l: 'uaenorth · UAE North (Dubai)' },
-    { v: 'uaecentral', l: 'uaecentral · UAE Central (Abu Dhabi)' },
-    { v: 'qatarcentral', l: 'qatarcentral · Qatar Central (Doha)' },
-    { v: 'israelcentral', l: 'israelcentral · Israel Central' },
-    { v: 'southafricanorth', l: 'southafricanorth · South Africa North (Johannesburg)' },
-    { v: 'southafricawest', l: 'southafricawest · South Africa West (Cape Town)' },
-    { v: 'centralindia', l: 'centralindia · Central India (Pune)' },
-    { v: 'southindia', l: 'southindia · South India (Chennai)' },
-    { v: 'westindia', l: 'westindia · West India (Mumbai)' },
-    { v: 'jioindiawest', l: 'jioindiawest · Jio India West' },
-    { v: 'eastasia', l: 'eastasia · East Asia (Hong Kong)' },
-    { v: 'southeastasia', l: 'southeastasia · Southeast Asia (Singapore)' },
-    { v: 'japaneast', l: 'japaneast · Japan East (Tokyo)' },
-    { v: 'japanwest', l: 'japanwest · Japan West (Osaka)' },
-    { v: 'koreacentral', l: 'koreacentral · Korea Central (Seoul)' },
-    { v: 'koreasouth', l: 'koreasouth · Korea South (Busan)' },
-    { v: 'australiaeast', l: 'australiaeast · Australia East (NSW)' },
-    { v: 'australiasoutheast', l: 'australiasoutheast · Australia Southeast (Victoria)' },
-    { v: 'australiacentral', l: 'australiacentral · Australia Central (Canberra)' },
-    { v: 'indonesiacentral', l: 'indonesiacentral · Indonesia Central (Jakarta)' },
-    { v: 'malaysiawest', l: 'malaysiawest · Malaysia West (Kuala Lumpur)' },
-    { v: 'newzealandnorth', l: 'newzealandnorth · New Zealand North (Auckland)' },
-  ],
-  oci: [
-    { v: 'us-ashburn-1', l: 'us-ashburn-1 · US East (Ashburn)' },
-    { v: 'us-chicago-1', l: 'us-chicago-1 · US Midwest (Chicago)' },
-    { v: 'us-phoenix-1', l: 'us-phoenix-1 · US West (Phoenix)' },
-    { v: 'us-sanjose-1', l: 'us-sanjose-1 · US West (San Jose)' },
-    { v: 'ca-toronto-1', l: 'ca-toronto-1 · Canada Southeast (Toronto)' },
-    { v: 'ca-montreal-1', l: 'ca-montreal-1 · Canada Southeast (Montreal)' },
-    { v: 'sa-saopaulo-1', l: 'sa-saopaulo-1 · Brazil East (São Paulo)' },
-    { v: 'sa-vinhedo-1', l: 'sa-vinhedo-1 · Brazil Southeast (Vinhedo)' },
-    { v: 'sa-santiago-1', l: 'sa-santiago-1 · Chile Central (Santiago)' },
-    { v: 'sa-valparaiso-1', l: 'sa-valparaiso-1 · Chile West (Valparaiso)' },
-    { v: 'sa-bogota-1', l: 'sa-bogota-1 · Colombia Central (Bogotá)' },
-    { v: 'mx-queretaro-1', l: 'mx-queretaro-1 · Mexico Central (Querétaro)' },
-    { v: 'mx-monterrey-1', l: 'mx-monterrey-1 · Mexico Northeast (Monterrey)' },
-    { v: 'uk-london-1', l: 'uk-london-1 · UK South (London)' },
-    { v: 'uk-cardiff-1', l: 'uk-cardiff-1 · UK West (Newport)' },
-    { v: 'eu-frankfurt-1', l: 'eu-frankfurt-1 · Germany Central (Frankfurt)' },
-    { v: 'eu-amsterdam-1', l: 'eu-amsterdam-1 · Netherlands Northwest (Amsterdam)' },
-    { v: 'eu-zurich-1', l: 'eu-zurich-1 · Switzerland North (Zurich)' },
-    { v: 'eu-milan-1', l: 'eu-milan-1 · Italy Northwest (Milan)' },
-    { v: 'eu-paris-1', l: 'eu-paris-1 · France Central (Paris)' },
-    { v: 'eu-marseille-1', l: 'eu-marseille-1 · France South (Marseille)' },
-    { v: 'eu-madrid-1', l: 'eu-madrid-1 · Spain Central (Madrid)' },
-    { v: 'eu-stockholm-1', l: 'eu-stockholm-1 · Sweden Central (Stockholm)' },
-    { v: 'me-jeddah-1', l: 'me-jeddah-1 · Saudi Arabia West (Jeddah)' },
-    { v: 'me-riyadh-1', l: 'me-riyadh-1 · Saudi Arabia Central (Riyadh)' },
-    { v: 'me-dubai-1', l: 'me-dubai-1 · UAE East (Dubai)' },
-    { v: 'me-abudhabi-1', l: 'me-abudhabi-1 · UAE Central (Abu Dhabi)' },
-    { v: 'il-jerusalem-1', l: 'il-jerusalem-1 · Israel Central (Jerusalem)' },
-    { v: 'af-johannesburg-1', l: 'af-johannesburg-1 · South Africa Central (Johannesburg)' },
-    { v: 'ap-mumbai-1', l: 'ap-mumbai-1 · India West (Mumbai)' },
-    { v: 'ap-hyderabad-1', l: 'ap-hyderabad-1 · India South (Hyderabad)' },
-    { v: 'ap-singapore-1', l: 'ap-singapore-1 · Singapore (Singapore)' },
-    { v: 'ap-singapore-2', l: 'ap-singapore-2 · Singapore West (Singapore)' },
-    { v: 'ap-tokyo-1', l: 'ap-tokyo-1 · Japan East (Tokyo)' },
-    { v: 'ap-osaka-1', l: 'ap-osaka-1 · Japan Central (Osaka)' },
-    { v: 'ap-seoul-1', l: 'ap-seoul-1 · South Korea Central (Seoul)' },
-    { v: 'ap-chuncheon-1', l: 'ap-chuncheon-1 · South Korea North (Chuncheon)' },
-    { v: 'ap-sydney-1', l: 'ap-sydney-1 · Australia East (Sydney)' },
-    { v: 'ap-melbourne-1', l: 'ap-melbourne-1 · Australia Southeast (Melbourne)' },
-  ],
-};
-const regionsFor = (cloud) => CLOUD_REGIONS[cloud] || CLOUD_REGIONS.azure;
 
 function healthColor(h) { return h >= 80 ? 'var(--green)' : h >= 60 ? 'var(--amber)' : 'var(--danger)'; }
 
@@ -448,7 +268,19 @@ function CreateWizard({ open, onClose, onCreated }) {
   const [doneSteps, setDoneSteps] = useState(0);
   const [result, setResult] = useState(null); // 'success' | { error }
 
+  // Cloud regions come from the master table (GET /api/reference/cloud-regions),
+  // not a hardcoded list, so the catalog can change without a frontend rebuild.
+  const { data: cloudRegions } = useApiData('/reference/cloud-regions');
+  const regionsFor = (cloud) => cloudRegions?.[cloud] || [];
+
   const set = (patch) => setForm(f => ({ ...f, ...patch }));
+
+  // Once regions load (or the cloud changes), make sure the selected region is
+  // valid for the current cloud — default to that cloud's first region if not.
+  useEffect(() => {
+    const list = regionsFor(form.cloud);
+    if (list.length && !list.some(r => r.v === form.region)) set({ region: list[0].v });
+  }, [cloudRegions, form.cloud]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function reset() {
     setStep(1); setSlugEdited(false); setProvisioning(false); setDoneSteps(0); setResult(null);
@@ -568,14 +400,16 @@ function CreateWizard({ open, onClose, onCreated }) {
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             {form.deploy !== 'onprem' && (
               <div className="form-field"><label>{form.deploy === 'saas' ? 'Hosting cloud' : 'Customer cloud'}</label>
-                <select value={form.cloud} onChange={(e) => set({ cloud: e.target.value, region: regionsFor(e.target.value)[0].v })}>
+                <select value={form.cloud} onChange={(e) => set({ cloud: e.target.value })}>
                   <option value="azure">Azure</option><option value="aws">AWS</option>
                   <option value="gcp">GCP</option><option value="oci">OCI</option>
                 </select></div>
             )}
             <div className="form-field"><label>Data region</label>
-              <select value={form.region} onChange={(e) => set({ region: e.target.value })}>
-                {regionsFor(form.cloud).map(r => <option key={r.v} value={r.v}>{r.l}</option>)}
+              <select value={form.region} onChange={(e) => set({ region: e.target.value })} disabled={!regionsFor(form.cloud).length}>
+                {regionsFor(form.cloud).length
+                  ? regionsFor(form.cloud).map(r => <option key={r.v} value={r.v}>{r.l}</option>)
+                  : <option value="">Loading regions…</option>}
               </select></div>
           </div>
           <div style={{ display: 'flex', gap: 10, marginTop: 18, paddingTop: 14, borderTop: '1px solid var(--line)', justifyContent: 'flex-end' }}>

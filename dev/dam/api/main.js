@@ -1140,6 +1140,73 @@ async function runAdminMigration() {
       updated_at TIMESTAMPTZ DEFAULT now()
     )`);
 
+    // ── Cloud region catalog (master/reference table; served via
+    //    GET /api/reference/cloud-regions so the UI never hardcodes this list) ──
+    await client.query(`CREATE TABLE IF NOT EXISTS cloud_regions (
+      id         SERIAL PRIMARY KEY,
+      cloud      VARCHAR(16)  NOT NULL,
+      code       VARCHAR(64)  NOT NULL,
+      location   VARCHAR(120) NOT NULL,
+      geography  VARCHAR(48),
+      is_active  BOOLEAN NOT NULL DEFAULT true,
+      sort_order INT     NOT NULL DEFAULT 0,
+      UNIQUE (cloud, code)
+    )`);
+    // Idempotent upsert: refreshes label/order each boot but never clobbers an
+    // operator's is_active toggle (so a region can be disabled in the DB and stay off).
+    const CLOUD_REGIONS_SEED = {
+      aws: [
+        ['us-east-1','US East (N. Virginia)'],['us-east-2','US East (Ohio)'],['us-west-1','US West (N. California)'],['us-west-2','US West (Oregon)'],
+        ['ca-central-1','Canada (Central)'],['ca-west-1','Canada West (Calgary)'],['sa-east-1','South America (São Paulo)'],['mx-central-1','Mexico (Central)'],
+        ['eu-west-1','Europe (Ireland)'],['eu-west-2','Europe (London)'],['eu-west-3','Europe (Paris)'],['eu-central-1','Europe (Frankfurt)'],['eu-central-2','Europe (Zurich)'],
+        ['eu-north-1','Europe (Stockholm)'],['eu-south-1','Europe (Milan)'],['eu-south-2','Europe (Spain)'],['me-south-1','Middle East (Bahrain)'],['me-central-1','Middle East (UAE)'],
+        ['il-central-1','Israel (Tel Aviv)'],['af-south-1','Africa (Cape Town)'],['ap-east-1','Asia Pacific (Hong Kong)'],['ap-south-1','Asia Pacific (Mumbai)'],['ap-south-2','Asia Pacific (Hyderabad)'],
+        ['ap-southeast-1','Asia Pacific (Singapore)'],['ap-southeast-2','Asia Pacific (Sydney)'],['ap-southeast-3','Asia Pacific (Jakarta)'],['ap-southeast-4','Asia Pacific (Melbourne)'],
+        ['ap-southeast-5','Asia Pacific (Malaysia)'],['ap-southeast-7','Asia Pacific (Thailand)'],['ap-northeast-1','Asia Pacific (Tokyo)'],['ap-northeast-2','Asia Pacific (Seoul)'],['ap-northeast-3','Asia Pacific (Osaka)'],
+      ],
+      gcp: [
+        ['us-east1','South Carolina'],['us-east4','N. Virginia'],['us-east5','Columbus'],['us-central1','Iowa'],['us-south1','Dallas'],['us-west1','Oregon'],['us-west2','Los Angeles'],['us-west3','Salt Lake City'],['us-west4','Las Vegas'],
+        ['northamerica-northeast1','Montréal'],['northamerica-northeast2','Toronto'],['northamerica-south1','Mexico'],['southamerica-east1','São Paulo'],['southamerica-west1','Santiago'],
+        ['europe-west1','Belgium'],['europe-west2','London'],['europe-west3','Frankfurt'],['europe-west4','Netherlands'],['europe-west6','Zurich'],['europe-west8','Milan'],['europe-west9','Paris'],['europe-west10','Berlin'],['europe-west12','Turin'],
+        ['europe-central2','Warsaw'],['europe-north1','Finland'],['europe-north2','Stockholm'],['europe-southwest1','Madrid'],
+        ['asia-east1','Taiwan'],['asia-east2','Hong Kong'],['asia-northeast1','Tokyo'],['asia-northeast2','Osaka'],['asia-northeast3','Seoul'],['asia-south1','Mumbai'],['asia-south2','Delhi'],['asia-southeast1','Singapore'],['asia-southeast2','Jakarta'],
+        ['australia-southeast1','Sydney'],['australia-southeast2','Melbourne'],['me-central1','Doha'],['me-central2','Dammam'],['me-west1','Tel Aviv'],['africa-south1','Johannesburg'],
+      ],
+      azure: [
+        ['eastus','East US (Virginia)'],['eastus2','East US 2 (Virginia)'],['centralus','Central US (Iowa)'],['northcentralus','North Central US (Illinois)'],['southcentralus','South Central US (Texas)'],['westcentralus','West Central US (Wyoming)'],
+        ['westus','West US (California)'],['westus2','West US 2 (Washington)'],['westus3','West US 3 (Arizona)'],['canadacentral','Canada Central (Toronto)'],['canadaeast','Canada East (Québec)'],['brazilsouth','Brazil South (São Paulo)'],['brazilsoutheast','Brazil Southeast (Rio)'],['mexicocentral','Mexico Central'],
+        ['northeurope','North Europe (Ireland)'],['westeurope','West Europe (Netherlands)'],['uksouth','UK South (London)'],['ukwest','UK West (Cardiff)'],['francecentral','France Central (Paris)'],['francesouth','France South (Marseille)'],
+        ['germanywestcentral','Germany West Central (Frankfurt)'],['germanynorth','Germany North (Berlin)'],['switzerlandnorth','Switzerland North (Zurich)'],['switzerlandwest','Switzerland West (Geneva)'],['norwayeast','Norway East (Oslo)'],['norwaywest','Norway West (Stavanger)'],
+        ['swedencentral','Sweden Central (Gävle)'],['polandcentral','Poland Central (Warsaw)'],['italynorth','Italy North (Milan)'],['spaincentral','Spain Central (Madrid)'],['austriaeast','Austria East (Vienna)'],
+        ['uaenorth','UAE North (Dubai)'],['uaecentral','UAE Central (Abu Dhabi)'],['qatarcentral','Qatar Central (Doha)'],['israelcentral','Israel Central'],['southafricanorth','South Africa North (Johannesburg)'],['southafricawest','South Africa West (Cape Town)'],
+        ['centralindia','Central India (Pune)'],['southindia','South India (Chennai)'],['westindia','West India (Mumbai)'],['jioindiawest','Jio India West'],['eastasia','East Asia (Hong Kong)'],['southeastasia','Southeast Asia (Singapore)'],
+        ['japaneast','Japan East (Tokyo)'],['japanwest','Japan West (Osaka)'],['koreacentral','Korea Central (Seoul)'],['koreasouth','Korea South (Busan)'],['australiaeast','Australia East (NSW)'],['australiasoutheast','Australia Southeast (Victoria)'],['australiacentral','Australia Central (Canberra)'],
+        ['indonesiacentral','Indonesia Central (Jakarta)'],['malaysiawest','Malaysia West (Kuala Lumpur)'],['newzealandnorth','New Zealand North (Auckland)'],
+      ],
+      oci: [
+        ['us-ashburn-1','US East (Ashburn)'],['us-chicago-1','US Midwest (Chicago)'],['us-phoenix-1','US West (Phoenix)'],['us-sanjose-1','US West (San Jose)'],['ca-toronto-1','Canada Southeast (Toronto)'],['ca-montreal-1','Canada Southeast (Montreal)'],
+        ['sa-saopaulo-1','Brazil East (São Paulo)'],['sa-vinhedo-1','Brazil Southeast (Vinhedo)'],['sa-santiago-1','Chile Central (Santiago)'],['sa-valparaiso-1','Chile West (Valparaiso)'],['sa-bogota-1','Colombia Central (Bogotá)'],['mx-queretaro-1','Mexico Central (Querétaro)'],['mx-monterrey-1','Mexico Northeast (Monterrey)'],
+        ['uk-london-1','UK South (London)'],['uk-cardiff-1','UK West (Newport)'],['eu-frankfurt-1','Germany Central (Frankfurt)'],['eu-amsterdam-1','Netherlands Northwest (Amsterdam)'],['eu-zurich-1','Switzerland North (Zurich)'],['eu-milan-1','Italy Northwest (Milan)'],['eu-paris-1','France Central (Paris)'],['eu-marseille-1','France South (Marseille)'],['eu-madrid-1','Spain Central (Madrid)'],['eu-stockholm-1','Sweden Central (Stockholm)'],
+        ['me-jeddah-1','Saudi Arabia West (Jeddah)'],['me-riyadh-1','Saudi Arabia Central (Riyadh)'],['me-dubai-1','UAE East (Dubai)'],['me-abudhabi-1','UAE Central (Abu Dhabi)'],['il-jerusalem-1','Israel Central (Jerusalem)'],['af-johannesburg-1','South Africa Central (Johannesburg)'],
+        ['ap-mumbai-1','India West (Mumbai)'],['ap-hyderabad-1','India South (Hyderabad)'],['ap-singapore-1','Singapore (Singapore)'],['ap-singapore-2','Singapore West (Singapore)'],['ap-tokyo-1','Japan East (Tokyo)'],['ap-osaka-1','Japan Central (Osaka)'],['ap-seoul-1','South Korea Central (Seoul)'],['ap-chuncheon-1','South Korea North (Chuncheon)'],['ap-sydney-1','Australia East (Sydney)'],['ap-melbourne-1','Australia Southeast (Melbourne)'],
+      ],
+    };
+    {
+      const rowsSql = [], params = [];
+      let i = 1;
+      for (const [cloud, list] of Object.entries(CLOUD_REGIONS_SEED)) {
+        list.forEach(([code, location], idx) => {
+          rowsSql.push(`($${i++},$${i++},$${i++},$${i++})`);
+          params.push(cloud, code, location, idx);
+        });
+      }
+      await client.query(
+        `INSERT INTO cloud_regions (cloud, code, location, sort_order) VALUES ${rowsSql.join(',')}
+         ON CONFLICT (cloud, code) DO UPDATE SET location = EXCLUDED.location, sort_order = EXCLUDED.sort_order`,
+        params
+      );
+    }
+
     const pa = await client.query('SELECT COUNT(*) AS n FROM platform_alerts');
     if (parseInt(pa.rows[0].n) === 0) {
       await client.query(`INSERT INTO platform_alerts (title, detail, region, category, severity) VALUES
@@ -2265,6 +2332,23 @@ app.get('/api/tenants/:id', async (req, res) => {
   const { rows } = await pgPool.query('SELECT * FROM tenants WHERE id = $1', [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   res.json(rows[0]);
+});
+
+// ── Reference data · cloud regions (master table, not hardcoded in the UI) ──
+// Public (non-sensitive). Returns active regions grouped by hyperscaler, each as
+// { v: code, l: "code · location" } so the frontends can render them directly.
+app.get('/api/reference/cloud-regions', async (req, res) => {
+  try {
+    const rows = (await pgPool.query(
+      'SELECT cloud, code, location FROM cloud_regions WHERE is_active ORDER BY cloud, sort_order, code'
+    )).rows;
+    const grouped = {};
+    for (const r of rows) (grouped[r.cloud] ||= []).push({ v: r.code, l: `${r.code} · ${r.location}` });
+    res.json(grouped);
+  } catch (err) {
+    console.error('[Reference] cloud-regions failed:', err.message);
+    res.status(500).json({ error: 'Failed to load cloud regions' });
+  }
 });
 
 // ── Admin · Platform auth ──────────────────────────────────
