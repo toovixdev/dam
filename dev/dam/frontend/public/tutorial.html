@@ -349,7 +349,7 @@
         <div class="card">
           <div class="ic" style="color:#4f46e5">①</div>
           <h4>Network agent <span style="font-weight:500;color:#94a3b8;font-size:12px">· installed · passive</span></h4>
-          <p>Sniffs the database's network traffic and decodes the <b>MySQL &amp; PostgreSQL</b> wire protocols. No path change, ~0 overhead, and it sees every networked connection — <b>including ones that bypass a proxy</b>. Cleartext only — <b>TLS-encrypted connections are opaque</b> (use the inline proxy or host/eBPF for those). Blind to local/IPC; cannot block.</p>
+          <p>Sniffs the database's network traffic and decodes the <b>MySQL, PostgreSQL &amp; SQL Server (TDS)</b> wire protocols. No path change, ~0 overhead, and it sees every networked connection — <b>including ones that bypass a proxy</b>. Cleartext only — <b>TLS-encrypted connections are opaque</b> (and SQL Server clients encrypt by default; use the inline proxy or host/eBPF for those). Blind to local/IPC; cannot block.</p>
         </div>
         <div class="card">
           <div class="ic" style="color:#0284c7">②</div>

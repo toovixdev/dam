@@ -199,8 +199,8 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const instance = instances.find((i) => i.id === instId);
   const isPaas = !!instance?.is_paas;
   const instEngine = instance?.engine || 'mysql';
-  const canClassify = instEngine === 'mysql' || instEngine === 'postgresql'; // MySQL + PostgreSQL in this build
-  const classifyNeedsDbName = instEngine === 'postgresql'; // PG's information_schema is per-database
+  const canClassify = instEngine === 'mysql' || instEngine === 'postgresql' || instEngine === 'mssql'; // in this build
+  const classifyNeedsDbName = instEngine === 'postgresql' || instEngine === 'mssql'; // PG/SQL Server information_schema is per-database
   const has = (m) => modes.includes(m);
   const toggle = (m) => setModes((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
   const activePreset = PRESETS.find((p) => sameSet(p.modes, modes));
@@ -317,7 +317,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
                 <div className="muted" style={{ fontSize: 12 }}>
                   {canClassify
                     ? 'The agent logs into the DB as a least-privilege reader, classifies columns, and populates the Classification page. Runs alongside capture over the same outbound path.'
-                    : 'Classification is available for MySQL and PostgreSQL in this build.'}
+                    : 'Classification is available for MySQL, PostgreSQL, and SQL Server in this build.'}
                 </div>
               </div>
             </div>
@@ -388,7 +388,7 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     `MODE=${m}`,
     `DB_ENGINE=${eng}`,
     `TARGET_HOST=${host || target}`,
-    `TARGET_PORT=${port || (eng === 'postgresql' ? '5432' : '3306')}`,
+    `TARGET_PORT=${port || (eng === 'postgresql' ? '5432' : eng === 'mssql' ? '1433' : '3306')}`,
     `AGENT_ENROLL_TOKEN=${token}`,
     `CONTROL_PLANE=${cp}`,
   ];
@@ -405,8 +405,8 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
       `DB_USER=${opts.dbUser || 'dam_svc'}`,
       `DB_PASSWORD=${opts.dbPass || '<db-reader-password>'}`,
     );
-    // Postgres' information_schema is per-database, so classification needs the target DB.
-    if (eng === 'postgresql') env.push(`DB_NAME=${opts.dbName || '<database-name>'}`);
+    // Postgres/SQL Server information_schema is per-database, so classification needs the target DB.
+    if (eng === 'postgresql' || eng === 'mssql') env.push(`DB_NAME=${opts.dbName || '<database-name>'}`);
     env.push('CLASSIFY_INTERVAL_MIN=30');
   }
 
@@ -431,7 +431,7 @@ ${envLines.join(' \\\n')} \\
   if (format === 'kubernetes') {
     const capSet = (m === 'network' || m === 'host') ? ' --set captureIface=any' : '';
     const classifySets = opts.classify
-      ? ` \\\n  --set classify=true --set dbUser=${opts.dbUser || 'dam_svc'} --set dbPassword=${opts.dbPass || '<db-reader-password>'}${eng === 'postgresql' ? ` --set dbName=${opts.dbName || '<database-name>'}` : ''}`
+      ? ` \\\n  --set classify=true --set dbUser=${opts.dbUser || 'dam_svc'} --set dbPassword=${opts.dbPass || '<db-reader-password>'}${eng === 'postgresql' || eng === 'mssql' ? ` --set dbName=${opts.dbName || '<database-name>'}` : ''}`
       : '';
     return `helm repo add toovix oci://registry.toovix.security/charts
 helm install dam-${m} toovix/dam-agent \\
@@ -439,7 +439,7 @@ helm install dam-${m} toovix/dam-agent \\
   --set token=${token} --set endpoint=${cp} \\
   --set image=${img} \\
   --set mode=${m} --set engine=${eng} \\
-  --set targetHost=${host || target} --set targetPort=${port || (eng === 'postgresql' ? 5432 : 3306)}${capSet}${classifySets}`;
+  --set targetHost=${host || target} --set targetPort=${port || (eng === 'postgresql' ? 5432 : eng === 'mssql' ? 1433 : 3306)}${capSet}${classifySets}`;
   }
 
   if (format === 'package') {

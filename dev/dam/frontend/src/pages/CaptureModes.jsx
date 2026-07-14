@@ -3,7 +3,7 @@ import PageHeader from '../components/shared/PageHeader';
 import { useNavigate } from 'react-router-dom';
 
 const AGENTS = [
-  { name: 'Network agent', tag: 'installed · passive', color: 'var(--primary)', desc: 'Sniffs the database’s network traffic and decodes the MySQL & PostgreSQL wire protocols (libpcap-style). No path change, ~0 overhead. Sees every networked connection — including ones that bypass a proxy. Cleartext only — TLS-encrypted connections are opaque (use the inline proxy or host/eBPF for those). Blind to local/IPC; cannot block.' },
+  { name: 'Network agent', tag: 'installed · passive', color: 'var(--primary)', desc: 'Sniffs the database’s network traffic and decodes the MySQL, PostgreSQL & SQL Server (TDS) wire protocols (libpcap-style). No path change, ~0 overhead. Sees every networked connection — including ones that bypass a proxy. Cleartext only — TLS-encrypted connections are opaque, and SQL Server clients encrypt by default (use the inline proxy or host/eBPF for those). Blind to local/IPC; cannot block.' },
   { name: 'Host agent (eBPF)', tag: 'installed · passive', color: 'var(--info)', desc: 'Runs on the DB host kernel. Sees every connection reaching the DB process — including local sockets / shared memory / IPC nothing else can. Deepest visibility; limited local enforcement.' },
   { name: 'Inline proxy', tag: 'installed · inline', color: 'var(--amber)', desc: 'A gateway in the data path — clients connect through it. The only mode that can block / quarantine, and the only one that sees the real end-user behind a pooled connection. Only sees traffic routed through it.' },
   { name: 'Agentless (Pull / Push)', tag: 'no install', color: 'var(--green)', desc: 'Reads native DB audit logs / the DB profiler (Audit Pull, e.g. MongoDB’s system.profile) or consumes cloud audit streams (Cloud Push). Connects as a client — works for managed/PaaS and self-managed databases where you can’t (or don’t want to) install on the host. After-the-fact; cannot block.' },
@@ -240,7 +240,7 @@ export default function CaptureModes() {
           <ul style={{ margin: '0 0 4px', paddingLeft: 18 }}>
             <li><b>Any agent can classify</b> — network, host or proxy. The same agent already on the DB host does the scan; no separate agent needed.</li>
             <li>Enable it with <code>CLASSIFY=true</code>, <code>DB_USER</code> and <code>DB_PASSWORD</code> on the agent (PostgreSQL also needs <code>DB_NAME</code>). Re-scans every <code>CLASSIFY_INTERVAL_MIN</code> min (default 30), all over the same outbound path — no inbound DB connection.</li>
-            <li>For <b>agentless / PaaS</b> sources the standalone <b>collector</b> runs the same scan. Classification is available for <b>MySQL and PostgreSQL</b> in this build.</li>
+            <li>For <b>agentless / PaaS</b> sources the standalone <b>collector</b> runs the same scan. Classification is available for <b>MySQL, PostgreSQL, and SQL Server</b> in this build.</li>
           </ul>
         </div>
       </div>
