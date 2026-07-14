@@ -2197,3 +2197,24 @@ the Docker builder (build-time only).
 - Verified: nfpm produced `dam-agent_0.1.0_amd64.deb` + `dam-agent-0.1.0-1.x86_64.rpm`; `dpkg-deb -c`
   shows correct layout; the **static binary runs bare on ubuntu:22.04 with no deps installed**
   (banner + enroll). Depends: systemd (present on all real server VMs). amd64-only (matches the eBPF).
+
+## 65b. Host agent — validated end-to-end on GCP (TLS MySQL), two runtime fixes
+
+Deployed the host agent via the `.deb` on **db-vm-b** (self-managed MySQL 8, Ubuntu 22.04,
+kernel 6.8) monitoring the DAM control plane. Confirmed **TLS-encrypted** MySQL capture below TLS:
+a `--ssl-mode=REQUIRED` client (`Ssl_cipher=TLS_AES_256_GCM_SHA384`) → the agent logged
+`[capture] SELECT rows=1 toovixtest SELECT '…' AS marker` with correct op/rowcount/**principal
+pulled from the login below TLS**, 0 ship failures → events in Database Activity. This is the
+capability passive network capture cannot provide.
+
+Two fixes were needed once it hit a real kernel + real MySQL (both committed):
+1. **eBPF verifier** rejected `bpf_probe_read_user` — the size register wasn't provably bounded.
+   Fixed by masking the clamped length with a power-of-two constant (`cap &= MAX_DATA-1`).
+2. **MySQL capture saw nothing** because the comm filter matched `mysqld`, but MySQL runs queries
+   on threads named **`connection`** (not `mysqld`). Fixed with engine-aware attachment:
+   **PID-pin** the uprobes to the single mysqld process (catches all its threads, no comm filter);
+   PostgreSQL keeps the system-wide + `comm=postgres` model (backends are separate processes).
+   Also: the MySQL decoder detected the login handshake at `seq==1`, but under TLS the pre-TLS
+   SSLRequest bumps the sequence — switched to detecting the handshake by shape (first non-command
+   packet), so `gotUser`/`queryAttrs`/principal parse correctly on the below-TLS stream.
+- Added opt-in `CAPTURE_DEBUG` logging to the host path (raw READ/WRITE events) — how #2 was found.

@@ -74,21 +74,23 @@ func runHost(cfg Config) {
 	}
 	defer objs.Close()
 
-	// Filter uprobes to the DB process by comm (empty DB_PROC_COMM would match all).
+	// Two process models need different scoping (MySQL threads aren't all named "mysqld" —
+	// query threads are "connection" — so a thread-comm filter would drop everything):
+	//   MySQL/MariaDB — ONE multi-threaded process → PID-pin the uprobes to it (catches every
+	//                   thread) and disable the comm filter.
+	//   PostgreSQL    — ONE process PER connection, all comm="postgres" → attach system-wide and
+	//                   filter by comm (backends fork after us, so a PID pin would miss them).
 	comm := procCommFor(cfg)
-	var cb [16]byte
-	copy(cb[:], comm)
-	if err := objs.TargetComm.Put(uint32(0), cb); err != nil {
-		log.Fatalf("host: set target comm: %v", err)
-	}
+	pidPin := cfg.Engine != "postgresql" // mysql/mariadb/default
 
 	// Locate the DB process and the libssl it maps (retry — the agent may start first).
 	sslPath := ""
+	dbPid := 0
 	for {
 		pid := findProcByComm(comm)
 		if pid > 0 {
 			if p, err := findLibssl(pid); err == nil {
-				sslPath = p
+				sslPath, dbPid = p, pid
 				log.Printf("host: DB process %q pid=%d uses %s", comm, pid, sslPath)
 				break
 			} else {
@@ -100,27 +102,45 @@ func runHost(cfg Config) {
 		time.Sleep(5 * time.Second)
 	}
 
-	// Attach system-wide on the libssl inode (no PID pin) so per-connection backends
-	// forked after us are still covered; the comm filter narrows to the DB.
+	// comm filter: empty (match all) when PID-pinning, else scope to the DB comm.
+	var cb [16]byte
+	if !pidPin {
+		copy(cb[:], comm)
+	}
+	if err := objs.TargetComm.Put(uint32(0), cb); err != nil {
+		log.Fatalf("host: set target comm: %v", err)
+	}
+
 	ex, err := link.OpenExecutable(sslPath)
 	if err != nil {
 		log.Fatalf("host: open %s: %v", sslPath, err)
 	}
+	var upOpts *link.UprobeOptions
+	if pidPin {
+		upOpts = &link.UprobeOptions{PID: dbPid}
+	}
 
+	dbg := env("CAPTURE_DEBUG", "false") == "true"
 	var links []link.Link
 	up := func(sym string, prog *ebpf.Program) {
-		l, err := ex.Uprobe(sym, prog, nil)
+		l, err := ex.Uprobe(sym, prog, upOpts)
 		if err != nil {
 			log.Printf("host: attach uprobe %s failed: %v", sym, err)
 			return
 		}
+		if dbg {
+			log.Printf("host: attached uprobe %s (pidPin=%v)", sym, upOpts != nil)
+		}
 		links = append(links, l)
 	}
 	uret := func(sym string, prog *ebpf.Program) {
-		l, err := ex.Uretprobe(sym, prog, nil)
+		l, err := ex.Uretprobe(sym, prog, upOpts)
 		if err != nil {
 			log.Printf("host: attach uretprobe %s failed: %v", sym, err)
 			return
+		}
+		if dbg {
+			log.Printf("host: attached uretprobe %s (pidPin=%v)", sym, upOpts != nil)
 		}
 		links = append(links, l)
 	}
@@ -167,6 +187,11 @@ func runHost(cfg Config) {
 		}
 		data = data[:dlen]
 
+		if dbg {
+			dirName := map[byte]string{evtDirRead: "READ", evtDirWrite: "WRITE", evtDirClose: "CLOSE"}[dir]
+			log.Printf("[host-dbg] %-5s ssl=%x len=%d preview=%q", dirName, ssl, dlen, previewBytes(data, 48))
+		}
+
 		key := strconv.FormatUint(ssl, 16)
 		if dir == evtDirClose {
 			delete(conns, key)
@@ -207,6 +232,22 @@ func runHost(cfg Config) {
 			}
 		}
 	}
+}
+
+// previewBytes renders up to n bytes for debug logging: printable ASCII as-is, else '.'.
+func previewBytes(b []byte, n int) string {
+	if len(b) > n {
+		b = b[:n]
+	}
+	out := make([]byte, len(b))
+	for i, c := range b {
+		if c >= 0x20 && c < 0x7f {
+			out[i] = c
+		} else {
+			out[i] = '.'
+		}
+	}
+	return string(out)
 }
 
 // findProcByComm returns the pid of the first process whose comm matches want

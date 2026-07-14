@@ -119,11 +119,13 @@ static __always_inline void submit(__u64 ssl, const void *buf, __s64 count, __u8
 
 	__u32 cap = 0;
 	if (dir != DIR_CLOSE) {
-		cap = (__u32)count;
-		if (cap > MAX_DATA - 1) {
-			cap = MAX_DATA - 1;
+		if (count > MAX_DATA - 1) {
+			count = MAX_DATA - 1;
 			e->truncated = 1;
 		}
+		// Mask with a power-of-two constant so the verifier can prove 0 <= cap < MAX_DATA
+		// for the bpf_probe_read_user size (count is already clamped, so the mask is lossless).
+		cap = (__u32)count & (MAX_DATA - 1);
 		if (buf && cap > 0)
 			bpf_probe_read_user(&e->data, cap, buf);
 	}

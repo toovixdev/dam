@@ -337,9 +337,12 @@ func frameAndDecode(st *connState, buf []byte, onQuery func(sql string)) []byte 
 		if plen == 0 || len(buf) < 4+plen {
 			break
 		}
-		seq := buf[3]
 		payload := buf[4 : 4+plen]
-		if seq == 1 && !st.gotUser {
+		// Handshake response = the first client→server packet. Network mode sees it at seq 1;
+		// host (eBPF/below-TLS) mode sees it as the first SSL_read at a higher seq (the pre-TLS
+		// SSLRequest already consumed seq 1), so detect it by shape instead of seq: not yet
+		// authed, not a command byte (COM_QUERY=0x03), and long enough for caps+filler+user.
+		if !st.gotUser && plen > 32 && payload[0] != 0x03 {
 			st.gotUser = true
 			if len(payload) >= 4 {
 				caps := uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24
