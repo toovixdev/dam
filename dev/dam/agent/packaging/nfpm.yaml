@@ -1,0 +1,32 @@
+# nfpm spec for the TooVix DAM agent — produces .deb and .rpm from the prebuilt static binary.
+# Build:  make packages   (extracts dist/dam-agent-linux-amd64 from the Docker builder, then nfpm)
+name: dam-agent
+arch: amd64
+platform: linux
+version: "0.1.0"
+maintainer: TooVix Security <support@toovix.security>
+description: |
+  TooVix DAM Agent — database activity capture (network / host-eBPF / inline-proxy).
+  Single static binary; the eBPF program is embedded (no libbpf/clang at runtime).
+vendor: TooVix Security
+license: Proprietary
+section: admin
+priority: optional
+
+depends:
+  - systemd
+
+# Paths are relative to the working dir nfpm runs in — the Makefile runs it from the agent dir.
+contents:
+  - src: dist/dam-agent-linux-amd64
+    dst: /usr/local/bin/dam-agent
+    file_info:
+      mode: 0755
+  - src: packaging/dam-agent.service
+    dst: /lib/systemd/system/dam-agent.service
+  - src: packaging/agent.env.example
+    dst: /etc/toovix/agent.env
+    type: "config|noreplace"   # never clobber the operator's config on upgrade
+
+scripts:
+  postinstall: packaging/postinstall.sh

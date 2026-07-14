@@ -1,0 +1,9 @@
+# bpf2go output — regenerated inside the Docker build (RUN go generate), never committed.
+hostcap_*_bpfel.go
+hostcap_*_bpfel.o
+hostcap_*_bpfeb.go
+hostcap_*_bpfeb.o
+# module lock — created by `go mod tidy` inside the build.
+go.sum
+# build/packaging output (make binary / make packages)
+dist/

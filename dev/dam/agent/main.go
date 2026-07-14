@@ -1,11 +1,10 @@
 // TooVix DAM Agent — single binary, MODE-selectable capture.
 //
-// One image, three installable modes (network | host | proxy). This build implements the
-// inline PROXY for MySQL end-to-end (a real TCP proxy clients connect through; it decodes
-// the MySQL wire protocol, captures queries, and forwards events to the DAM data plane).
-// network/host modes enroll + heartbeat but their capture is not implemented in this build.
-//
-// Pure standard library — no external deps, so the container image builds trivially.
+// One image, three installable modes (network | host | proxy), selected by MODE:
+//   proxy   — inline TCP proxy clients connect through; decodes the wire protocol and can block.
+//   network — passive AF_PACKET sniff (above TLS): cleartext MySQL/PostgreSQL/SQL Server.
+//   host    — eBPF uprobe on libssl (below TLS): captures TLS-encrypted MySQL/PostgreSQL too.
+// All modes share the same wire decoders and event pipeline; only the byte source differs.
 package main
 
 import (
@@ -124,6 +123,8 @@ func main() {
 		runProxy(cfg)
 	case "network":
 		runNetwork(cfg)
+	case "host":
+		runHost(cfg) // eBPF uprobe on libssl — captures below TLS (see host_linux.go)
 	default:
 		log.Printf("mode %q: capture not implemented in this build — enrolled + heartbeating only", cfg.Mode)
 		select {}

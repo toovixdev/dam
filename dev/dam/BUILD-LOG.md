@@ -2150,3 +2150,50 @@ CR# each captured schema change was carried out under.
   /api/ddl-changes/import` parses a returned CSV, matches rows on Change ID (tenant-scoped), and
   bulk-applies `cr_number` + status (auto-attest). "Import CSV" button on the Change Log page. Verified:
   2-row CSV → `{updated:2}`, both attested (a blank-status row auto-attested).
+
+## 65. Host agent (eBPF) — below-TLS capture for MySQL/PostgreSQL
+
+The `host` mode was a stub (enroll+heartbeat only). Implemented it as an **eBPF uprobe on
+OpenSSL** so the host agent captures the wire protocol **below TLS** — the one thing passive
+network capture can't do (encrypted client sessions).
+- `agent/hostcap.bpf.c` — uprobes on `SSL_write` (server→client = result set) and
+  `SSL_read`/uretprobe (client→server = the SQL query), plus `SSL_free` (connection GC).
+  Emits `{pid, ssl*, dir, len, data}` to a ring buffer; per-CPU scratch keeps the 16 KB
+  event off the BPF stack; a `target_comm` map filters system-wide libssl hooks down to the
+  DB process. Touches only user memory → no vmlinux.h/BTF needed at build (uses `<asm/ptrace.h>`).
+- `agent/host_linux.go` — cilium/ebpf loader (pure Go, `CGO_ENABLED=0` preserved). Finds the DB
+  process by comm (`mysqld`/`postgres`), resolves **its** libssl via `/proc/<pid>/root/…` (so the
+  uprobe attaches to the DB's inode, not the agent container's), attaches the probes system-wide,
+  and feeds the decrypted plaintext into the **same** decoders network mode uses
+  (`frameAndDecode`/`frameAndDecodePG` + `parseResponse*`) keyed by `SSL*`. Principal/username
+  falls out of the wire (the auth handshake rides inside the TLS tunnel).
+- `agent/host_other.go` — non-Linux stub so the package still resolves.
+- `main.go` — `case "host": runHost(cfg)`; the reused decoders/pipeline are unchanged, so
+  network/proxy/mssql paths are untouched.
+- **Build:** `Dockerfile` build stage now installs clang/llvm/libbpf-dev/linux-headers and runs
+  `go generate` (bpf2go, `-target amd64`) → the eBPF object is embedded in the single Go binary.
+  amd64-only for now (both estates are x86_64). Verified: `docker build --platform linux/amd64`
+  compiles clean and the image boots in `mode=host`.
+- **Deploy UI** (`Agents.jsx`): host mode now emits its correct runtime envelope —
+  `--privileged --pid host --network host` (eBPF + DB-process/libssl visibility), no
+  AF_PACKET caps/`CAPTURE_IFACE`, and a host-specific note (below-TLS, kernel ≥ 5.8 + BTF,
+  DB built against OpenSSL, runs ON the DB host).
+- **Still runtime-testing on GCP/AWS:** verifier/attach/capture only runs on a real Linux host;
+  next step is deploy on a TLS-enabled MySQL/PG VM and confirm encrypted queries land in the
+  Database Activity tab. SQL Server host capture is a later add (same decoders, if sqlservr uses
+  libssl on Linux). Note: TLS-only — for cleartext DBs use network mode.
+
+## 65a. Agent packaging — static binary + .deb/.rpm (no-Docker install)
+
+So the agent can be deployed on GCP/AWS hosts **without Docker**, added a non-container build path.
+The binary is a single **static** Go executable (`CGO_ENABLED=0`, eBPF object embedded via bpf2go)
+— so the host that RUNS it needs no libbpf/clang/Go, only a Linux kernel ≥ 5.8. clang/libbpf live in
+the Docker builder (build-time only).
+- `agent/Makefile` — `make binary` builds the image and extracts `dist/dam-agent-linux-amd64`;
+  `make packages` runs **nfpm** (in Docker) → `.deb` + `.rpm`.
+- `agent/packaging/` — `nfpm.yaml`, a systemd unit (`dam-agent.service`, runs as root for eBPF/raw
+  sockets; reads `/etc/toovix/agent.env`), `agent.env.example` (shipped as a **conffile**, noreplace
+  on upgrade), and `postinstall.sh` (registers the unit, does NOT auto-start until configured).
+- Verified: nfpm produced `dam-agent_0.1.0_amd64.deb` + `dam-agent-0.1.0-1.x86_64.rpm`; `dpkg-deb -c`
+  shows correct layout; the **static binary runs bare on ubuntu:22.04 with no deps installed**
+  (banner + enroll). Depends: systemd (present on all real server VMs). amd64-only (matches the eBPF).

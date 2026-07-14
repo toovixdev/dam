@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
@@ -172,9 +172,11 @@ export default function Agents() {
 }
 
 const MODES = [
-  { id: 'network', name: 'Network agent', type: 'network', desc: 'Passive wire capture · no path change · ~0 overhead', tag: 'passive' },
-  { id: 'host', name: 'Host agent (eBPF)', type: 'host_ebpf', desc: 'Sees local/IPC too · install on host · deepest visibility', tag: 'passive' },
-  { id: 'proxy', name: 'Inline proxy', type: 'inline_proxy', desc: 'Blocks / quarantines · reroutes clients through it', tag: 'inline' },
+  // Ordered most-preferred (agentless) → least-practical (network); each desc ends with its caveat (⚠).
+  { id: 'agentless', name: 'Agentless (Audit Pull)', type: 'audit_pull', desc: 'Reads the DB’s native audit trail · no install · works with TLS · runs in your infra. ⚠ needs DB auditing enabled; after-the-fact (cannot block); adds some load to the DB.', tag: 'recommended' },
+  { id: 'host', name: 'Host agent (eBPF)', type: 'host_ebpf', desc: 'Sees local/IPC + encrypted traffic (below TLS) · transparent, no reroute. ⚠ Linux-only (no Windows); privileged container; hardest to deploy.', tag: 'passive' },
+  { id: 'proxy', name: 'Inline proxy', type: 'inline_proxy', desc: 'The only mode that can block · terminates TLS · sees the real end-user. ⚠ reroutes clients through it (connection-path change).', tag: 'inline' },
+  { id: 'network', name: 'Network agent', type: 'network', desc: 'Passive · ~0 overhead · out-of-band, tamper-resistant. ⚠ least practical: cleartext only — blind to TLS and to local/IPC.', tag: 'passive' },
 ];
 const PRESETS = [
   { id: 'lightweight', name: 'Lightweight', modes: ['network'] },
@@ -205,9 +207,23 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const toggle = (m) => setModes((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
   const activePreset = PRESETS.find((p) => sameSet(p.modes, modes));
 
+  // Which modes are offered depends on the engine: MySQL / PostgreSQL get the full stack;
+  // SQL Server, Oracle & MongoDB are agentless-first (audit pull) in this build.
+  const FULL_STACK = ['mysql', 'mariadb', 'postgres', 'postgresql'];
+  const isFullStack = FULL_STACK.includes(instEngine);
+  const engineLabel = { mssql: 'SQL Server', oracle: 'Oracle', mongodb: 'MongoDB', postgres: 'PostgreSQL', postgresql: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB' }[instEngine] || instEngine;
+  const availableModes = isFullStack ? MODES : MODES.filter((mo) => mo.id === 'agentless');
+  // Keep the selection valid for the engine when the instance changes.
+  useEffect(() => {
+    setModes((prev) => (isFullStack ? (prev.length && !prev.includes('agentless') ? prev : ['network', 'host']) : ['agentless']));
+    setInstructions(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instId]);
+
   const preview = {
-    'Networked SQL': has('network') || has('host') || has('proxy') ? 'Yes' : '—',
-    'Local / IPC SQL': has('host') ? 'Yes' : '—',
+    'Networked SQL': has('network') || has('host') || has('proxy') || has('agentless') ? 'Yes' : '—',
+    'TLS-encrypted traffic': has('agentless') || has('proxy') || has('host') ? 'Yes' : has('network') ? 'No (cleartext only)' : '—',
+    'Local / IPC SQL': has('host') ? 'Yes' : has('agentless') ? 'Yes (audit)' : '—',
     'Real end-user attribution': has('proxy') ? 'Yes' : has('host') ? 'Partial' : 'No',
     'Block / quarantine': has('proxy') ? 'Yes' : has('host') ? 'Local only' : 'No',
     'Reroutes clients?': has('proxy') ? 'Yes' : 'No',
@@ -249,23 +265,32 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
         </div>
       )}
 
-      <div className="section-label">Quick presets</div>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
-        {PRESETS.map((p) => (
-          <button key={p.id} type="button" disabled={isPaas} onClick={() => setModes(p.modes)}
-            className={activePreset?.id === p.id ? 'btn-primary' : 'btn-secondary'} style={{ padding: '7px 12px', fontSize: 12.5, opacity: isPaas ? 0.5 : 1 }}>
-            {p.name}{p.rec ? ' ★' : ''}
-          </button>
-        ))}
-      </div>
+      {!isPaas && isFullStack && (
+        <>
+          <div className="section-label">Quick presets</div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+            {PRESETS.map((p) => (
+              <button key={p.id} type="button" onClick={() => setModes(p.modes)}
+                className={activePreset?.id === p.id ? 'btn-primary' : 'btn-secondary'} style={{ padding: '7px 12px', fontSize: 12.5 }}>
+                {p.name}{p.rec ? ' ★' : ''}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
 
-      <div className="section-label">Capture modes {isPaas ? '' : '(pick any combination)'}</div>
+      <div className="section-label">Capture modes {isPaas ? '' : isFullStack ? '(most-preferred first · pick any combination)' : `(agentless-first for ${engineLabel})`}</div>
+      {!isPaas && !isFullStack && (
+        <div style={{ background: 'rgba(22,163,74,.10)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
+          <b>{engineLabel}</b> uses a proprietary / encrypted-by-default protocol, so TooVix captures it <b>agentless</b> — reading the native audit trail (works with TLS, no host install). Network / host / proxy are reserved for MySQL &amp; PostgreSQL.
+        </div>
+      )}
       {isPaas ? (
         <div style={{ background: 'var(--amber-soft)', borderRadius: 10, padding: '12px 14px', fontSize: 12.5, lineHeight: 1.5 }}>
           <b style={{ color: 'var(--amber)' }}>Managed / PaaS instance.</b> Host, Network and Inline Proxy can&apos;t be installed on a server you don&apos;t control. Use <b>agentless</b> capture instead — Audit-Log Pull or Cloud Push — from the Discovery wizard.
         </div>
       ) : (
-        MODES.map((m) => (
+        availableModes.map((m) => (
           <div key={m.id} onClick={() => toggle(m.id)} className={`approach-card ${has(m.id) ? 'on' : ''}`} style={{ padding: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
             <input type="checkbox" checked={has(m.id)} readOnly style={{ pointerEvents: 'none' }} />
             <div style={{ flex: 1 }}>
@@ -292,6 +317,11 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
           {has('proxy') && (
             <div style={{ background: 'var(--info-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
               Inline proxy changes the connection path — clients/apps must connect through the proxy (it forwards to the DB). It&apos;s the only mode that can block. Passive agents alongside it catch traffic that bypasses the proxy.
+            </div>
+          )}
+          {has('agentless') && (
+            <div style={{ background: 'rgba(22,163,74,.10)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--green)' }}>Agentless (Audit Pull)</b> runs in <b>your</b> infrastructure — not on the DB host — and connects to the database to read its <b>native audit trail</b>. It&apos;s <b>transport-independent</b> (captures TLS-encrypted sessions) and the recommended mode for <b>SQL Server, Oracle and MongoDB</b>. Requires the DB&apos;s native auditing enabled + a least-privilege audit reader. After-the-fact — cannot block.
             </div>
           )}
         </>
@@ -381,14 +411,17 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
 // CONTROL_PLANE) for the chosen deployment format.
 function buildInstall(format, mode, target, token, cp, engine, image, opts = {}) {
   const img = image || 'registry.toovix.security/dam-agent:latest';
-  const m = mode === 'host' ? 'host' : mode === 'proxy' ? 'proxy' : 'network';
+  const m = mode === 'host' ? 'host' : mode === 'proxy' ? 'proxy' : mode === 'agentless' ? 'agentless' : 'network';
   const [host, port] = String(target || '').split(':');
-  const eng = engine || 'mysql';
+  const eng = ({ postgres: 'postgresql' }[engine] || engine) || 'mysql';
+  const agentless = m === 'agentless';
+  const defPort = { postgresql: '5432', mssql: '1433', oracle: '1521', mongodb: '27017' }[eng] || '3306';
+  const auditSrc = { oracle: 'unified_audit_trail', mssql: 'sql_server_audit', postgresql: 'pgaudit', mysql: 'audit_log', mongodb: 'profiler' }[eng] || 'native_audit';
   const env = [
-    `MODE=${m}`,
+    `MODE=${agentless ? 'audit-pull' : m}`,
     `DB_ENGINE=${eng}`,
     `TARGET_HOST=${host || target}`,
-    `TARGET_PORT=${port || (eng === 'postgresql' ? '5432' : eng === 'mssql' ? '1433' : '3306')}`,
+    `TARGET_PORT=${port || defPort}`,
     `AGENT_ENROLL_TOKEN=${token}`,
     `CONTROL_PLANE=${cp}`,
   ];
@@ -396,10 +429,19 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   //   any  = all interfaces → captures BOTH on-host queries (loopback) AND remote
   //          clients connecting over the NIC (recommended — misses nothing);
   //   <nic> (e.g. ens4/eth0) = only remote-client traffic;  lo = only on-host.
-  if (m === 'network' || m === 'host') env.push('CAPTURE_IFACE=any');
-  // Data classification (optional) — the agent logs into the DB as a least-privilege
-  // reader and classifies columns. Attached to a single container by the caller.
-  if (opts.classify) {
+  if (m === 'network') env.push('CAPTURE_IFACE=any');
+  if (agentless) {
+    // Agentless connects to the DB as a least-privilege reader and pulls its native
+    // audit trail — no host install, runs in YOUR infra, transport-independent (TLS OK).
+    env.push(
+      `DB_USER=${opts.dbUser || 'dam_svc'}`,
+      `DB_PASSWORD=${opts.dbPass || '<audit-reader-password>'}`,
+      `AUDIT_SOURCE=${auditSrc}`,
+    );
+    if (eng === 'postgresql' || eng === 'mssql' || eng === 'oracle') env.push(`DB_NAME=${opts.dbName || '<database-name>'}`);
+  } else if (opts.classify) {
+    // Data classification (optional) — the agent logs into the DB as a least-privilege
+    // reader and classifies columns. Attached to a single container by the caller.
     env.push(
       'CLASSIFY=true',
       `DB_USER=${opts.dbUser || 'dam_svc'}`,
@@ -411,19 +453,38 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   }
 
   if (format === 'docker') {
-    // Network/host capture uses AF_PACKET raw sockets → needs host networking +
-    // NET_RAW/NET_ADMIN, and must run as root (the image's non-root user can't hold the caps).
-    const needsCap = (m === 'network' || m === 'host');
-    const flags = needsCap ? ' --network host --user 0 --cap-add NET_RAW --cap-add NET_ADMIN' : '';
+    // Each mode has a different runtime envelope:
+    //   network — AF_PACKET raw sniff → host net + NET_RAW/NET_ADMIN, run as root.
+    //   host    — eBPF uprobes on the DB's libssl → privileged + --pid host (to see the DB
+    //             process, its /proc maps and libssl inode across mount namespaces).
+    //   proxy/agentless — plain container, no special privileges.
+    let flags = '';
+    if (m === 'network') flags = ' --network host --user 0 --cap-add NET_RAW --cap-add NET_ADMIN';
+    else if (m === 'host') flags = ' --privileged --pid host --network host --user 0';
     const envLines = env.map((e) => `  -e ${e}`);
-    const capNote = needsCap ? `# CAPTURE_IFACE=any sniffs all interfaces (on-host + remote clients). Narrow it to a
+    const prereq = agentless
+      ? `# Prerequisite: Docker on ANY host in your network that can reach the DB (NOT the DB host).
+`
+      : `# Prerequisite: Docker must be installed on the VM / bare-metal host.
+#   Debian/Ubuntu:  curl -fsSL https://get.docker.com | sudo sh
+#   RHEL/Rocky:     sudo dnf install -y docker && sudo systemctl enable --now docker
+`;
+    const note = agentless
+      ? `# Agentless (Audit Pull): runs in YOUR infra — connects to the DB as a least-privilege
+#   reader and pulls its native audit trail. No host install; works with TLS ON. Grant the
+#   reader audit-read (Oracle: SELECT on unified_audit_trail; SQL Server: db_datareader on
+#   the audit / VIEW SERVER AUDIT STATE; PostgreSQL: pgaudit log access).
+`
+      : m === 'host' ? `# Host agent (eBPF): attaches uprobes to the database's libssl and captures wire traffic
+#   BELOW TLS — so TLS-encrypted MySQL/PostgreSQL sessions ARE decoded (the thing passive
+#   network capture can't do). Requires: Linux kernel ≥ 5.8 with BTF, a privileged container
+#   with --pid host, and a DB built against OpenSSL (libssl). Runs ON the DB host.
+`
+      : m === 'network' ? `# CAPTURE_IFACE=any sniffs all interfaces (on-host + remote clients). Narrow it to a
 #   specific NIC (e.g. eth0/ens4) for remote-only, or 'lo' for on-host only. Note:
 #   the passive sniffer reads PLAINTEXT — TLS-encrypted client sessions aren't decoded.
 ` : '';
-    return `# Prerequisite: Docker must be installed on the VM / bare-metal host.
-#   Debian/Ubuntu:  curl -fsSL https://get.docker.com | sudo sh
-#   RHEL/Rocky:     sudo dnf install -y docker && sudo systemctl enable --now docker
-${capNote}docker run -d --name toovix-agent-${m} --restart unless-stopped${flags} \\
+    return `${prereq}${note}docker run -d --name toovix-agent-${m} --restart unless-stopped${flags} \\
 ${envLines.join(' \\\n')} \\
   ${img}`;
   }

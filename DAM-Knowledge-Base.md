@@ -101,8 +101,12 @@ decoders, column/role-aware policy, and NATS publish are later increments. **Inc
 (BUILD-LOG §9l):** `MODE=network` now does **real passive capture** — a pure-Go `AF_PACKET` raw
 socket sniffs the DB's NIC (container shares `client-mysql`'s net namespace), decodes the MySQL wire
 protocol, and captures with attribution + tags, running in parallel with the proxy (instance shows
-**Network + Inline Proxy** coverage). **Host (eBPF) mode** stays a stub on macOS — to be validated
-for real on a Linux VM (no eBPF on Docker Desktop). So 2 of the 3 installable modes are real in dev.
+**Network + Inline Proxy** coverage). **Host (eBPF) mode** is now implemented (BUILD-LOG §65):
+`MODE=host` attaches uprobes to the DB's OpenSSL (`SSL_read`/`SSL_write`) and captures the wire
+protocol **below TLS** — decoding TLS-encrypted MySQL/PostgreSQL that passive network capture can't.
+It reuses the same wire decoders; the eBPF object is compiled (clang/bpf2go, amd64) and embedded in
+the single Go binary. Compile-verified + boots in `mode=host`; runtime attach validated on a real
+Linux VM (no eBPF on Docker Desktop). All 3 installable modes now have real capture code.
 
 **First-class instance model** (BUILD-LOG §9h→§9i) — **now realizes the canonical
 [§10.2](#102-asset-inventory--classification-7-tables) `db_instances` design** (the central asset
