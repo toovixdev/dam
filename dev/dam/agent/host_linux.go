@@ -44,6 +44,7 @@ const (
 	offSSL     = 8
 	offLen     = 16
 	offDir     = 20
+	offTrunc   = 21
 	offComm    = 22
 )
 
@@ -181,6 +182,7 @@ func runHost(cfg Config) {
 		ssl := binary.LittleEndian.Uint64(b[offSSL : offSSL+8])
 		dlen := int(binary.LittleEndian.Uint32(b[offLen : offLen+4]))
 		dir := b[offDir]
+		truncated := b[offTrunc] != 0
 		data := b[evtHdrLen:]
 		if dlen > len(data) {
 			dlen = len(data)
@@ -233,6 +235,9 @@ func runHost(cfg Config) {
 				st.buf = frameAndDecode(st, buf, onQuery)
 			}
 		} else { // server→client = the result set
+			if truncated && st.haveQuery {
+				st.respTruncated = true // large read — row count becomes a floor; tag it on emit
+			}
 			resp := append(st.respBuf, data...)
 			switch cfg.Engine {
 			case "postgresql":

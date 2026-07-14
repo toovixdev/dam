@@ -322,9 +322,10 @@ func parseResponse(cfg Config, st *connState, buf []byte) []byte {
 // emitCaptured ships the pending query with its real row count, then resets.
 func emitCaptured(cfg Config, st *connState, rowCount int) {
 	if st.haveQuery {
-		forwardEvent(cfg, st.principal, st.pendingIP, st.pendingSQL, rowCount)
+		forwardEvent(cfg, st.principal, st.pendingIP, st.pendingSQL, rowCount, st.respTruncated)
 	}
 	st.haveQuery = false
+	st.respTruncated = false
 	st.rs = nrIdle
 	st.rowCount = 0
 }
@@ -1181,6 +1182,7 @@ type connState struct {
 	pendingSQL  string // the query awaiting its result set
 	pendingIP   string
 	haveQuery   bool
+	respTruncated bool // host mode: a response chunk hit the eBPF size cap → large read, count is a floor
 	pgStartupDone bool // postgres: startup message consumed (principal pulled from it)
 	pgSSLReplyPending bool // postgres: client sent SSLRequest; skip the server's 1-byte reply
 	// SQL Server / TDS: messages span multiple packets, reassembled by direction until EOM.
@@ -1310,7 +1312,7 @@ func processPackets(cfg Config, st *connState, buf []byte, client, upstream net.
 				go raiseAlert(cfg, st.principal, clientIP, sql)
 				go quarantineSession(cfg, st.principal, clientIP, sql)
 			} else {
-				forwardEvent(cfg, st.principal, clientIP, sql, 0)
+				forwardEvent(cfg, st.principal, clientIP, sql, 0, false)
 			}
 		}
 
@@ -1781,13 +1783,19 @@ func readLenencInt(b []byte) (uint64, int) {
 }
 
 // ── Event forwarding to the control plane ────────────────────────────
-func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int) {
+func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, large bool) {
 	sql = strings.TrimSpace(sql)
 	if sql == "" {
 		return
 	}
 	tags := detectTags(sql)
 	tags = append(tags, classifyTags(sql)...) // tags from the agent's own classification scan
+	if large {
+		// The response exceeded the eBPF capture window (>16KB): a large read. row_count is a
+		// floor, so volume thresholds can't be trusted — this tag lets a policy fire on the
+		// large read itself (esp. combined with the pii/pci tags from a sensitive table).
+		tags = append(tags, "large-result")
+	}
 	ev := map[string]interface{}{
 		"database_name": cfg.TargetDB,
 		"principal":     principal,
