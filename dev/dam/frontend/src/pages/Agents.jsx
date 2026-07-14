@@ -334,7 +334,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
             <option value="binary">Static binary + systemd (no Docker)</option>
             <option value="docker">Docker image</option>
             <option value="package">OS package (.deb / .rpm)</option>
-            <option value="kubernetes">Kubernetes (Helm)</option>
+            {/* Kubernetes (Helm) hidden until a chart is published — the registry is a placeholder. */}
           </select>
 
           <div className="section-label">Data classification</div>
