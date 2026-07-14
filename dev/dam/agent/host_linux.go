@@ -194,6 +194,10 @@ func runHost(cfg Config) {
 
 		key := strconv.FormatUint(ssl, 16)
 		if dir == evtDirClose {
+			// Flush a query whose response never completed (see below) before dropping the conn.
+			if st := conns[key]; st != nil {
+				emitCaptured(cfg, st, st.rowCount)
+			}
 			delete(conns, key)
 			continue
 		}
@@ -205,6 +209,14 @@ func runHost(cfg Config) {
 
 		if dir == evtDirRead { // client→server on the server = the SQL query
 			onQuery := func(sql string) {
+				// Unlike network mode (which sees whole packets), eBPF caps each SSL_write at
+				// MAX_DATA, so a large result set is truncated and parseResponse never sees the
+				// terminator — the query would never emit. Flush the previous query here (its
+				// full result has been consumed by now, since MySQL is synchronous per conn) so
+				// it's captured with a best-effort row count.
+				if st.haveQuery {
+					emitCaptured(cfg, st, st.rowCount)
+				}
 				st.pendingSQL = sql
 				st.pendingIP = "" // no peer IP below TLS; principal comes from the wire
 				st.haveQuery = true
