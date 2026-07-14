@@ -11,6 +11,16 @@ const nodemailer = require('nodemailer');
 const mysql = require('mysql2/promise');
 const QRCode = require('qrcode');
 
+// Safety net: an unhandled rejection in an async route (e.g. a failing pg query) must NOT
+// take down the whole control plane — Node exits on unhandled rejections by default. Log
+// and keep serving; individual requests still fail, but the API stays up for everyone else.
+process.on('unhandledRejection', (reason) => {
+  console.error('[unhandledRejection]', (reason && reason.message) || reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[uncaughtException]', (err && err.message) || err);
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '5mb' })); // room for base64 branding logos
@@ -4230,16 +4240,25 @@ app.post('/api/instances', authRequired, async (req, res) => {
 
 // Decommission a whole instance — removes its agents, databases, and the instance.
 app.delete('/api/instances/:id', authRequired, async (req, res) => {
-  const dbIds = (await pgPool.query('SELECT id FROM databases WHERE instance_id = $1', [req.params.id])).rows.map((r) => r.id);
-  await pgPool.query('DELETE FROM agents WHERE instance_id = $1', [req.params.id]);
-  if (dbIds.length) {
-    await pgPool.query('DELETE FROM agents WHERE database_id = ANY($1)', [dbIds]);
-    await pgPool.query('DELETE FROM alerts WHERE database_id = ANY($1)', [dbIds]);
-    await pgPool.query('DELETE FROM databases WHERE instance_id = $1', [req.params.id]);
+  try {
+    const dbIds = (await pgPool.query('SELECT id FROM databases WHERE instance_id = $1', [req.params.id])).rows.map((r) => r.id);
+    await pgPool.query('DELETE FROM agents WHERE instance_id = $1', [req.params.id]);
+    if (dbIds.length) {
+      // Clear every FK child of `databases` before the databases themselves, else the
+      // delete violates a foreign key (agents, alerts, classified_columns, classified_objects).
+      await pgPool.query('DELETE FROM agents WHERE database_id = ANY($1)', [dbIds]);
+      await pgPool.query('DELETE FROM alerts WHERE database_id = ANY($1)', [dbIds]);
+      await pgPool.query('DELETE FROM classified_columns WHERE database_id = ANY($1)', [dbIds]);
+      await pgPool.query('DELETE FROM classified_objects WHERE database_id = ANY($1)', [dbIds]);
+      await pgPool.query('DELETE FROM databases WHERE instance_id = $1', [req.params.id]);
+    }
+    const { rowCount } = await pgPool.query('DELETE FROM db_instances WHERE id = $1', [req.params.id]);
+    if (!rowCount) return res.status(404).json({ error: 'Instance not found' });
+    res.json({ message: 'Instance decommissioned', databases_removed: dbIds.length });
+  } catch (e) {
+    console.error('[Instances] decommission failed:', e.message);
+    res.status(500).json({ error: 'Failed to decommission instance' });
   }
-  const { rowCount } = await pgPool.query('DELETE FROM db_instances WHERE id = $1', [req.params.id]);
-  if (!rowCount) return res.status(404).json({ error: 'Instance not found' });
-  res.json({ message: 'Instance decommissioned', databases_removed: dbIds.length });
 });
 
 // ── Agents ────────────────────────────────────────────────
