@@ -504,35 +504,41 @@ helm install dam-${m} toovix/dam-agent \\
   }
 
   if (format === 'package') {
-    return `# Debian/Ubuntu (.deb) — RHEL/rpm is analogous
-curl -fsSL ${cp}/api/download/dam-agent.deb -o dam-agent.deb
-sudo dpkg -i dam-agent.deb
+    return `# Debian/Ubuntu (.deb) — RHEL/Rocky: sudo dnf install ./dam-agent-<ver>.x86_64.rpm
+curl -fsSL ${cp}/api/download/dam-agent_amd64.deb -o dam-agent.deb
+sudo dpkg -i dam-agent.deb   # installs the binary + dam-agent.service + /etc/toovix/agent.env
+
+# Set your config, then start:
 sudo tee /etc/toovix/agent.env >/dev/null <<'EOF'
 ${env.join('\n')}
 EOF
-sudo systemctl enable --now toovix-agent`;
+sudo systemctl enable --now dam-agent
+journalctl -u dam-agent -f`;
   }
 
-  // Default: static binary (no Docker, no dependencies) — run directly or as a service.
-  return `# 1) Download the static binary (Linux x86_64 — no Docker, no deps)
+  // Default: static binary (eBPF embedded, no Docker, no deps) — installed as a root service.
+  return `# 1) Download the static binary (Linux x86_64 — eBPF embedded, no deps)
 curl -fsSL ${cp}/api/download/dam-agent-linux-amd64 -o /usr/local/bin/dam-agent
-chmod +x /usr/local/bin/dam-agent
+sudo chmod +x /usr/local/bin/dam-agent
 
-# 2a) Run it directly:
-sudo ${env.join(' \\\n  ')} \\
-  /usr/local/bin/dam-agent
-
-# 2b) …or install as a systemd service:
-sudo tee /etc/systemd/system/toovix-agent-${m}.service >/dev/null <<'EOF'
+# 2) Config + systemd service (runs as root — host/network capture needs privilege):
+sudo mkdir -p /etc/toovix
+sudo tee /etc/toovix/agent.env >/dev/null <<'EOF'
+${env.join('\n')}
+EOF
+sudo tee /etc/systemd/system/dam-agent.service >/dev/null <<'EOF'
 [Unit]
-Description=TooVix DAM agent (${m})
-After=network.target
+Description=TooVix DAM agent
+After=network-online.target
+Wants=network-online.target
 [Service]
-${env.map((e) => `Environment=${e}`).join('\n')}
+EnvironmentFile=/etc/toovix/agent.env
 ExecStart=/usr/local/bin/dam-agent
 Restart=always
+RestartSec=5
+User=root
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo systemctl daemon-reload && sudo systemctl enable --now toovix-agent-${m}`;
+sudo systemctl daemon-reload && sudo systemctl enable --now dam-agent`;
 }
