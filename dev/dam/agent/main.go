@@ -24,9 +24,11 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf16"
 
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
+	_ "github.com/microsoft/go-mssqldb"
 )
 
 type Config struct {
@@ -109,12 +111,12 @@ func main() {
 	go heartbeatLoop(cfg, agentID)
 
 	// Classification runs alongside ANY capture mode (it just needs a DB read login).
-	classifiable := cfg.Engine == "mysql" || cfg.Engine == "postgresql"
+	classifiable := cfg.Engine == "mysql" || cfg.Engine == "postgresql" || cfg.Engine == "mssql"
 	if cfg.Classify && cfg.DBUser != "" && classifiable {
 		go classifyLoop(cfg)     // periodic (CLASSIFY_INTERVAL_MIN)
 		go scanTriggerLoop(cfg)  // on-demand — the "Run Scan" button
 	} else if cfg.Classify {
-		log.Printf("classification enabled but skipped (need DB_USER and engine mysql|postgresql; postgres also needs DB_NAME)")
+		log.Printf("classification enabled but skipped (need DB_USER and engine mysql|postgresql|mssql; postgres/mssql also need DB_NAME)")
 	}
 
 	switch cfg.Mode {
@@ -213,7 +215,6 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 	if len(payload) == 0 {
 		return
 	}
-	pg := cfg.Engine == "postgresql"
 	// A connection is keyed by the CLIENT's ip:port, computed the same in both directions.
 	if dstPort == targetPort { // client → server (queries)
 		key := fmt.Sprintf("%s:%d", srcIP, srcPort)
@@ -230,10 +231,14 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 			st.rs = nrIdle
 			st.rowCount = 0
 		}
-		if pg {
-			st.buf = frameAndDecodePG(st, append(st.buf, payload...), onQuery)
-		} else {
-			st.buf = frameAndDecode(st, append(st.buf, payload...), onQuery)
+		data := append(st.buf, payload...)
+		switch cfg.Engine {
+		case "postgresql":
+			st.buf = frameAndDecodePG(st, data, onQuery)
+		case "mssql":
+			st.buf = frameAndDecodeTDS(st, data, onQuery)
+		default:
+			st.buf = frameAndDecode(st, data, onQuery)
 		}
 	} else if srcPort == targetPort { // server → client (result sets)
 		key := fmt.Sprintf("%s:%d", dstIP, dstPort)
@@ -241,10 +246,14 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 		if st == nil {
 			return // response for a connection we never saw open — ignore
 		}
-		if pg {
-			st.respBuf = parseResponsePG(cfg, st, append(st.respBuf, payload...))
-		} else {
-			st.respBuf = parseResponse(cfg, st, append(st.respBuf, payload...))
+		resp := append(st.respBuf, payload...)
+		switch cfg.Engine {
+		case "postgresql":
+			st.respBuf = parseResponsePG(cfg, st, resp)
+		case "mssql":
+			st.respBuf = parseResponseTDS(cfg, st, resp)
+		default:
+			st.respBuf = parseResponse(cfg, st, resp)
 		}
 	}
 }
@@ -506,6 +515,175 @@ func parseResponsePG(cfg Config, st *connState, buf []byte) []byte {
 	}
 }
 
+// ── SQL Server TDS wire decode (network mode) ────────────────────────────────
+// Engine-branched from handleFrame (cfg.Engine == "mssql"); MySQL/PG paths untouched.
+// TDS packets: [type:1][status:1][len:2 BE incl. header][spid:2][pktid:1][window:1][data].
+// A logical message spans packets of one type until the EOM status bit (0x01). Passive —
+// cleartext only (TDS is TLS-encrypted when the client negotiates Encrypt; then opaque).
+
+func utf16le(b []byte) string {
+	if len(b) < 2 {
+		return ""
+	}
+	if len(b)%2 != 0 {
+		b = b[:len(b)-1]
+	}
+	u := make([]uint16, len(b)/2)
+	for i := range u {
+		u[i] = uint16(b[i*2]) | uint16(b[i*2+1])<<8
+	}
+	return string(utf16.Decode(u))
+}
+
+// stripAllHeaders removes the ALL_HEADERS block that precedes the SQL text in a
+// SQLBatch (TDS 7.2+): [TotalLength:4 LE][headers…]. Returns the bytes after it.
+func stripAllHeaders(d []byte) []byte {
+	if len(d) < 4 {
+		return d
+	}
+	total := int(d[0]) | int(d[1])<<8 | int(d[2])<<16 | int(d[3])<<24
+	if total >= 4 && total <= len(d) {
+		return d[total:]
+	}
+	return d // older TDS with no ALL_HEADERS
+}
+
+// tdsLogin7User pulls the connecting username from a LOGIN7 message (36-byte fixed
+// header, then offset/length pairs; ibUserName@40, cchUserName@42, value in UTF-16LE).
+func tdsLogin7User(d []byte) string {
+	if len(d) < 44 {
+		return ""
+	}
+	ib := int(d[40]) | int(d[41])<<8
+	cch := int(d[42]) | int(d[43])<<8
+	if ib <= 0 || cch <= 0 || ib+cch*2 > len(d) {
+		return ""
+	}
+	return utf16le(d[ib : ib+cch*2])
+}
+
+// tdsRPCSql best-effort-extracts the SQL from an RPC message — the sp_executesql case,
+// whose first parameter is the @stmt NVARCHAR (UTF-16LE). Returns "" if it can't parse.
+func tdsRPCSql(d []byte) string {
+	d = stripAllHeaders(d)
+	if len(d) < 4 {
+		return ""
+	}
+	p := 0
+	nameLen := int(d[0]) | int(d[1])<<8
+	if nameLen == 0xFFFF {
+		p = 4 // 0xFFFF + ProcID(2)
+	} else {
+		p = 2 + nameLen*2
+	}
+	p += 2 // OptionFlags
+	if p >= len(d) {
+		return ""
+	}
+	pnl := int(d[p])
+	p += 1 + pnl*2 // param name len (chars) + name
+	p++            // status flags
+	if p >= len(d) {
+		return ""
+	}
+	tid := d[p]
+	p++
+	if tid == 0xE7 { // NVARCHARTYPE: maxlen(2) collation(5) then len(2)+UTF-16LE data
+		p += 2 + 5
+		if p+2 > len(d) {
+			return ""
+		}
+		vlen := int(d[p]) | int(d[p+1])<<8
+		p += 2
+		if vlen == 0xFFFF || p+vlen > len(d) {
+			return ""
+		}
+		return utf16le(d[p : p+vlen])
+	}
+	return ""
+}
+
+// frameAndDecodeTDS reassembles client→server TDS messages and extracts SQL from
+// SQLBatch (0x01) and RPC (0x03); LOGIN7 (0x10) yields the principal.
+func frameAndDecodeTDS(st *connState, buf []byte, onQuery func(sql string)) []byte {
+	for len(buf) >= 8 {
+		plen := int(buf[2])<<8 | int(buf[3]) // big-endian, includes the 8-byte header
+		if plen < 8 || plen > 1<<20 {
+			return nil // desync (likely TLS) — drop
+		}
+		if len(buf) < plen {
+			return buf
+		}
+		typ := buf[0]
+		eom := buf[1]&0x01 != 0
+		data := buf[8:plen]
+		buf = buf[plen:]
+		if len(st.tdsReq) == 0 {
+			st.tdsReqType = typ
+		}
+		st.tdsReq = append(st.tdsReq, data...)
+		if !eom {
+			continue
+		}
+		msg := st.tdsReq
+		st.tdsReq = nil
+		switch st.tdsReqType {
+		case 0x01: // SQLBatch — ad-hoc SQL as UTF-16LE after ALL_HEADERS
+			if sql := strings.TrimSpace(utf16le(stripAllHeaders(msg))); sql != "" {
+				onQuery(sql)
+			}
+		case 0x03: // RPC — parameterized (sp_executesql), best-effort
+			if sql := strings.TrimSpace(tdsRPCSql(msg)); sql != "" {
+				onQuery(sql)
+			}
+		case 0x10: // LOGIN7
+			if u := tdsLogin7User(msg); u != "" {
+				st.principal = u
+			}
+		}
+	}
+	return buf
+}
+
+// parseResponseTDS reassembles server→client TDS messages and, on EOM, emits the pending
+// query with the row count from the terminating DONE/DONEPROC/DONEINPROC token
+// ([token:1][status:2][curcmd:2][rowcount:8 LE] = 13 bytes at the tail of the message).
+func parseResponseTDS(cfg Config, st *connState, buf []byte) []byte {
+	for len(buf) >= 8 {
+		plen := int(buf[2])<<8 | int(buf[3])
+		if plen < 8 || plen > 1<<20 {
+			return nil
+		}
+		if len(buf) < plen {
+			return buf
+		}
+		eom := buf[1]&0x01 != 0
+		st.tdsResp = append(st.tdsResp, buf[8:plen]...)
+		buf = buf[plen:]
+		if !eom {
+			continue
+		}
+		msg := st.tdsResp
+		st.tdsResp = nil
+		if !st.haveQuery {
+			continue
+		}
+		n := 0
+		if len(msg) >= 13 {
+			if t := msg[len(msg)-13]; t == 0xFD || t == 0xFE || t == 0xFF {
+				rc := msg[len(msg)-8:]
+				var v uint64
+				for i := 7; i >= 0; i-- {
+					v = v<<8 | uint64(rc[i])
+				}
+				n = int(v)
+			}
+		}
+		emitCaptured(cfg, st, n)
+	}
+	return buf
+}
+
 func htons(i uint16) uint16 { return (i<<8)&0xff00 | i>>8 }
 
 func atoiDefault(s string, d int) int {
@@ -716,11 +894,75 @@ func scanTargets(cfg Config) ([]scanTarget, error) {
 		}
 		return ts, nil
 	}
+	if cfg.Engine == "mssql" {
+		dbList, err := resolveMSSQLDatabases(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if len(dbList) == 0 {
+			return nil, fmt.Errorf("mssql classification: no databases to scan (set DB_NAME=<db>[,<db>] or '*')")
+		}
+		// SQL Server's information_schema is per-database, like Postgres.
+		const q = `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
+			WHERE table_schema NOT IN ('sys')
+			ORDER BY table_schema, table_name, ordinal_position`
+		ts := make([]scanTarget, 0, len(dbList))
+		for _, d := range dbList {
+			ts = append(ts, scanTarget{driver: "sqlserver", dsn: mssqlDSN(cfg, d), query: q, dbLabel: d})
+		}
+		return ts, nil
+	}
 	const q = `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
 		WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
 		ORDER BY table_schema, table_name, ordinal_position`
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/information_schema?timeout=8s&readTimeout=20s&allowNativePasswords=true", cfg.DBUser, cfg.DBPass, cfg.TargetHost, cfg.TargetPort)
 	return []scanTarget{{driver: "mysql", dsn: dsn, query: q, dbLabel: ""}}, nil
+}
+
+// mssqlDSN builds a go-mssqldb URL for one database. encrypt=disable keeps the scan
+// cleartext (also lets the sniffer see it); TrustServerCertificate covers self-signed.
+func mssqlDSN(cfg Config, dbname string) string {
+	return fmt.Sprintf("sqlserver://%s:%s@%s:%s?database=%s&encrypt=disable&TrustServerCertificate=true&dial+timeout=8&connection+timeout=20",
+		url.QueryEscape(cfg.DBUser), url.QueryEscape(cfg.DBPass), cfg.TargetHost, cfg.TargetPort, url.QueryEscape(dbname))
+}
+
+// resolveMSSQLDatabases turns DB_NAME into the SQL Server databases to scan:
+// explicit "a,b", or "" / "*" → auto-discover user databases (skipping the 4 system DBs).
+func resolveMSSQLDatabases(cfg Config) ([]string, error) {
+	auto := strings.TrimSpace(cfg.DBName) == ""
+	var explicit []string
+	for _, p := range strings.Split(cfg.DBName, ",") {
+		if p = strings.TrimSpace(p); p == "*" {
+			auto = true
+		} else if p != "" {
+			explicit = append(explicit, p)
+		}
+	}
+	if !auto {
+		return explicit, nil
+	}
+	boot := "master"
+	if len(explicit) > 0 {
+		boot = explicit[0]
+	}
+	db, err := sql.Open("sqlserver", mssqlDSN(cfg, boot))
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	rows, err := db.Query("SELECT name FROM sys.databases WHERE database_id > 4 AND state = 0 ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var n string
+		if rows.Scan(&n) == nil {
+			out = append(out, n)
+		}
+	}
+	return out, nil
 }
 
 func runClassificationScan(cfg Config) error {
@@ -937,6 +1179,10 @@ type connState struct {
 	haveQuery   bool
 	pgStartupDone bool // postgres: startup message consumed (principal pulled from it)
 	pgSSLReplyPending bool // postgres: client sent SSLRequest; skip the server's 1-byte reply
+	// SQL Server / TDS: messages span multiple packets, reassembled by direction until EOM.
+	tdsReqType byte
+	tdsReq     []byte // client→server message accumulation
+	tdsResp    []byte // server→client message accumulation
 }
 
 // network-mode response-parser states (mirror the proxy's masking state machine).
