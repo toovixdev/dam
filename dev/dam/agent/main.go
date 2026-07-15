@@ -57,6 +57,9 @@ type Config struct {
 	// host mode: tag a read 'large-result' when the total response exceeds this many bytes.
 	// Tunable without a rebuild; 0 disables the tag. Independent of the eBPF capture window.
 	LargeResultBytes int64
+	// audit-forward (AgentLite) mode: tail the DB's native audit log on the host.
+	AuditLog    string // path to the native audit log file to tail
+	AuditSource string // audit type (audit_log | pgaudit | sql_server_audit | unified_audit_trail | profiler)
 }
 
 func env(k, d string) string {
@@ -90,6 +93,8 @@ func loadConfig() Config {
 		DBName:    env("DB_NAME", ""),
 		ClassifyMins: atoiDefault(env("CLASSIFY_INTERVAL_MIN", "30"), 30),
 		LargeResultBytes: int64(atoiDefault(env("LARGE_RESULT_BYTES", "1048576"), 1048576)), // 1 MiB default
+		AuditLog:    env("AUDIT_LOG", ""),
+		AuditSource: env("AUDIT_SOURCE", ""),
 	}
 	if c.TargetDB == "" {
 		c.TargetDB = c.TargetHost + ":" + c.TargetPort
@@ -102,7 +107,7 @@ func loadConfig() Config {
 	return c
 }
 
-var agentTypeByMode = map[string]string{"network": "network", "host": "host_ebpf", "proxy": "inline_proxy"}
+var agentTypeByMode = map[string]string{"network": "network", "host": "host_ebpf", "proxy": "inline_proxy", "audit-forward": "audit_pull"}
 
 func main() {
 	cfg := loadConfig()
@@ -129,6 +134,8 @@ func main() {
 		runNetwork(cfg)
 	case "host":
 		runHost(cfg) // eBPF uprobe on libssl — captures below TLS (see host_linux.go)
+	case "audit-forward":
+		runAuditForward(cfg) // AgentLite — tail the DB's native audit log (see audit_forward.go)
 	default:
 		log.Printf("mode %q: capture not implemented in this build — enrolled + heartbeating only", cfg.Mode)
 		select {}
