@@ -242,6 +242,81 @@ function AgentlessFlow() {
   );
 }
 
+function ReferenceTopology() {
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-header">
+        <span className="card-title">Reference deployment topology — a cloud estate</span>
+        <span className="card-sub">how the modes land in practice · one VPC per DB · push to the bus</span>
+      </div>
+      <div className="card-body">
+        <svg viewBox="0 0 920 300" width="100%" style={{ maxHeight: 340 }} role="img" aria-label="Reference cloud topology: per-DB VPCs to Pub/Sub to DAM">
+          <defs>
+            <marker id="gtArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+              <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
+            </marker>
+          </defs>
+
+          {/* Customer estate frame */}
+          <rect x="8" y="8" width="272" height="284" rx="12" style={{ fill: 'none', stroke: V.line, strokeDasharray: '4 4' }} />
+          {T(20, 26, 'CUSTOMER ESTATE · per-DB VPC', V.muted, 9, 700, 'start')}
+
+          {/* VPC A — VM (host + AgentLite) */}
+          <rect x="20" y="36" width="248" height="66" rx="9" style={{ fill: V.surf, stroke: V.host, strokeWidth: 1.5 }} />
+          {T(34, 56, 'db-vm-a-vpc', V.ink, 11.5, 700, 'start')}{T(254, 56, '10.10.0.0/24', V.muted, 9, 600, 'end')}
+          {T(34, 74, 'MySQL on VM · orders', V.muted, 9, 500, 'start')}
+          {T(34, 91, '● Host eBPF / AgentLite forwarder', V.host, 9, 700, 'start')}
+
+          {/* VPC B — VM */}
+          <rect x="20" y="114" width="248" height="66" rx="9" style={{ fill: V.surf, stroke: V.host, strokeWidth: 1.5 }} />
+          {T(34, 134, 'db-vm-b-vpc', V.ink, 11.5, 700, 'start')}{T(254, 134, '10.20.0.0/24', V.muted, 9, 600, 'end')}
+          {T(34, 152, 'MySQL on VM · customers', V.muted, 9, 500, 'start')}
+          {T(34, 169, '● Host eBPF / AgentLite forwarder', V.host, 9, 700, 'start')}
+
+          {/* VPC C — PaaS */}
+          <rect x="20" y="192" width="248" height="74" rx="9" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
+          {T(34, 212, 'db-paas-vpc', V.ink, 11.5, 700, 'start')}{T(254, 212, '10.30.0.0/24', V.muted, 9, 600, 'end')}
+          {T(34, 230, 'Cloud SQL · PRIVATE IP only', V.muted, 9, 500, 'start')}
+          {T(34, 248, '● Agentless — native audit stream', V.agentless, 9, 700, 'start')}
+
+          {/* Cloud NAT egress band */}
+          <rect x="320" y="86" width="70" height="128" rx="8" style={{ fill: V.surf, stroke: V.line }} />
+          {T(355, 140, 'Cloud', V.muted, 10, 700)}{T(355, 155, 'NAT', V.muted, 10, 700)}
+          {T(355, 172, 'egress', V.muted, 8, 500)}{T(355, 184, 'only', V.muted, 8, 500)}
+
+          {/* Pub/Sub backbone */}
+          <rect x="470" y="110" width="150" height="80" rx="10" style={{ fill: V.surf, stroke: V.host, strokeWidth: 1.5 }} />
+          {T(545, 138, 'Pub/Sub', V.host, 13, 700)}{T(545, 156, 'toovix-dam-audit', V.muted, 8.5, 600)}
+          {T(545, 172, 'audit backbone', V.muted, 8.5, 500)}
+
+          {/* DAM control plane */}
+          <rect x="700" y="112" width="204" height="76" rx="10" style={{ fill: V.surf, stroke: V.line }} />
+          {T(802, 138, '🛡 TooVix DAM', V.ink, 12, 700)}{T(802, 155, 'connector pulls (keyless ADC)', V.muted, 8.5, 500)}
+          {T(802, 170, 'events → ClickHouse → alerts', V.muted, 8.5, 500)}
+
+          {/* arrows: each VPC → NAT → Pub/Sub */}
+          <line x1="268" y1="69" x2="318" y2="120" style={{ stroke: V.host }} markerEnd="url(#gtArrow)" />
+          <line x1="268" y1="147" x2="318" y2="150" style={{ stroke: V.host }} markerEnd="url(#gtArrow)" />
+          <line x1="268" y1="229" x2="318" y2="180" style={{ stroke: V.agentless }} markerEnd="url(#gtArrow)" />
+          <line x1="390" y1="150" x2="466" y2="150" style={{ stroke: V.ink }} markerEnd="url(#gtArrow)" />
+          {T(430, 143, 'publish', V.muted, 8.5, 600)}
+          {/* Pub/Sub → DAM (outbound pull) */}
+          <line x1="620" y1="150" x2="696" y2="150" style={{ stroke: V.host }} markerEnd="url(#gtArrow)" />
+          {T(660, 143, 'pull ↩', V.muted, 8.5, 600)}{T(660, 166, 'outbound', V.muted, 7.5, 500)}
+        </svg>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 8, fontSize: 12 }}>
+          <LegendItem c="var(--info)" t="Self-managed VM — Host eBPF (in-kernel) or AgentLite forwarder" />
+          <LegendItem c="var(--green)" t="Managed PaaS — Agentless native audit stream (no install, no path)" />
+          <LegendItem c="var(--muted)" t="Cloud NAT — each VPC egresses independently; no inbound, no hub peering" />
+        </div>
+        <p className="muted" style={{ fontSize: 11.5, margin: '10px 2px 0', lineHeight: 1.5 }}>
+          Each database sits in its <b>own VPC</b> — no VM↔VM peering, no shared collector network. Because capture <b>pushes outward</b> (the forwarder publishes; the PaaS DB emits its audit natively), every VPC needs only its existing <b style={{ color: 'var(--info)' }}>Cloud NAT</b> for egress — <b>nothing inbound is ever opened</b>, and no hub-and-spoke topology is required. All paths converge on one <b style={{ color: 'var(--info)' }}>Pub/Sub</b> bus; the DAM only ever <b>dials out</b> to consume it (keyless, via the host identity). Managed Cloud SQL is reached over a <b>private IP</b> only.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function CaptureModes() {
   const navigate = useNavigate();
 
@@ -256,6 +331,9 @@ export default function CaptureModes() {
 
       {/* Audit-based collection: AgentLite (VM) + Agentless (PaaS) */}
       <AgentlessFlow />
+
+      {/* Reference topology — modes mapped onto a real per-DB-VPC cloud estate */}
+      <ReferenceTopology />
 
       {/* Mode primer */}
       <div className="grid2" style={{ marginBottom: 14 }}>
