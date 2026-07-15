@@ -530,7 +530,7 @@ journalctl -u dam-agent@${m} -f`;
   return `# 1) Download the static binary (eBPF embedded, no deps). 'install' replaces it safely
 #    even if an agent is already running (avoids "text file busy").
 curl -fsSL ${cp}/api/download/dam-agent-linux-amd64 -o /tmp/dam-agent
-sudo install -m 0755 /tmp/dam-agent /usr/local/bin/dam-agent && rm -f /tmp/dam-agent
+sudo install -D -m 0755 /tmp/dam-agent /usr/local/bin/dam-agent && rm -f /tmp/dam-agent
 
 # 2) Install the systemd TEMPLATE once (lets host/network/proxy coexist as dam-agent@<mode>):
 sudo tee /etc/systemd/system/dam-agent@.service >/dev/null <<'EOF'
