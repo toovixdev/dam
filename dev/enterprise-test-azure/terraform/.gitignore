@@ -6,6 +6,10 @@
 crash.log
 crash.*.log
 
+# Saved plan files — binary, embed sensitive planned values. Never commit.
+tfplan*
+*.tfplan
+
 # Secrets / local vars — keep only the .example
 terraform.tfvars
 *.auto.tfvars
