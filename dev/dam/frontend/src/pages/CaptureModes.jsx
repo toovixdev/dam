@@ -6,7 +6,8 @@ const AGENTS = [
   { name: 'Network agent', tag: 'installed · passive', color: 'var(--primary)', desc: 'Sniffs the database’s network traffic and decodes the MySQL, PostgreSQL & SQL Server (TDS) wire protocols (libpcap-style). No path change, ~0 overhead. Sees every networked connection — including ones that bypass a proxy. Cleartext only — TLS-encrypted connections are opaque, and SQL Server clients encrypt by default (use the inline proxy or host/eBPF for those). Blind to local/IPC; cannot block.' },
   { name: 'Host agent (eBPF)', tag: 'installed · passive', color: 'var(--info)', desc: 'Runs on the DB host kernel. Sees every connection reaching the DB process — including local sockets / shared memory / IPC nothing else can. Deepest visibility; limited local enforcement.' },
   { name: 'Inline proxy', tag: 'installed · inline', color: 'var(--amber)', desc: 'A gateway in the data path — clients connect through it. The only mode that can block / quarantine, and the only one that sees the real end-user behind a pooled connection. Only sees traffic routed through it.' },
-  { name: 'Agentless (Pull / Push)', tag: 'no install', color: 'var(--green)', desc: 'Reads native DB audit logs / the DB profiler (Audit Pull, e.g. MongoDB’s system.profile) or consumes cloud audit streams (Cloud Push). Connects as a client — works for managed/PaaS and self-managed databases where you can’t (or don’t want to) install on the host. After-the-fact; cannot block.' },
+  { name: 'AgentLite (VM audit forwarder)', tag: 'lightweight · self-managed', color: 'var(--green)', desc: 'For self-managed DBs on a VM / on-prem: a lightweight forwarder on the host tails the database’s own native audit trail (MySQL/Percona audit, pgaudit, SQL Server Audit, Oracle Unified Audit/FGA, Mongo profiler) and ships it out — no wire tap, no path change, no SQL touched. Transport-independent, so it captures even TLS-encrypted sessions. After-the-fact — cannot block.' },
+  { name: 'Agentless (PaaS cloud stream)', tag: 'no install', color: 'var(--green)', desc: 'For managed / PaaS DBs (RDS / Aurora, Cloud SQL, Azure SQL, Atlas, OCI Autonomous): the cloud emits its native audit to a stream (Pub/Sub / Kinesis / Event Hub) and the DAM consumes it. Zero software on the host, nothing in the path — the only option for PaaS. Transport-independent; after-the-fact — cannot block.' },
 ];
 
 const PATHS = [
@@ -26,16 +27,16 @@ const COMBO_ROWS = [
   ['Containers to deploy', [['1', 'n'], ['1', 'n'], ['1', 'n'], ['2', 'n'], ['2', 'n'], ['3', 'n']]],
 ];
 
-const APPLIC_COLS = ['Deployment', 'Network', 'Host', 'Inline Proxy', 'Agentless', 'Recommended'];
+const APPLIC_COLS = ['Deployment', 'Network', 'Host', 'Inline Proxy', 'AgentLite / Agentless', 'Recommended'];
 const APPLIC_ROWS = [
-  ['On-prem (bare metal)', ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓ pull', 'g'], 'Network + Host (Full visibility); add Proxy to block'],
-  ['IaaS (VM — EC2 / Azure VM / GCE)', ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], 'Network + Host; Proxy if blocking required'],
-  ['AWS RDS / Aurora', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓ Cloud Push', 'g'], 'Cloud Push (agentless)'],
-  ['Azure SQL / Managed Instance', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓', 'g'], 'Cloud Push'],
-  ['Google Cloud SQL', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓', 'g'], 'Audit Pull / Push'],
-  ['MongoDB on VM / on-prem', ['⚠ wire decode', 'a'], ['⚠ host eBPF', 'a'], ['⚠ for blocking', 'a'], ['✓ profiler pull', 'g'], 'Audit Pull (DB profiler) — wire-protocol agents N/A yet'],
-  ['MongoDB Atlas', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓ webhook', 'g'], 'Cloud Push'],
-  ['OCI Autonomous', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓', 'g'], 'Audit Pull / Push'],
+  ['On-prem (bare metal)', ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓ AgentLite', 'g'], 'Network + Host for MySQL/PG · AgentLite forwarder for SQL Server/Oracle/Mongo · Proxy to block'],
+  ['IaaS (VM — EC2 / Azure VM / GCE)', ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓ AgentLite', 'g'], 'Network + Host for MySQL/PG · AgentLite forwarder for SQL Server/Oracle/Mongo · Proxy to block'],
+  ['AWS RDS / Aurora', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓ Agentless', 'g'], 'Agentless (cloud stream)'],
+  ['Azure SQL / Managed Instance', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓ Agentless', 'g'], 'Agentless (cloud stream)'],
+  ['Google Cloud SQL', ['✗', 'm'], ['✗', 'm'], ['⚠ in your VPC', 'a'], ['✓ Agentless', 'g'], 'Agentless (cloud stream)'],
+  ['MongoDB on VM / on-prem', ['⚠ wire decode', 'a'], ['⚠ host eBPF', 'a'], ['⚠ for blocking', 'a'], ['✓ AgentLite', 'g'], 'AgentLite (profiler forwarder) — wire-protocol agents N/A yet'],
+  ['MongoDB Atlas', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓ Agentless', 'g'], 'Agentless (Atlas webhook)'],
+  ['OCI Autonomous', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓ Agentless', 'g'], 'Agentless (cloud stream)'],
 ];
 
 const PRESETS = [
@@ -51,6 +52,68 @@ const COLOR = { g: 'var(--green)', a: 'var(--amber)', m: 'var(--muted)', n: 'var
 function Cell({ v }) {
   const [text, tone] = v;
   return <span style={{ color: COLOR[tone] || 'var(--ink)', fontWeight: tone === 'g' || tone === 'n' ? 600 : 500, fontSize: 12.5 }}>{text}</span>;
+}
+
+// How PRACTICAL each capture mode is per engine (real-world viability, independent of
+// build status) — driven by protocol openness, default encryption, and native-audit richness.
+const ENGINE_COLS = ['Engine', 'Network', 'Host (eBPF)', 'Inline Proxy', 'Agentless (audit)', 'Best fit'];
+const ENGINE_ROWS = [
+  ['MySQL',
+    ['High', 'g', 'simple protocol, often cleartext'],
+    ['High', 'g', 'Linux, below TLS, sees local'],
+    ['High', 'g', 'proxy-friendly; TLS-term + block'],
+    ['Med', 'a', 'PaaS great; audit plugin self-mgd'],
+    'Network (self-mgd) · Agentless (PaaS)'],
+  ['PostgreSQL',
+    ['High', 'g', 'clean protocol, cleartext common'],
+    ['High', 'g', 'Linux, below TLS'],
+    ['High', 'g', 'PgBouncer-style; TLS-term + block'],
+    ['High', 'g', 'pgaudit (free) / PaaS logs'],
+    'Network · pgaudit'],
+  ['SQL Server',
+    ['Low', 'r', 'encrypts by default → blind'],
+    ['Med', 'a', 'below TLS, but Windows = no eBPF'],
+    ['Med', 'a', 'TDS proxy viable; big build'],
+    ['High', 'g', 'SQL Audit / Event Hub, native'],
+    'Agentless (audit)'],
+  ['MongoDB',
+    ['Low', 'r', 'low value; TLS common (Atlas)'],
+    ['Low', 'r', 'pointless vs. profiler'],
+    ['Med', 'a', 'mongos-style; only to block'],
+    ['High', 'g', 'native profiler / audit — all ops'],
+    'Agentless (profiler)'],
+  ['Oracle',
+    ['Low', 'r', 'proprietary TNS + usually encrypted'],
+    ['Med', 'a', 'below encryption; low ROI'],
+    ['Low', 'r', '≈ rebuilding Oracle DB Firewall'],
+    ['High', 'g', 'Unified Audit + FGA, best-in-class'],
+    'Agentless (audit)'],
+];
+const PRAC_COLOR = { g: 'var(--green)', a: 'var(--amber)', r: 'var(--danger)' };
+function PracCell({ v }) {
+  const [label, tone, reason] = v;
+  return (
+    <div style={{ minWidth: 130 }}>
+      <div style={{ color: PRAC_COLOR[tone], fontWeight: 700, fontSize: 12.5 }}>{label}</div>
+      <div style={{ color: 'var(--muted)', fontSize: 11, lineHeight: 1.35, marginTop: 2 }}>{reason}</div>
+    </div>
+  );
+}
+
+// What TooVix actually builds per engine: MySQL/PG get the full stack; Oracle, SQL
+// Server and MongoDB are agentless-first (audit) — where passive/proxy/eBPF are low-ROI.
+const STRATEGY_COLS = ['Engine', 'Network', 'Host (eBPF)', 'Inline Proxy', 'Agentless (audit)', 'Approach'];
+const STRATEGY_ROWS = [
+  ['MySQL', 'y', 'y', 'y', 'y', 'Full stack — all four modes'],
+  ['PostgreSQL', 'y', 'y', 'y', 'y', 'Full stack — all four modes'],
+  ['SQL Server', 'n', 'n', 'n', 'y', 'Audit-first (AgentLite / Agentless)'],
+  ['Oracle', 'n', 'n', 'n', 'y', 'Audit-first (AgentLite / Agentless)'],
+  ['MongoDB', 'n', 'n', 'n', 'y', 'Audit-first (AgentLite / Agentless)'],
+];
+function StratCell({ v }) {
+  return v === 'y'
+    ? <span style={{ color: 'var(--green)', fontWeight: 700, fontSize: 12.5 }}>✓ build</span>
+    : <span style={{ color: 'var(--muted)', fontSize: 12.5 }}>—</span>;
 }
 
 const V = {
@@ -112,17 +175,67 @@ function CaptureDiagram() {
           <line x1="720" y1="191" x2="740" y2="191" style={{ stroke: V.agentless }} markerEnd="url(#cmArrow)" />
           {T(730, 184, 'audit', V.muted, 8.5, 500)}
           <rect x="742" y="168" width="128" height="46" rx="6" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
-          {T(806, 187, '④ Agentless', V.agentless, 11, 700)}{T(806, 202, 'Pull / Cloud Push', V.agentless, 9.5, 500)}
+          {T(806, 185, '④ Audit-based', V.agentless, 10.5, 700)}{T(806, 199, 'AgentLite · Agentless', V.agentless, 8.5, 500)}
         </svg>
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 8, fontSize: 12 }}>
           <LegendItem c="var(--primary)" t="① Network — on-host NIC sniff (pcap); or off-host SPAN/tap · observe" />
           <LegendItem c="var(--info)" t="② Host eBPF — on the DB host, kernel layer · observe (local + IPC)" />
           <LegendItem c="var(--amber)" t="③ Inline proxy — in the path · observe + BLOCK" />
-          <LegendItem c="var(--green)" t="④ Agentless — native audit logs, off-host · observe (PaaS)" />
+          <LegendItem c="var(--green)" t="④ Audit-based — AgentLite forwarder (VM) / Agentless cloud stream (PaaS) · observe" />
         </div>
         <p className="muted" style={{ fontSize: 11.5, margin: '10px 2px 0', lineHeight: 1.5 }}>
           The <b style={{ color: 'var(--primary)' }}>network</b> and <b style={{ color: 'var(--info)' }}>host</b> agents both run <b>on the DB host</b> — they differ by capture layer (NIC/pcap vs kernel), not location. The network agent can alternatively run off-host as a <b>SPAN port / traffic mirror</b>. Dashed lines = telemetry each agent sends <b>outbound</b> to the DAM (the control plane never connects into your DB network — which is why this works for private, no-public-IP databases). Only the <b style={{ color: 'var(--amber)' }}>inline proxy</b> sits in the traffic path, so it’s the only mode that can block in real time.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// Where the audit-based modes get their data: AgentLite (VM forwarder) + Agentless (PaaS
+// native stream) both converge on one Pub/Sub backbone the DAM consumes.
+function AgentlessFlow() {
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-header"><span className="card-title">Audit collection — AgentLite &amp; Agentless</span><span className="card-sub">both feed one Pub/Sub backbone · no wire tap</span></div>
+      <div className="card-body">
+        <svg viewBox="0 0 900 196" width="100%" style={{ maxHeight: 244 }} role="img" aria-label="AgentLite and Agentless audit data flow">
+          <defs>
+            <marker id="afArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+              <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
+            </marker>
+          </defs>
+          {/* PaaS source — native audit, no install */}
+          <rect x="16" y="30" width="176" height="46" rx="8" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
+          {T(104, 49, 'Managed DB (PaaS)', V.ink, 11, 700)}{T(104, 64, 'RDS · Cloud SQL · Azure SQL', V.muted, 8.5, 500)}
+          {/* VM source */}
+          <rect x="16" y="120" width="176" height="46" rx="8" style={{ fill: V.surf, stroke: V.line }} />
+          {T(104, 139, 'Self-managed DB VM', V.ink, 11, 700)}{T(104, 154, 'native audit → log file', V.muted, 8.5, 500)}
+          {/* AgentLite forwarder (VM path only) */}
+          <rect x="244" y="120" width="150" height="46" rx="8" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 2 }} />
+          {T(319, 139, 'AgentLite forwarder', V.agentless, 10.5, 700)}{T(319, 154, 'tails audit · ships', V.muted, 8.5, 500)}
+          {/* Pub/Sub backbone */}
+          <rect x="472" y="66" width="150" height="60" rx="10" style={{ fill: V.surf, stroke: V.host, strokeWidth: 1.5 }} />
+          {T(547, 90, 'Pub/Sub', V.host, 13, 700)}{T(547, 107, 'audit backbone', V.muted, 9, 500)}
+          {/* DAM */}
+          <rect x="700" y="72" width="184" height="48" rx="10" style={{ fill: V.surf, stroke: V.line }} />
+          {T(792, 92, '🛡 TooVix DAM', V.ink, 11.5, 700)}{T(792, 107, 'events → alerts', V.muted, 8.5, 500)}
+          {/* arrows */}
+          <line x1="192" y1="53" x2="468" y2="86" style={{ stroke: V.agentless }} markerEnd="url(#afArrow)" />
+          {T(330, 58, 'native audit stream', V.muted, 8.5, 500)}
+          <line x1="192" y1="143" x2="240" y2="143" style={{ stroke: V.ink }} markerEnd="url(#afArrow)" />
+          <line x1="394" y1="143" x2="468" y2="114" style={{ stroke: V.agentless }} markerEnd="url(#afArrow)" />
+          {T(432, 160, '→ Cloud Logging → bus', V.muted, 8.5, 500)}
+          <line x1="622" y1="96" x2="696" y2="96" style={{ stroke: V.host }} markerEnd="url(#afArrow)" />
+          {T(660, 90, 'consume', V.muted, 8.5, 500)}
+        </svg>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 8, fontSize: 12 }}>
+          <LegendItem c="var(--green)" t="AgentLite — lightweight forwarder on the self-managed VM (tails native audit)" />
+          <LegendItem c="var(--green)" t="Agentless — PaaS emits audit natively; nothing installed" />
+          <LegendItem c="var(--info)" t="Pub/Sub — one audit backbone the DAM consumes" />
+        </div>
+        <p className="muted" style={{ fontSize: 11.5, margin: '10px 2px 0', lineHeight: 1.5 }}>
+          Both paths converge on one <b style={{ color: 'var(--info)' }}>Pub/Sub</b> backbone. <b style={{ color: 'var(--green)' }}>PaaS</b> emits its audit to the stream with zero footprint; a <b style={{ color: 'var(--green)' }}>self-managed VM</b> uses the <b>AgentLite</b> forwarder to tail the DB’s native audit and ship it — no wire tap, no path change, transport-independent (captures TLS). Audit-based, so it’s <b>detective only</b> (after-the-fact) — for real-time blocking use the inline proxy.
         </p>
       </div>
     </div>
@@ -140,6 +253,9 @@ export default function CaptureModes() {
 
       {/* Visual overview */}
       <CaptureDiagram />
+
+      {/* Audit-based collection: AgentLite (VM) + Agentless (PaaS) */}
+      <AgentlessFlow />
 
       {/* Mode primer */}
       <div className="grid2" style={{ marginBottom: 14 }}>
@@ -203,7 +319,7 @@ export default function CaptureModes() {
 
       {/* Applicability by deployment type */}
       <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-header"><span className="card-title">What’s applicable by deployment type</span><span className="card-sub">IaaS / on-prem can install agents · PaaS goes agentless</span></div>
+        <div className="card-header"><span className="card-title">What’s applicable by deployment type</span><span className="card-sub">self-managed → AgentLite forwarder · PaaS → Agentless (cloud stream)</span></div>
         <div className="card-body no-pad" style={{ overflowX: 'auto' }}>
           <table className="data-table">
             <thead><tr>{APPLIC_COLS.map((c) => <th key={c}>{c}</th>)}</tr></thead>
@@ -224,6 +340,68 @@ export default function CaptureModes() {
       </div>
       <p className="muted" style={{ fontSize: 12, margin: '-6px 2px 16px' }}>
         ⚠ Inline proxy can front a PaaS database if it exposes a network endpoint you route through (you deploy the proxy in your own VPC, not on the managed host) — but agentless capture is the recommended fit for managed databases.
+      </p>
+
+      {/* How practical is each mode per engine */}
+      <div className="card" style={{ marginBottom: 6 }}>
+        <div className="card-header">
+          <span className="card-title">How practical is each mode — by database engine</span>
+          <span className="card-sub">protocol openness · default encryption · native-audit richness</span>
+        </div>
+        <div className="card-body no-pad" style={{ overflowX: 'auto' }}>
+          <table className="data-table">
+            <thead><tr>{ENGINE_COLS.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>
+              {ENGINE_ROWS.map((row) => (
+                <tr key={row[0]}>
+                  <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{row[0]}</td>
+                  <td><PracCell v={row[1]} /></td>
+                  <td><PracCell v={row[2]} /></td>
+                  <td><PracCell v={row[3]} /></td>
+                  <td><PracCell v={row[4]} /></td>
+                  <td style={{ fontSize: 12, fontWeight: 600 }}>{row[5]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="card-body" style={{ paddingTop: 10, display: 'flex', flexWrap: 'wrap', gap: '6px 16px', fontSize: 11.5 }}>
+          <span><b style={{ color: 'var(--green)' }}>High</b> practical</span>
+          <span><b style={{ color: 'var(--amber)' }}>Med</b> workable</span>
+          <span><b style={{ color: 'var(--danger)' }}>Low</b> poor fit</span>
+          <span className="muted">Passive <b>Network</b> can’t see TLS; <b>Proxy</b> / <b>Host</b> / <b>Agentless</b> can.</span>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12, margin: '4px 2px 16px', lineHeight: 1.5 }}>
+        As protocols get more proprietary and encryption becomes the default, the practical mode shifts <b>Network → audit-based</b>. Rule of thumb: <b>Network</b> for open-protocol, cleartext, self-managed DBs; <b>Inline proxy</b> when you must <b>block</b> encrypted traffic; <b>audit-based</b> — an <b>AgentLite</b> forwarder on self-managed VMs, <b>Agentless</b> cloud stream on PaaS — for encrypted, PaaS, and proprietary engines (SQL Server, MongoDB, Oracle).
+      </p>
+
+      {/* TooVix build strategy per engine */}
+      <div className="card" style={{ marginBottom: 6 }}>
+        <div className="card-header">
+          <span className="card-title">What TooVix builds — capture strategy per engine</span>
+          <span className="card-sub">full stack for open protocols · audit-first for the rest</span>
+        </div>
+        <div className="card-body no-pad" style={{ overflowX: 'auto' }}>
+          <table className="data-table">
+            <thead><tr>{STRATEGY_COLS.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+            <tbody>
+              {STRATEGY_ROWS.map((row) => (
+                <tr key={row[0]}>
+                  <td style={{ fontWeight: 700, whiteSpace: 'nowrap' }}>{row[0]}</td>
+                  <td><StratCell v={row[1]} /></td>
+                  <td><StratCell v={row[2]} /></td>
+                  <td><StratCell v={row[3]} /></td>
+                  <td><StratCell v={row[4]} /></td>
+                  <td style={{ fontSize: 12, fontWeight: 600 }}>{row[5]}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p className="muted" style={{ fontSize: 12, margin: '4px 2px 16px', lineHeight: 1.5 }}>
+        <b>MySQL &amp; PostgreSQL</b> get all four modes — open protocols, often cleartext, Linux hosts. <b>SQL Server, Oracle &amp; MongoDB</b> start <b>audit-first</b>: their proprietary / encrypted-by-default protocols make passive, proxy and eBPF low-ROI, while native audit (SQL Server Audit, Oracle Unified Audit/FGA, Mongo profiler) is complete and transport-independent. That audit is collected two ways: an <b>AgentLite forwarder</b> on self-managed VMs / on-prem, and <b>Agentless (cloud stream)</b> for PaaS.
       </p>
 
       {/* Data classification — orthogonal to capture */}

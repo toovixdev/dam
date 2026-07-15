@@ -172,8 +172,10 @@ export default function Agents() {
 }
 
 const MODES = [
-  // Ordered most-preferred (agentless) → least-practical (network); each desc ends with its caveat (⚠).
-  { id: 'agentless', name: 'Agentless (Audit Pull)', type: 'audit_pull', desc: 'Reads the DB’s native audit trail · no install · works with TLS · runs in your infra. ⚠ needs DB auditing enabled; after-the-fact (cannot block); adds some load to the DB.', tag: 'recommended' },
+  // Ordered most-preferred (AgentLite) → least-practical (network); each desc ends with its caveat (⚠).
+  // On self-managed VMs this is AgentLite (a lightweight audit forwarder on the host); on PaaS the
+  // equivalent is Agentless (a cloud audit stream, set up from Discovery — no install).
+  { id: 'agentless', name: 'AgentLite (Audit Forwarder)', type: 'audit_forward', desc: 'A lightweight forwarder on the DB host that tails the database’s native audit trail and ships it out · no wire tap, no path change · works with TLS. ⚠ needs DB auditing enabled; after-the-fact (cannot block).', tag: 'recommended' },
   { id: 'host', name: 'Host agent (eBPF)', type: 'host_ebpf', desc: 'Sees local/IPC + encrypted traffic (below TLS) · transparent, no reroute. ⚠ Linux-only (no Windows); privileged container; hardest to deploy.', tag: 'passive' },
   { id: 'proxy', name: 'Inline proxy', type: 'inline_proxy', desc: 'The only mode that can block · terminates TLS · sees the real end-user. ⚠ reroutes clients through it (connection-path change).', tag: 'inline' },
   { id: 'network', name: 'Network agent', type: 'network', desc: 'Passive · ~0 overhead · out-of-band, tamper-resistant. ⚠ least practical: cleartext only — blind to TLS and to local/IPC.', tag: 'passive' },
@@ -279,15 +281,15 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
         </>
       )}
 
-      <div className="section-label">Capture modes {isPaas ? '' : isFullStack ? '(most-preferred first · pick any combination)' : `(agentless-first for ${engineLabel})`}</div>
+      <div className="section-label">Capture modes {isPaas ? '' : isFullStack ? '(most-preferred first · pick any combination)' : `(AgentLite audit for ${engineLabel})`}</div>
       {!isPaas && !isFullStack && (
         <div style={{ background: 'rgba(22,163,74,.10)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
-          <b>{engineLabel}</b> uses a proprietary / encrypted-by-default protocol, so TooVix captures it <b>agentless</b> — reading the native audit trail (works with TLS, no host install). Network / host / proxy are reserved for MySQL &amp; PostgreSQL.
+          <b>{engineLabel}</b> uses a proprietary / encrypted-by-default protocol, so TooVix captures it with <b>AgentLite</b> — a lightweight forwarder on the host that ships the database&apos;s native audit trail (works with TLS). Network / host / proxy are reserved for MySQL &amp; PostgreSQL.
         </div>
       )}
       {isPaas ? (
         <div style={{ background: 'var(--amber-soft)', borderRadius: 10, padding: '12px 14px', fontSize: 12.5, lineHeight: 1.5 }}>
-          <b style={{ color: 'var(--amber)' }}>Managed / PaaS instance.</b> Host, Network and Inline Proxy can&apos;t be installed on a server you don&apos;t control. Use <b>agentless</b> capture instead — Audit-Log Pull or Cloud Push — from the Discovery wizard.
+          <b style={{ color: 'var(--amber)' }}>Managed / PaaS instance.</b> Host, Network and Inline Proxy can&apos;t be installed on a server you don&apos;t control. Use <b>Agentless</b> capture instead — a cloud audit stream (Pub/Sub · Kinesis · Event Hub), set up from the Discovery wizard. No install.
         </div>
       ) : (
         availableModes.map((m) => (
@@ -321,7 +323,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
           )}
           {has('agentless') && (
             <div style={{ background: 'rgba(22,163,74,.10)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
-              <b style={{ color: 'var(--green)' }}>Agentless (Audit Pull)</b> runs in <b>your</b> infrastructure — not on the DB host — and connects to the database to read its <b>native audit trail</b>. It&apos;s <b>transport-independent</b> (captures TLS-encrypted sessions) and the recommended mode for <b>SQL Server, Oracle and MongoDB</b>. Requires the DB&apos;s native auditing enabled + a least-privilege audit reader. After-the-fact — cannot block.
+              <b style={{ color: 'var(--green)' }}>AgentLite (Audit Forwarder)</b> is a lightweight forwarder on the DB host that tails the database&apos;s <b>native audit trail</b> and ships it out — no wire tap, no path change. It&apos;s <b>transport-independent</b> (captures TLS-encrypted sessions) and the recommended mode for <b>SQL Server, Oracle and MongoDB</b>. Requires the DB&apos;s native auditing enabled. After-the-fact — cannot block. (On PaaS the equivalent is <b>Agentless</b> — a cloud audit stream, no install.)
             </div>
           )}
         </>
@@ -417,8 +419,10 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   const agentless = m === 'agentless';
   const defPort = { postgresql: '5432', mssql: '1433', oracle: '1521', mongodb: '27017' }[eng] || '3306';
   const auditSrc = { oracle: 'unified_audit_trail', mssql: 'sql_server_audit', postgresql: 'pgaudit', mysql: 'audit_log', mongodb: 'profiler' }[eng] || 'native_audit';
+  // AgentLite tails this native audit source on the host (file where possible).
+  const auditLog = { mysql: '/var/lib/mysql/audit.log', mariadb: '/var/lib/mysql/server_audit.log', postgresql: '/var/log/postgresql/pgaudit.log', mssql: '/var/opt/mssql/audit/', oracle: '<UNIFIED_AUDIT_TRAIL>', mongodb: '/var/log/mongodb/audit.json' }[eng] || '<native-audit-log-path>';
   const env = [
-    `MODE=${agentless ? 'audit-pull' : m}`,
+    `MODE=${agentless ? 'audit-forward' : m}`,
     `DB_ENGINE=${eng}`,
     `TARGET_HOST=${host || target}`,
     `TARGET_PORT=${port || defPort}`,
@@ -437,14 +441,12 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     env.push(`LISTEN_PORT=${dbPort + 1}`, `UPSTREAM=${host || target}:${dbPort}`);
   }
   if (agentless) {
-    // Agentless connects to the DB as a least-privilege reader and pulls its native
-    // audit trail — no host install, runs in YOUR infra, transport-independent (TLS OK).
+    // AgentLite: a lightweight forwarder ON the DB host that tails the DB's native audit log
+    // and ships it out — no wire tap, no DB connection to capture (it reads the audit file).
     env.push(
-      `DB_USER=${opts.dbUser || 'dam_svc'}`,
-      `DB_PASSWORD=${opts.dbPass || '<audit-reader-password>'}`,
       `AUDIT_SOURCE=${auditSrc}`,
+      `AUDIT_LOG=${auditLog}`,
     );
-    if (eng === 'postgresql' || eng === 'mssql' || eng === 'oracle') env.push(`DB_NAME=${opts.dbName || '<database-name>'}`);
   } else if (opts.classify) {
     // Data classification (optional) — the agent logs into the DB as a least-privilege
     // reader and classifies columns. Attached to a single container by the caller.
@@ -464,24 +466,27 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     //   host    — eBPF uprobes on the DB's libssl → privileged + --pid host (to see the DB
     //             process, its /proc maps and libssl inode across mount namespaces).
     //   proxy   — inline TCP proxy; host network so its LISTEN_PORT is reachable on the host.
-    //   agentless — plain container, no special privileges.
+    //   agentless — AgentLite forwarder on the host; mount the native audit log read-only.
     let flags = '';
     if (m === 'network') flags = ' --network host --user 0 --cap-add NET_RAW --cap-add NET_ADMIN';
     else if (m === 'host') flags = ' --privileged --pid host --network host --user 0';
     else if (m === 'proxy') flags = ' --network host';
+    else if (agentless) flags = ` --user 0${auditLog.startsWith('/') ? ` -v ${auditLog}:${auditLog}:ro` : ''}`;
     const envLines = env.map((e) => `  -e ${e}`);
     const prereq = agentless
-      ? `# Prerequisite: Docker on ANY host in your network that can reach the DB (NOT the DB host).
+      ? `# Prerequisite: Docker on the DB host. AgentLite tails the DB's native audit log, so the
+#   database's own auditing must be ON, writing to ${auditLog}.
 `
       : `# Prerequisite: Docker must be installed on the VM / bare-metal host.
 #   Debian/Ubuntu:  curl -fsSL https://get.docker.com | sudo sh
 #   RHEL/Rocky:     sudo dnf install -y docker && sudo systemctl enable --now docker
 `;
     const note = agentless
-      ? `# Agentless (Audit Pull): runs in YOUR infra — connects to the DB as a least-privilege
-#   reader and pulls its native audit trail. No host install; works with TLS ON. Grant the
-#   reader audit-read (Oracle: SELECT on unified_audit_trail; SQL Server: db_datareader on
-#   the audit / VIEW SERVER AUDIT STATE; PostgreSQL: pgaudit log access).
+      ? `# AgentLite (Audit Forwarder): a lightweight forwarder ON the DB host that tails the
+#   database's native audit trail (${auditSrc}) and ships it out — no wire tap, no path change,
+#   captures TLS. Enable the DB's native auditing first (Oracle Unified Audit/FGA; SQL Server
+#   Audit; pgaudit; MySQL/MariaDB audit plugin; Mongo profiler). Detective only — cannot block.
+#   For PaaS databases use Agentless (cloud audit stream) from the Discovery wizard instead.
 `
       : m === 'host' ? `# Host agent (eBPF): attaches uprobes to the database's libssl and captures wire traffic
 #   BELOW TLS — so TLS-encrypted MySQL/PostgreSQL sessions ARE decoded (the thing passive
