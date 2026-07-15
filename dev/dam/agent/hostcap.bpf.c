@@ -24,7 +24,13 @@
 
 char LICENSE[] SEC("license") = "GPL";
 
-#define MAX_DATA 16384
+// Capture window per SSL_read/write. Must EXCEED the DB's largest single write so result
+// chunks are captured WHOLE — else the response framer desyncs and row counts undercount.
+// MySQL flushes result sets in net_buffer_length (default 16384) chunks, so 32K captures a
+// full chunk with headroom for wide rows. Power of two (verifier mask). The event is built
+// directly in the ring buffer (bpf_ringbuf_reserve), so it isn't bound by the ~32KB per-CPU
+// map-value limit — but each reserved record is this size, so don't set it gratuitously high.
+#define MAX_DATA 32768
 #define TASK_COMM_LEN 16
 // offsetof is provided by bpf_helpers.h
 
@@ -70,15 +76,6 @@ struct {
 	__type(value, char[TASK_COMM_LEN]);
 } target_comm SEC(".maps");
 
-// The event is far larger than the 512-byte BPF stack, so it is built in a
-// per-CPU scratch slot and copied to the ring buffer by exact length.
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__uint(max_entries, 1);
-	__type(key, __u32);
-	__type(value, struct ssl_event);
-} scratch SEC(".maps");
-
 static __always_inline int comm_matches(const char *comm)
 {
 	__u32 z = 0;
@@ -102,13 +99,16 @@ static __always_inline void submit(__u64 ssl, const void *buf, __s64 count, __u8
 	if (dir != DIR_CLOSE && count <= 0)
 		return;
 
-	__u32 z = 0;
-	struct ssl_event *e = bpf_map_lookup_elem(&scratch, &z);
-	if (!e)
+	// Filter before reserving ring-buffer space (avoids churn for non-DB processes).
+	char comm[TASK_COMM_LEN];
+	bpf_get_current_comm(&comm, sizeof(comm));
+	if (!comm_matches(comm))
 		return;
 
-	bpf_get_current_comm(&e->comm, sizeof(e->comm));
-	if (!comm_matches(e->comm))
+	// Build the event directly in the ring buffer: its data buffer is larger than a per-CPU
+	// map value may be (~32KB), so it can't be staged in a scratch map.
+	struct ssl_event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
+	if (!e)
 		return;
 
 	__u64 id = bpf_get_current_pid_tgid();
@@ -117,6 +117,7 @@ static __always_inline void submit(__u64 ssl, const void *buf, __s64 count, __u8
 	e->ssl = ssl;
 	e->dir = dir;
 	e->truncated = 0;
+	__builtin_memcpy(e->comm, comm, TASK_COMM_LEN);
 
 	// Report the REAL size (before we cap the captured bytes) so userspace can sum total
 	// bytes per query and apply a configurable large-read threshold independent of MAX_DATA.
@@ -136,8 +137,7 @@ static __always_inline void submit(__u64 ssl, const void *buf, __s64 count, __u8
 	}
 	e->len = cap;
 
-	__u64 sz = offsetof(struct ssl_event, data) + cap;
-	bpf_ringbuf_output(&events, e, sz, 0);
+	bpf_ringbuf_submit(e, 0);
 }
 
 SEC("uprobe/SSL_write")
