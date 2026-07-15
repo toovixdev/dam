@@ -16,8 +16,15 @@ resource "google_sql_database_instance" "paas" {
       private_network = google_compute_network.main.id
     }
 
-    # Audit-log option (agentless Cloud Push). Uncomment + wire a Log sink → Pub/Sub → collector.
-    # database_flags { name = "cloudsql_mysql_audit" value = "on" }
+    # Cloud SQL DB audit (agentless / PaaS path) → Cloud Logging → the sink in pubsub.tf → the
+    # audit topic. Gated because toggling it RESTARTS the instance.
+    dynamic "database_flags" {
+      for_each = var.enable_cloudsql_audit ? [1] : []
+      content {
+        name  = "cloudsql_mysql_audit"
+        value = "on"
+      }
+    }
 
     backup_configuration {
       enabled = false

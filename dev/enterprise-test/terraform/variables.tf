@@ -86,6 +86,12 @@ variable "cloudsql" {
   default = {}
 }
 
+variable "enable_cloudsql_audit" {
+  type        = bool
+  default     = false
+  description = "Turn on Cloud SQL's DB audit → Cloud Logging (feeds the Pub/Sub sink for the agentless path). Restarts the instance when toggled."
+}
+
 variable "enable_paas_proxy" {
   type        = bool
   default     = true
