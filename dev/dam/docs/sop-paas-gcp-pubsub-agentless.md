@@ -80,8 +80,8 @@ Set once:
 ```bash
 PROJECT=YOUR_PROJECT_ID
 INSTANCE=db-paas
-TOPIC=toovix-dam-db-audit
-SUB=toovix-dam-db-audit-sub
+TOPIC=toovix-dam-audit          # provisioned by dev/enterprise-test/terraform/pubsub.tf
+SUB=toovix-dam-audit-sub        # (A4/A5/A7 below are the manual equivalent of that module)
 DAM_IDENTITY="serviceAccount:dam-collector@DAM_PROJECT.iam.gserviceaccount.com"   # or the WIF principal
 ```
 
@@ -136,7 +136,7 @@ gcloud pubsub topics create $TOPIC --project=$PROJECT
 
 ### A5. Create the Log Sink → topic
 ```bash
-gcloud logging sinks create toovix-dam-db-audit-sink \
+gcloud logging sinks create toovix-dam-audit-sink \
   pubsub.googleapis.com/projects/$PROJECT/topics/$TOPIC --project=$PROJECT \
   --log-filter='resource.type="cloudsql_database" AND protoPayload.methodName="cloudsql.instances.query"'
 ```
@@ -144,7 +144,7 @@ gcloud logging sinks create toovix-dam-db-audit-sink \
 
 ### A6. Let the sink publish to the topic
 ```bash
-SINK_SA=$(gcloud logging sinks describe toovix-dam-db-audit-sink --project=$PROJECT --format='value(writerIdentity)')
+SINK_SA=$(gcloud logging sinks describe toovix-dam-audit-sink --project=$PROJECT --format='value(writerIdentity)')
 gcloud pubsub topics add-iam-policy-binding $TOPIC --project=$PROJECT --member="$SINK_SA" --role="roles/pubsub.publisher"
 ```
 
@@ -170,7 +170,7 @@ That single cross-org IAM binding is the *entire* connection — no VPC, no peer
 In the DAM UI: **Discovery → Cloud connectors → Connect a cloud**:
 - Provider **GCP**, project = `$PROJECT`.
 - Credential: **Keyless** (recommended — WIF/attached identity) or paste a read-only SA key.
-- **Pub/Sub subscription:** `toovix-dam-db-audit-sub` (or the full `projects/$PROJECT/subscriptions/...`).
+- **Pub/Sub subscription:** `toovix-dam-audit-sub` (or the full `projects/$PROJECT/subscriptions/...`).
 - Save. The DAM's subscriber loop begins pulling; the connector row shows **Agentless ingest = streaming**.
 
 (API equivalent: `POST /api/discovery/connectors { provider:"gcp", keyless:true, project, subscription }`.)

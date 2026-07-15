@@ -418,7 +418,7 @@ function AddConnector({ tenantClouds, cloudLabel, onClose, onSaved }) {
         </div>
       )}
       <div className="form-field"><label>Agentless ingestion — Pub/Sub subscription <span className="muted">(optional)</span></label>
-        <input value={subscription} onChange={(e) => setSubscription(e.target.value)} placeholder="toovix-dam-db-audit-sub (or projects/…/subscriptions/…)" />
+        <input value={subscription} onChange={(e) => setSubscription(e.target.value)} placeholder="toovix-dam-audit-sub (or projects/…/subscriptions/…)" />
         <span className="muted" style={{ fontSize: 11 }}>The subscription the DAM pulls managed-DB audit events from (Cloud Logging → Pub/Sub). Leave blank for discovery-only.</span>
       </div>
       <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end', gap: 8 }}>
