@@ -200,7 +200,7 @@ function ReferenceTopology() {
         <span className="card-sub">how the modes land in practice · one VPC per DB · push to the bus</span>
       </div>
       <div className="card-body">
-        <svg viewBox="0 0 940 300" width="100%" style={{ maxHeight: 350 }} role="img" aria-label="Reference cloud topology: VM path via Cloud NAT, PaaS path via Cloud Logging, both to Pub/Sub then DAM">
+        <svg viewBox="0 0 960 300" width="100%" style={{ maxHeight: 350 }} role="img" aria-label="Reference cloud topology: each VPC has its own Cloud NAT; only Pub/Sub is shared">
           <defs>
             <marker id="gtArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
               <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
@@ -208,65 +208,67 @@ function ReferenceTopology() {
           </defs>
 
           {/* Customer estate frame */}
-          <rect x="8" y="8" width="266" height="284" rx="12" style={{ fill: 'none', stroke: V.line, strokeDasharray: '4 4' }} />
-          {T(20, 25, 'CUSTOMER ESTATE · per-DB VPC', V.muted, 9, 700, 'start')}
+          <rect x="8" y="8" width="346" height="284" rx="12" style={{ fill: 'none', stroke: V.line, strokeDasharray: '4 4' }} />
+          {T(20, 25, 'CUSTOMER ESTATE · one VPC + its own Cloud NAT per DB', V.muted, 9, 700, 'start')}
 
-          {/* VPC A — VM (AgentLite) */}
-          <rect x="18" y="34" width="248" height="58" rx="9" style={{ fill: V.surf, stroke: V.net, strokeWidth: 1.5 }} />
-          {T(32, 53, 'db-vm-a-vpc', V.ink, 11, 700, 'start')}{T(252, 53, '10.10.0.0/24', V.muted, 8.5, 600, 'end')}
-          {T(32, 68, 'MySQL on VM · orders', V.muted, 8.5, 500, 'start')}
-          {T(32, 83, '● AgentLite forwarder (on the VM)', V.net, 8.5, 700, 'start')}
+          {/* VPC A — VM (AgentLite) + its own NAT */}
+          <rect x="18" y="34" width="210" height="58" rx="9" style={{ fill: V.surf, stroke: V.net, strokeWidth: 1.5 }} />
+          {T(30, 53, 'db-vm-a-vpc', V.ink, 11, 700, 'start')}{T(220, 53, '10.10.0.0/24', V.muted, 8, 600, 'end')}
+          {T(30, 68, 'MySQL on VM · orders', V.muted, 8, 500, 'start')}
+          {T(30, 83, '● AgentLite forwarder', V.net, 8.5, 700, 'start')}
+          <rect x="240" y="44" width="98" height="38" rx="7" style={{ fill: V.surf, stroke: V.net }} />
+          {T(289, 61, 'Cloud NAT', V.net, 9.5, 700)}{T(289, 74, 'db-vm-a-nat', V.muted, 7.5, 500)}
 
-          {/* VPC B — VM (AgentLite) */}
-          <rect x="18" y="102" width="248" height="58" rx="9" style={{ fill: V.surf, stroke: V.net, strokeWidth: 1.5 }} />
-          {T(32, 121, 'db-vm-b-vpc', V.ink, 11, 700, 'start')}{T(252, 121, '10.20.0.0/24', V.muted, 8.5, 600, 'end')}
-          {T(32, 136, 'MySQL on VM · customers', V.muted, 8.5, 500, 'start')}
-          {T(32, 151, '● AgentLite forwarder (on the VM)', V.net, 8.5, 700, 'start')}
+          {/* VPC B — VM (AgentLite) + its own NAT */}
+          <rect x="18" y="102" width="210" height="58" rx="9" style={{ fill: V.surf, stroke: V.net, strokeWidth: 1.5 }} />
+          {T(30, 121, 'db-vm-b-vpc', V.ink, 11, 700, 'start')}{T(220, 121, '10.20.0.0/24', V.muted, 8, 600, 'end')}
+          {T(30, 136, 'MySQL on VM · customers', V.muted, 8, 500, 'start')}
+          {T(30, 151, '● AgentLite forwarder', V.net, 8.5, 700, 'start')}
+          <rect x="240" y="112" width="98" height="38" rx="7" style={{ fill: V.surf, stroke: V.net }} />
+          {T(289, 129, 'Cloud NAT', V.net, 9.5, 700)}{T(289, 142, 'db-vm-b-nat', V.muted, 7.5, 500)}
 
-          {/* VPC C — PaaS */}
-          <rect x="18" y="170" width="248" height="64" rx="9" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
-          {T(32, 189, 'db-paas-vpc', V.ink, 11, 700, 'start')}{T(252, 189, '10.30.0.0/24', V.muted, 8.5, 600, 'end')}
-          {T(32, 205, 'Cloud SQL · PRIVATE IP · no agent', V.muted, 8.5, 500, 'start')}
-          {T(32, 221, '● native audit (emitted by GCP)', V.agentless, 8.5, 700, 'start')}
+          {/* VPC C — PaaS (audit bypasses NAT) */}
+          <rect x="18" y="170" width="210" height="64" rx="9" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
+          {T(30, 189, 'db-paas-vpc', V.ink, 11, 700, 'start')}{T(220, 189, '10.30.0.0/24', V.muted, 8, 600, 'end')}
+          {T(30, 205, 'Cloud SQL · PRIVATE IP · no agent', V.muted, 8, 500, 'start')}
+          {T(30, 221, '● native audit (emitted by GCP)', V.agentless, 8.5, 700, 'start')}
 
-          {/* Route A — Cloud NAT (VM / IaaS egress) */}
-          <rect x="316" y="66" width="92" height="60" rx="8" style={{ fill: V.surf, stroke: V.net, strokeWidth: 1.5 }} />
-          {T(362, 90, 'Cloud NAT', V.net, 10.5, 700)}{T(362, 105, 'customer', V.muted, 8, 500)}{T(362, 116, 'egress', V.muted, 8, 500)}
+          {/* Cloud Logging (PaaS only, Google-internal, outside the estate) */}
+          <rect x="372" y="178" width="104" height="54" rx="8" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
+          {T(424, 198, 'Cloud Logging', V.agentless, 9.5, 700)}{T(424, 212, '+ Log Sink', V.muted, 8, 600)}{T(424, 224, 'Google-internal', V.muted, 7.5, 500)}
 
-          {/* Route B — Cloud Logging (PaaS only, Google-internal) */}
-          <rect x="316" y="176" width="112" height="58" rx="8" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
-          {T(372, 197, 'Cloud Logging', V.agentless, 10, 700)}{T(372, 211, '+ Log Sink', V.muted, 8.5, 600)}{T(372, 224, 'Google-internal', V.muted, 7.5, 500)}
-
-          {/* Pub/Sub backbone */}
-          <rect x="484" y="112" width="150" height="78" rx="10" style={{ fill: V.surf, stroke: V.host, strokeWidth: 1.5 }} />
-          {T(559, 140, 'Pub/Sub', V.host, 13, 700)}{T(559, 158, 'toovix-dam-audit', V.muted, 8.5, 600)}
-          {T(559, 173, 'one shared bus', V.muted, 8, 500)}
+          {/* Pub/Sub — the ONLY shared element */}
+          <rect x="534" y="100" width="142" height="82" rx="10" style={{ fill: V.surf, stroke: V.host, strokeWidth: 2 }} />
+          {T(605, 128, 'Pub/Sub', V.host, 13, 700)}{T(605, 146, 'toovix-dam-audit', V.muted, 8.5, 600)}
+          {T(605, 163, 'the ONLY shared', V.host, 8, 700)}{T(605, 174, 'element', V.host, 8, 700)}
 
           {/* DAM control plane */}
-          <rect x="712" y="115" width="216" height="72" rx="10" style={{ fill: V.surf, stroke: V.line }} />
-          {T(820, 141, '🛡 TooVix DAM', V.ink, 12, 700)}{T(820, 158, 'connector pulls (keyless ADC)', V.muted, 8.5, 500)}
-          {T(820, 172, 'events → ClickHouse → alerts', V.muted, 8.5, 500)}
+          <rect x="724" y="104" width="224" height="72" rx="10" style={{ fill: V.surf, stroke: V.line }} />
+          {T(836, 130, '🛡 TooVix DAM', V.ink, 12, 700)}{T(836, 147, 'connector pulls (keyless ADC)', V.muted, 8.5, 500)}
+          {T(836, 161, 'events → ClickHouse → alerts', V.muted, 8.5, 500)}
 
-          {/* VM paths → Cloud NAT → Pub/Sub (publish, blue) */}
-          <line x1="266" y1="63" x2="314" y2="88" style={{ stroke: V.net }} markerEnd="url(#gtArrow)" />
-          <line x1="266" y1="131" x2="314" y2="104" style={{ stroke: V.net }} markerEnd="url(#gtArrow)" />
-          <line x1="408" y1="96" x2="480" y2="140" style={{ stroke: V.net }} markerEnd="url(#gtArrow)" />
-          {T(452, 112, 'publish', V.net, 8.5, 700)}
-          {/* PaaS path → Cloud Logging → Pub/Sub (green, no NAT) */}
-          <line x1="266" y1="205" x2="314" y2="205" style={{ stroke: V.agentless }} markerEnd="url(#gtArrow)" />
-          <line x1="428" y1="200" x2="480" y2="166" style={{ stroke: V.agentless }} markerEnd="url(#gtArrow)" />
-          {T(454, 196, 'log sink', V.agentless, 8.5, 700)}
+          {/* each VPC → ITS OWN NAT (short hops inside the estate) */}
+          <line x1="228" y1="63" x2="238" y2="63" style={{ stroke: V.net }} markerEnd="url(#gtArrow)" />
+          <line x1="228" y1="131" x2="238" y2="131" style={{ stroke: V.net }} markerEnd="url(#gtArrow)" />
+          {/* each NAT → shared Pub/Sub (independent egress, publish) */}
+          <line x1="338" y1="61" x2="530" y2="128" style={{ stroke: V.net }} markerEnd="url(#gtArrow)" />
+          <line x1="338" y1="129" x2="530" y2="146" style={{ stroke: V.net }} markerEnd="url(#gtArrow)" />
+          {T(430, 104, 'publish', V.net, 8.5, 700)}
+          {/* PaaS → Cloud Logging → Pub/Sub (green, no NAT) */}
+          <line x1="228" y1="205" x2="370" y2="205" style={{ stroke: V.agentless }} markerEnd="url(#gtArrow)" />
+          <line x1="476" y1="200" x2="530" y2="164" style={{ stroke: V.agentless }} markerEnd="url(#gtArrow)" />
+          {T(498, 194, 'sink', V.agentless, 8.5, 700)}
           {/* Pub/Sub → DAM (outbound pull) */}
-          <line x1="634" y1="151" x2="708" y2="151" style={{ stroke: V.host }} markerEnd="url(#gtArrow)" />
-          {T(672, 144, 'pull ↩', V.host, 8.5, 700)}{T(672, 166, 'outbound', V.muted, 7.5, 500)}
+          <line x1="676" y1="140" x2="720" y2="140" style={{ stroke: V.host }} markerEnd="url(#gtArrow)" />
+          {T(698, 132, 'pull ↩', V.host, 8, 700)}{T(698, 154, 'outbound', V.muted, 7.5, 500)}
         </svg>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 8, fontSize: 12 }}>
-          <LegendItem c="var(--primary)" t="VM / IaaS — AgentLite forwarder publishes via Cloud NAT · NOT through Cloud Logging" />
+          <LegendItem c="var(--primary)" t="VM / IaaS — each VPC egresses via ITS OWN Cloud NAT (no shared NAT, no hub)" />
           <LegendItem c="var(--green)" t="PaaS — Cloud SQL audit → Cloud Logging → Log Sink · Google-internal, no NAT" />
-          <LegendItem c="var(--info)" t="Pub/Sub — the one bus both routes converge on; DAM pulls outbound" />
+          <LegendItem c="var(--info)" t="Pub/Sub — the ONLY shared element: a global, VPC-less bus the DAM pulls" />
         </div>
         <p className="muted" style={{ fontSize: 11.5, margin: '10px 2px 0', lineHeight: 1.5 }}>
-          The two paths reach the bus by <b>different routes</b>. A self-managed <b style={{ color: 'var(--primary)' }}>VM</b> runs the <b>AgentLite forwarder</b>, which reads the DB’s local audit log and publishes straight to Pub/Sub through the VPC’s <b style={{ color: 'var(--primary)' }}>Cloud NAT</b> — it <b>does not use Cloud Logging</b>. A managed <b style={{ color: 'var(--green)' }}>Cloud SQL</b> DB can’t run an agent, so GCP routes its native audit internally: DB → <b style={{ color: 'var(--green)' }}>Cloud Logging</b> → Log Sink → Pub/Sub, entirely <b>Google-internal</b> (no customer NAT). Both converge on one <b style={{ color: 'var(--info)' }}>Pub/Sub</b> bus that the DAM pulls <b>outbound</b> (keyless). Each DB stays in its own VPC — no inbound opened, no hub peering.
+          There is <b>no shared/common NAT</b>. Each database sits in its <b>own VPC with its own <span style={{ color: 'var(--primary)' }}>Cloud NAT</span></b> (<code>db-vm-a-nat</code>, <code>db-vm-b-nat</code>, …) — a single shared NAT would need a hub VPC that every spoke peers to, which this design deliberately avoids. A <b style={{ color: 'var(--primary)' }}>VM</b>’s AgentLite forwarder egresses through <b>that VPC’s own NAT</b> and publishes to Pub/Sub; managed <b style={{ color: 'var(--green)' }}>Cloud SQL</b> routes its audit internally via <b style={{ color: 'var(--green)' }}>Cloud Logging</b> (no NAT at all). The <b>one</b> element they share is the global, VPC-less <b style={{ color: 'var(--info)' }}>Pub/Sub</b> bus — “shared” there means a logical topic, not a network choke point — which the DAM pulls <b>outbound</b>, keyless. No inbound is ever opened.
         </p>
       </div>
     </div>
