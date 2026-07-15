@@ -54,6 +54,9 @@ type Config struct {
 	DBPass       string
 	DBName       string // postgres: the database to classify (information_schema is per-DB in PG)
 	ClassifyMins int
+	// host mode: tag a read 'large-result' when the total response exceeds this many bytes.
+	// Tunable without a rebuild; 0 disables the tag. Independent of the eBPF capture window.
+	LargeResultBytes int64
 }
 
 func env(k, d string) string {
@@ -86,6 +89,7 @@ func loadConfig() Config {
 		DBPass:    env("DB_PASSWORD", ""),
 		DBName:    env("DB_NAME", ""),
 		ClassifyMins: atoiDefault(env("CLASSIFY_INTERVAL_MIN", "30"), 30),
+		LargeResultBytes: int64(atoiDefault(env("LARGE_RESULT_BYTES", "1048576"), 1048576)), // 1 MiB default
 	}
 	if c.TargetDB == "" {
 		c.TargetDB = c.TargetHost + ":" + c.TargetPort
@@ -322,10 +326,11 @@ func parseResponse(cfg Config, st *connState, buf []byte) []byte {
 // emitCaptured ships the pending query with its real row count, then resets.
 func emitCaptured(cfg Config, st *connState, rowCount int) {
 	if st.haveQuery {
-		forwardEvent(cfg, st.principal, st.pendingIP, st.pendingSQL, rowCount, st.respTruncated)
+		large := cfg.LargeResultBytes > 0 && st.respBytes >= cfg.LargeResultBytes
+		forwardEvent(cfg, st.principal, st.pendingIP, st.pendingSQL, rowCount, large)
 	}
 	st.haveQuery = false
-	st.respTruncated = false
+	st.respBytes = 0
 	st.rs = nrIdle
 	st.rowCount = 0
 }
@@ -1182,7 +1187,7 @@ type connState struct {
 	pendingSQL  string // the query awaiting its result set
 	pendingIP   string
 	haveQuery   bool
-	respTruncated bool // host mode: a response chunk hit the eBPF size cap → large read, count is a floor
+	respBytes   int64 // host mode: total response bytes for the pending query (real sizes, summed)
 	pgStartupDone bool // postgres: startup message consumed (principal pulled from it)
 	pgSSLReplyPending bool // postgres: client sent SSLRequest; skip the server's 1-byte reply
 	// SQL Server / TDS: messages span multiple packets, reassembled by direction until EOM.
@@ -1791,9 +1796,9 @@ func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, lar
 	tags := detectTags(sql)
 	tags = append(tags, classifyTags(sql)...) // tags from the agent's own classification scan
 	if large {
-		// The response exceeded the eBPF capture window (>16KB): a large read. row_count is a
-		// floor, so volume thresholds can't be trusted — this tag lets a policy fire on the
-		// large read itself (esp. combined with the pii/pci tags from a sensitive table).
+		// Total response bytes exceeded LARGE_RESULT_BYTES — a large read. Lets a policy fire
+		// on the read volume itself (esp. with the pii/pci tags from a sensitive table), which
+		// is more reliable than row_count (a floor once the eBPF capture window truncates).
 		tags = append(tags, "large-result")
 	}
 	ev := map[string]interface{}{

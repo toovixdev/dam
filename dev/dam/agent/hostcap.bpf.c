@@ -32,11 +32,12 @@ enum evt_dir { DIR_READ = 0, DIR_WRITE = 1, DIR_CLOSE = 2 };
 
 // Wire layout is parsed byte-offset by userspace; keep field order/sizes stable.
 struct ssl_event {
-	__u32 pid;   // process id (tgid)
-	__u32 tid;   // thread id
-	__u64 ssl;   // SSL* — identifies the TLS connection (reassembly key)
-	__u32 len;   // bytes of data that follow (<= MAX_DATA-1)
-	__u8  dir;   // enum evt_dir
+	__u32 pid;      // process id (tgid)
+	__u32 tid;      // thread id
+	__u64 ssl;      // SSL* — identifies the TLS connection (reassembly key)
+	__u32 len;      // bytes of data that follow (<= MAX_DATA-1)
+	__u32 orig_len; // real SSL_read/write size before truncation — drives the large-read threshold
+	__u8  dir;      // enum evt_dir
 	__u8  truncated;
 	char  comm[TASK_COMM_LEN];
 	__u8  data[MAX_DATA];
@@ -116,6 +117,10 @@ static __always_inline void submit(__u64 ssl, const void *buf, __s64 count, __u8
 	e->ssl = ssl;
 	e->dir = dir;
 	e->truncated = 0;
+
+	// Report the REAL size (before we cap the captured bytes) so userspace can sum total
+	// bytes per query and apply a configurable large-read threshold independent of MAX_DATA.
+	e->orig_len = (dir != DIR_CLOSE && count > 0) ? (__u32)count : 0;
 
 	__u32 cap = 0;
 	if (dir != DIR_CLOSE) {

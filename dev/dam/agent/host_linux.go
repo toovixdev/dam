@@ -40,12 +40,13 @@ const (
 	evtDirWrite = 1
 	evtDirClose = 2
 
-	evtHdrLen  = 38 // pid(4)+tid(4)+ssl(8)+len(4)+dir(1)+trunc(1)+comm(16)
+	evtHdrLen  = 42 // pid(4)+tid(4)+ssl(8)+len(4)+orig_len(4)+dir(1)+trunc(1)+comm(16)
 	offSSL     = 8
 	offLen     = 16
-	offDir     = 20
-	offTrunc   = 21
-	offComm    = 22
+	offOrigLen = 20
+	offDir     = 24
+	offTrunc   = 25
+	offComm    = 26
 )
 
 // procCommFor maps the engine to the DB server process name (comm, max 15 chars)
@@ -181,8 +182,8 @@ func runHost(cfg Config) {
 		}
 		ssl := binary.LittleEndian.Uint64(b[offSSL : offSSL+8])
 		dlen := int(binary.LittleEndian.Uint32(b[offLen : offLen+4]))
+		origLen := int64(binary.LittleEndian.Uint32(b[offOrigLen : offOrigLen+4]))
 		dir := b[offDir]
-		truncated := b[offTrunc] != 0
 		data := b[evtHdrLen:]
 		if dlen > len(data) {
 			dlen = len(data)
@@ -191,7 +192,7 @@ func runHost(cfg Config) {
 
 		if dbg {
 			dirName := map[byte]string{evtDirRead: "READ", evtDirWrite: "WRITE", evtDirClose: "CLOSE"}[dir]
-			log.Printf("[host-dbg] %-5s ssl=%x len=%d preview=%q", dirName, ssl, dlen, previewBytes(data, 48))
+			log.Printf("[host-dbg] %-5s ssl=%x len=%d orig=%d preview=%q", dirName, ssl, dlen, origLen, previewBytes(data, 48))
 		}
 
 		key := strconv.FormatUint(ssl, 16)
@@ -224,6 +225,7 @@ func runHost(cfg Config) {
 				st.haveQuery = true
 				st.rs = nrIdle
 				st.rowCount = 0
+				st.respBytes = 0
 			}
 			buf := append(st.buf, data...)
 			switch cfg.Engine {
@@ -235,8 +237,8 @@ func runHost(cfg Config) {
 				st.buf = frameAndDecode(st, buf, onQuery)
 			}
 		} else { // server→client = the result set
-			if truncated && st.haveQuery {
-				st.respTruncated = true // large read — row count becomes a floor; tag it on emit
+			if st.haveQuery {
+				st.respBytes += origLen // sum REAL bytes sent (not just captured) for the large-read threshold
 			}
 			resp := append(st.respBuf, data...)
 			switch cfg.Engine {
