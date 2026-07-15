@@ -62,7 +62,28 @@ resource "google_pubsub_topic_iam_member" "sink_publisher" {
   member = google_logging_project_sink.cloudsql_audit.writer_identity
 }
 
-# ── AgentLite forwarder identity (self-managed VMs) — publishes audit to the bus ─────────
+# ── Identities & IAM ────────────────────────────────────────────────────────────────────
+# SA *keys* are disabled by org policy (iam.disableServiceAccountKeyCreation) — the better
+# posture anyway. So auth is via ADC (attached SA / metadata), not key files:
+#   • the forwarder runs on a GCP VM → uses that VM's SA
+#   • the DAM connector runs on a GCP VM (same project) → uses that VM's SA
+# Both the estate VMs and the DAM host currently run as the DEFAULT compute SA, so granting it
+# publish + subscribe is the zero-change path. (Swap to the dedicated SAs below by attaching
+# them to the respective VMs when you want tighter scoping.)
+data "google_compute_default_service_account" "default" {}
+
+resource "google_pubsub_topic_iam_member" "default_publisher" {
+  topic  = google_pubsub_topic.audit.id
+  role   = "roles/pubsub.publisher"
+  member = "serviceAccount:${data.google_compute_default_service_account.default.email}"
+}
+resource "google_pubsub_subscription_iam_member" "default_subscriber" {
+  subscription = google_pubsub_subscription.audit.id
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${data.google_compute_default_service_account.default.email}"
+}
+
+# Dedicated identities (attach to the forwarder VM / DAM host for least privilege — no keys).
 resource "google_service_account" "forwarder" {
   account_id   = "toovix-forwarder"
   display_name = "TooVix AgentLite forwarder (publishes DB audit to Pub/Sub)"
@@ -72,12 +93,6 @@ resource "google_pubsub_topic_iam_member" "forwarder_publisher" {
   role   = "roles/pubsub.publisher"
   member = "serviceAccount:${google_service_account.forwarder.email}"
 }
-# Key the forwarder uses to authenticate (drop into the agent as GOOGLE_APPLICATION_CREDENTIALS).
-resource "google_service_account_key" "forwarder" {
-  service_account_id = google_service_account.forwarder.name
-}
-
-# ── Control-plane connector identity — pulls the subscription ───────────────────────────
 resource "google_service_account" "connector" {
   account_id   = "toovix-connector"
   display_name = "TooVix DAM connector (pulls audit from Pub/Sub)"
@@ -87,25 +102,12 @@ resource "google_pubsub_subscription_iam_member" "connector_subscriber" {
   role         = "roles/pubsub.subscriber"
   member       = "serviceAccount:${google_service_account.connector.email}"
 }
-resource "google_service_account_key" "connector" {
-  service_account_id = google_service_account.connector.name
-}
 
 # ── Outputs — used to configure the forwarder + the DAM connector ───────────────────────
 output "audit_topic" {
   value = google_pubsub_topic.audit.id
 }
 output "audit_subscription" {
-  description = "Configure this in the DAM console → connectors (with the connector key below)."
+  description = "Configure this in the DAM console → connectors (auth via the DAM host's SA, ADC)."
   value       = google_pubsub_subscription.audit.id
-}
-output "forwarder_sa_key" {
-  description = "base64 SA key for the AgentLite forwarder (publish). Decode → GOOGLE_APPLICATION_CREDENTIALS."
-  value       = google_service_account_key.forwarder.private_key
-  sensitive   = true
-}
-output "connector_sa_key" {
-  description = "base64 SA key for the DAM control-plane connector (subscribe)."
-  value       = google_service_account_key.connector.private_key
-  sensitive   = true
 }
