@@ -1,44 +1,50 @@
 # TooVix DAM — Enterprise Cloud Test (Azure)
 
-The Azure mirror of `dev/enterprise-test` (GCP). Same shape: **3 MySQL databases, each in its
-own VNet + private subnet, no public IPs**, seeded with the same PII/PCI data model.
+A minimal **SQL Server** test estate on Azure: one SQL Server on an **IaaS VM** and one
+**PaaS** Azure SQL Database, both private (no public DB endpoints), reached through a
+single Linux **jump-box**. Passwords are generated and stored in **Key Vault**.
 
-| DB | Deployment | VNet (spoke) | Sensitive data |
-|----|------------|--------------|----------------|
-| `db-vm-a` | MySQL 8 on a **Linux VM** | `vnet-db-vm-a` (10.10.0.0/16) | orders — low |
-| `db-vm-b` | MySQL 8 on a **Linux VM** | `vnet-db-vm-b` (10.20.0.0/16) | customers — **PII** (Aadhaar/PAN) |
-| `db-paas` | **Azure DB for MySQL – Flexible Server** (PaaS) | `vnet-db-paas` (10.30.0.0/16), VNet-injected | billing — **PCI** (card_number/cvv) |
+| DB | Deployment | Where | Access |
+|----|------------|-------|--------|
+| `toovix-sqltest-sqlvm` | **SQL Server 2022 Developer** (free; full features incl. Audit) on a **Windows VM** | `snet-dbvm` (10.20.2.0/24), no public IP | via jump-box → `1433` |
+| `appdb` | **Azure SQL Database (PaaS)** | Private Endpoint in `snet-pe` (10.20.3.0/24) | via jump-box → private FQDN `:1433` |
 
-### Access model (Azure has no IAP)
-A **hub VNet** holds a single **jump-box** (public IP, locked to *your* IP via NSG). The hub is
-**peered** to each DB spoke, so the one jump-box reaches all three DBs — while the spokes are
-**not** peered to each other (DBs stay isolated). Passwords are in **Key Vault**.
+### Access model (Azure has no SSM/IAP)
+One **jump-box** (public IP, NSG locked to *your* IP) sits in `snet-jumpbox`. From it you
+reach the SQL VM (1433/RDP) and the Azure SQL private endpoint (1433). The SQL VM's NSG
+allows 1433 **only from the jump-box subnet** and explicitly **denies** it from the rest of
+the VNet.
 
 ```
-      you ──SSH──► jump-box (hub VNet, public IP, NSG=your IP)
-                      │  (hub↔spoke peering)
-        ┌─────────────┼──────────────┐
-   vnet-db-vm-a   vnet-db-vm-b   vnet-db-paas
-     MySQL VM       MySQL VM     Flexible Server (private)
-   (no public IP) (no public IP)  (VNet-injected)
+  you ──SSH──► jump-box (public IP, NSG=your IP)
+                 │
+        ┌────────┴─────────┐
+   snet-dbvm          snet-pe
+  SQL Server VM   Azure SQL (Private Endpoint)
+  (no public IP)   (public access disabled)
 ```
 
----
+> ⚠️ **DAM capture caveat:** SQL Server uses the **TDS** protocol, which the DAM agent does
+> **not** decode yet (it handles MySQL + PostgreSQL). You can register these instances, but
+> network-mode **query capture won't work** until a TDS decoder is added. This estate is for
+> standing up the DBs / testing connectivity now.
 
 ## Configure your Mac
 ```bash
 brew install azure-cli
-az login
-az account set --subscription "<SUBSCRIPTION_ID>"     # az account show --query id -o tsv
-ssh-keygen -t ed25519 -f ~/.ssh/azure_mysql            # if you don't have a key
+az login                                        # sign in to the NEW tenant
+az account set --subscription "<SUBSCRIPTION_ID>"
+ssh-keygen -t ed25519 -f ~/.ssh/azure_sqltest   # if you don't have a key
+# register providers once per subscription:
+for p in Microsoft.Compute Microsoft.Network Microsoft.KeyVault Microsoft.Sql; do az provider register --namespace $p; done
 ```
-Terraform (already installed) auto-downloads the `azurerm` provider on `init`.
 
 ## Apply
 ```bash
 cd dev/enterprise-test-azure/terraform
 cp terraform.tfvars.example terraform.tfvars
-# edit: subscription_id, admin_ssh_public_key (paste ~/.ssh/azure_mysql.pub), admin_source_ip (curl -s ifconfig.me → append /32)
+# edit: subscription_id, admin_source_ip (curl -s ifconfig.me → append /32),
+#        admin_ssh_public_key (paste ~/.ssh/azure_sqltest.pub)
 terraform init
 terraform plan
 terraform apply
@@ -46,12 +52,11 @@ terraform apply
 
 ## Connect
 ```bash
-terraform output how_to_connect            # prints the exact commands + IPs
-# password example:
-az keyvault secret show --vault-name <kv-name> --name toovix-db-vm-b-root --query value -o tsv
+terraform output how_to_connect      # prints exact commands + IPs + Key Vault secret lookups
 ```
-- **VM DBs:** `ssh -i ~/.ssh/azure_mysql azureuser@<jumpbox-ip>` → `ssh azureuser@<vm-private-ip>` → `mysql -u root -p`
-- **Flexible Server:** on the jump-box → `mysql -h <fqdn> -u dbadmin -p billing`
+- **SQL VM:** `ssh azureadmin@<jumpbox-ip>` → `sqlcmd -S <sqlvm-private-ip>,1433 -U sqladmin -P '<secret>' -C`
+- **Azure SQL:** on the jump-box → `sqlcmd -S <server>.database.windows.net -d appdb -U sqladmin -P '<secret>' -C`
+  (the FQDN resolves to the private endpoint from inside the VNet)
 
 ## Destroy
 ```bash
@@ -59,12 +64,20 @@ terraform destroy
 ```
 
 ## Notes
-- **Cost:** 2 VM + 1 jump-box (B1ms), 1 Flexible Server (B1ms), 2 NAT gateways + 3 public IPs,
-  Key Vault. Destroy when done.
-- **3306 hardening:** the VM NSGs allow 3306 only **intra-subnet** (future app) and explicitly
-  **deny** it from everything else (Azure's default rules would otherwise allow peered VNets).
-  SSH is allowed only from the hub jump-box subnet.
-- **Passwords in cloud-init:** for POC simplicity the DB passwords are templated into VM
-  `custom_data` (also stored in Key Vault). Read from Key Vault at boot for production.
-- **Phase 2 (agents):** placeholder `deploy_agents` flag; wiring the TooVix agent onto the VMs
-  is a follow-up, same as the GCP side.
+- **Cost:** 1 Windows SQL VM (D2s_v5) + 1 Linux jump-box (B2s) + 1 Azure SQL DB (Basic) +
+  1 NAT Gateway + public IPs + Key Vault. The VM runs **SQL Server Developer edition (free)** —
+  no SQL licence charge (only Windows VM compute + disk). ~$170/mo if left running 24/7
+  (~$32 of that is the NAT Gateway, which bills continuously). Deallocate the VMs when idle
+  and **destroy when done**.
+- **Egress:** the private DB subnet (`snet-dbvm`) routes outbound through a **NAT Gateway**
+  (egress-only, dedicated IP → `nat_egress_ip` output) — DBs stay private-IP-only inbound.
+  The jump-box egresses via its own public IP.
+- **SQL edition:** `sql_vm_image_sku` (default `sqldev-gen2` = Developer, free). Set it to
+  `standard-gen2`/`enterprise-gen2` only to validate production licensing/billing. If `apply`
+  ever errors on marketplace terms:
+  `az vm image terms accept --urn MicrosoftSQLServer:sql2022-ws2022:<sku>:latest`
+- **SQL auth on the VM** is enabled by the `azurerm_mssql_virtual_machine` (SQL IaaS
+  extension), which creates the `sqladmin` login on TCP 1433 (private only).
+- **State:** local. Add a `backend "azurerm"` block for shared/remote state.
+- **Key Vault** uses the access-policy model (deployer gets secret access), so no RBAC role
+  assignment is needed — switch to RBAC if your org standardizes on it.

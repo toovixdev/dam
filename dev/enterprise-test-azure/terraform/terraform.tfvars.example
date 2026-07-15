@@ -1,0 +1,17 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored.
+
+subscription_id = "00000000-0000-0000-0000-000000000000"   # az account show --query id -o tsv
+location        = "centralindia"
+
+# Your public IP, locked to the jump-box SSH rule:
+#   echo "$(curl -s ifconfig.me)/32"
+admin_source_ip = "203.0.113.10/32"
+
+# SSH public key for the jump-box:
+#   ssh-keygen -t ed25519 -f ~/.ssh/azure_sqltest ; cat ~/.ssh/azure_sqltest.pub
+admin_ssh_public_key = "ssh-ed25519 AAAA... you@host"
+
+# Optional overrides:
+# name_prefix     = "toovix-sqltest"
+# sql_vm_size     = "Standard_D2s_v5"
+# azuresql_db_sku = "Basic"
