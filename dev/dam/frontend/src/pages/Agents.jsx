@@ -430,6 +430,12 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   //          clients connecting over the NIC (recommended — misses nothing);
   //   <nic> (e.g. ens4/eth0) = only remote-client traffic;  lo = only on-host.
   if (m === 'network') env.push('CAPTURE_IFACE=any');
+  if (m === 'proxy') {
+    // Inline proxy: clients connect to LISTEN_PORT, which forwards to UPSTREAM (the real DB).
+    // On the DB host itself LISTEN_PORT must differ from the DB's own port, so default to +1.
+    const dbPort = Number(port || defPort);
+    env.push(`LISTEN_PORT=${dbPort + 1}`, `UPSTREAM=${host || target}:${dbPort}`);
+  }
   if (agentless) {
     // Agentless connects to the DB as a least-privilege reader and pulls its native
     // audit trail — no host install, runs in YOUR infra, transport-independent (TLS OK).
@@ -457,10 +463,12 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     //   network — AF_PACKET raw sniff → host net + NET_RAW/NET_ADMIN, run as root.
     //   host    — eBPF uprobes on the DB's libssl → privileged + --pid host (to see the DB
     //             process, its /proc maps and libssl inode across mount namespaces).
-    //   proxy/agentless — plain container, no special privileges.
+    //   proxy   — inline TCP proxy; host network so its LISTEN_PORT is reachable on the host.
+    //   agentless — plain container, no special privileges.
     let flags = '';
     if (m === 'network') flags = ' --network host --user 0 --cap-add NET_RAW --cap-add NET_ADMIN';
     else if (m === 'host') flags = ' --privileged --pid host --network host --user 0';
+    else if (m === 'proxy') flags = ' --network host';
     const envLines = env.map((e) => `  -e ${e}`);
     const prereq = agentless
       ? `# Prerequisite: Docker on ANY host in your network that can reach the DB (NOT the DB host).
@@ -504,35 +512,34 @@ helm install dam-${m} toovix/dam-agent \\
   }
 
   if (format === 'package') {
+    // Templated unit: one .deb serves every mode. Each mode gets its own agent-<mode>.env, so
+    // host/network/proxy coexist on the same host without colliding.
     return `# Debian/Ubuntu (.deb) — RHEL/Rocky: sudo dnf install ./dam-agent-<ver>.x86_64.rpm
 curl -fsSL ${cp}/api/download/dam-agent_amd64.deb -o dam-agent.deb
-sudo dpkg -i dam-agent.deb   # installs the binary + dam-agent.service + /etc/toovix/agent.env
+sudo dpkg -i dam-agent.deb   # installs the binary + the dam-agent@.service template (once)
 
-# Set your config, then start:
-sudo tee /etc/toovix/agent.env >/dev/null <<'EOF'
+# Configure THIS mode — one env file per mode (repeat for other modes to run them side by side):
+sudo tee /etc/toovix/agent-${m}.env >/dev/null <<'EOF'
 ${env.join('\n')}
 EOF
-sudo systemctl enable --now dam-agent
-journalctl -u dam-agent -f`;
+sudo systemctl enable --now dam-agent@${m}
+journalctl -u dam-agent@${m} -f`;
   }
 
-  // Default: static binary (eBPF embedded, no Docker, no deps) — installed as a root service.
-  return `# 1) Download the static binary (Linux x86_64 — eBPF embedded, no deps)
-curl -fsSL ${cp}/api/download/dam-agent-linux-amd64 -o /usr/local/bin/dam-agent
-sudo chmod +x /usr/local/bin/dam-agent
+  // Default: static binary (eBPF embedded, no Docker, no deps) — installed via a systemd template.
+  return `# 1) Download the static binary (eBPF embedded, no deps). 'install' replaces it safely
+#    even if an agent is already running (avoids "text file busy").
+curl -fsSL ${cp}/api/download/dam-agent-linux-amd64 -o /tmp/dam-agent
+sudo install -m 0755 /tmp/dam-agent /usr/local/bin/dam-agent && rm -f /tmp/dam-agent
 
-# 2) Config + systemd service (runs as root — host/network capture needs privilege):
-sudo mkdir -p /etc/toovix
-sudo tee /etc/toovix/agent.env >/dev/null <<'EOF'
-${env.join('\n')}
-EOF
-sudo tee /etc/systemd/system/dam-agent.service >/dev/null <<'EOF'
+# 2) Install the systemd TEMPLATE once (lets host/network/proxy coexist as dam-agent@<mode>):
+sudo tee /etc/systemd/system/dam-agent@.service >/dev/null <<'EOF'
 [Unit]
-Description=TooVix DAM agent
+Description=TooVix DAM agent (%i)
 After=network-online.target
 Wants=network-online.target
 [Service]
-EnvironmentFile=/etc/toovix/agent.env
+EnvironmentFile=/etc/toovix/agent-%i.env
 ExecStart=/usr/local/bin/dam-agent
 Restart=always
 RestartSec=5
@@ -540,5 +547,11 @@ User=root
 [Install]
 WantedBy=multi-user.target
 EOF
-sudo systemctl daemon-reload && sudo systemctl enable --now dam-agent`;
+
+# 3) Configure THIS mode + start it (repeat steps 3 for other modes):
+sudo mkdir -p /etc/toovix
+sudo tee /etc/toovix/agent-${m}.env >/dev/null <<'EOF'
+${env.join('\n')}
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now dam-agent@${m}`;
 }

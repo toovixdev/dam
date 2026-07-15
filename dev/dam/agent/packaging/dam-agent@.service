@@ -1,0 +1,27 @@
+[Unit]
+# Templated so multiple agents (modes) can run on one host without colliding:
+#   systemctl enable --now dam-agent@host      -> reads /etc/toovix/agent-host.env
+#   systemctl enable --now dam-agent@network   -> reads /etc/toovix/agent-network.env
+#   systemctl enable --now dam-agent@proxy     -> reads /etc/toovix/agent-proxy.env
+Description=TooVix DAM Agent (%i)
+Documentation=https://toovix.security/docs/agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/toovix/agent-%i.env
+ExecStart=/usr/local/bin/dam-agent
+Restart=always
+RestartSec=5
+
+# Runs as root: host (eBPF) attaches uprobes to libssl + reads /proc; network opens an
+# AF_PACKET raw socket; proxy just listens on a port. All fine as root.
+User=root
+# Explicit bounding set documents exactly what the agent uses (root already holds these).
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_NET_RAW CAP_NET_ADMIN
+ProtectHome=true
+NoNewPrivileges=false
+
+[Install]
+WantedBy=multi-user.target
