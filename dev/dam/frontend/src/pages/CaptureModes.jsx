@@ -192,56 +192,6 @@ function CaptureDiagram() {
   );
 }
 
-// Where the audit-based modes get their data: AgentLite (VM forwarder) + Agentless (PaaS
-// native stream) both converge on one Pub/Sub backbone the DAM consumes.
-function AgentlessFlow() {
-  return (
-    <div className="card" style={{ marginBottom: 14 }}>
-      <div className="card-header"><span className="card-title">Audit collection — AgentLite &amp; Agentless</span><span className="card-sub">both feed one Pub/Sub backbone · no wire tap</span></div>
-      <div className="card-body">
-        <svg viewBox="0 0 900 196" width="100%" style={{ maxHeight: 244 }} role="img" aria-label="AgentLite and Agentless audit data flow">
-          <defs>
-            <marker id="afArrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto" markerUnits="userSpaceOnUse">
-              <path d="M0,0 L6,3 L0,6 Z" fill="context-stroke" />
-            </marker>
-          </defs>
-          {/* PaaS source — native audit, no install */}
-          <rect x="16" y="30" width="176" height="46" rx="8" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 1.5 }} />
-          {T(104, 49, 'Managed DB (PaaS)', V.ink, 11, 700)}{T(104, 64, 'RDS · Cloud SQL · Azure SQL', V.muted, 8.5, 500)}
-          {/* VM source */}
-          <rect x="16" y="120" width="176" height="46" rx="8" style={{ fill: V.surf, stroke: V.line }} />
-          {T(104, 139, 'Self-managed DB VM', V.ink, 11, 700)}{T(104, 154, 'native audit → log file', V.muted, 8.5, 500)}
-          {/* AgentLite forwarder (VM path only) */}
-          <rect x="244" y="120" width="150" height="46" rx="8" style={{ fill: V.surf, stroke: V.agentless, strokeWidth: 2 }} />
-          {T(319, 139, 'AgentLite forwarder', V.agentless, 10.5, 700)}{T(319, 154, 'tails audit · ships', V.muted, 8.5, 500)}
-          {/* Pub/Sub backbone */}
-          <rect x="472" y="66" width="150" height="60" rx="10" style={{ fill: V.surf, stroke: V.host, strokeWidth: 1.5 }} />
-          {T(547, 90, 'Pub/Sub', V.host, 13, 700)}{T(547, 107, 'audit backbone', V.muted, 9, 500)}
-          {/* DAM */}
-          <rect x="700" y="72" width="184" height="48" rx="10" style={{ fill: V.surf, stroke: V.line }} />
-          {T(792, 92, '🛡 TooVix DAM', V.ink, 11.5, 700)}{T(792, 107, 'events → alerts', V.muted, 8.5, 500)}
-          {/* arrows */}
-          <line x1="192" y1="53" x2="468" y2="86" style={{ stroke: V.agentless }} markerEnd="url(#afArrow)" />
-          {T(330, 58, 'native audit stream', V.muted, 8.5, 500)}
-          <line x1="192" y1="143" x2="240" y2="143" style={{ stroke: V.ink }} markerEnd="url(#afArrow)" />
-          <line x1="394" y1="143" x2="468" y2="114" style={{ stroke: V.agentless }} markerEnd="url(#afArrow)" />
-          {T(432, 160, '→ Cloud Logging → bus', V.muted, 8.5, 500)}
-          <line x1="622" y1="96" x2="696" y2="96" style={{ stroke: V.host }} markerEnd="url(#afArrow)" />
-          {T(660, 90, 'consume', V.muted, 8.5, 500)}
-        </svg>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 18px', marginTop: 8, fontSize: 12 }}>
-          <LegendItem c="var(--green)" t="AgentLite — lightweight forwarder on the self-managed VM (tails native audit)" />
-          <LegendItem c="var(--green)" t="Agentless — PaaS emits audit natively; nothing installed" />
-          <LegendItem c="var(--info)" t="Pub/Sub — one audit backbone the DAM consumes" />
-        </div>
-        <p className="muted" style={{ fontSize: 11.5, margin: '10px 2px 0', lineHeight: 1.5 }}>
-          Both paths converge on one <b style={{ color: 'var(--info)' }}>Pub/Sub</b> backbone. <b style={{ color: 'var(--green)' }}>PaaS</b> emits its audit to the stream with zero footprint; a <b style={{ color: 'var(--green)' }}>self-managed VM</b> uses the <b>AgentLite</b> forwarder to tail the DB’s native audit and ship it — no wire tap, no path change, transport-independent (captures TLS). Audit-based, so it’s <b>detective only</b> (after-the-fact) — for real-time blocking use the inline proxy.
-        </p>
-      </div>
-    </div>
-  );
-}
-
 function ReferenceTopology() {
   return (
     <div className="card" style={{ marginBottom: 14 }}>
@@ -334,9 +284,6 @@ export default function CaptureModes() {
 
       {/* Visual overview */}
       <CaptureDiagram />
-
-      {/* Audit-based collection: AgentLite (VM) + Agentless (PaaS) */}
-      <AgentlessFlow />
 
       {/* Reference topology — modes mapped onto a real per-DB-VPC cloud estate */}
       <ReferenceTopology />
