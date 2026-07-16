@@ -25,8 +25,10 @@ func runAuditForward(cfg Config) {
 	switch cfg.Engine {
 	case "mysql", "mariadb", "":
 		tailMySQLGeneralLog(cfg, cfg.AuditLog)
+	case "postgresql", "postgres":
+		tailPostgresLog(cfg, cfg.AuditLog)
 	default:
-		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb only) — enrolled + idle", cfg.Engine)
+		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql) — enrolled + idle", cfg.Engine)
 		select {}
 	}
 }
@@ -72,6 +74,13 @@ func tailMySQLGeneralLog(cfg Config, path string) {
 		}
 	}
 
+	tailLines(path, process, flush)
+}
+
+// tailLines follows a growing / rotating log file: it seeks to the end (no history replay
+// on start), reads each new line into process(), and calls flush() at every EOF. Shared by
+// the MySQL and PostgreSQL audit-forward parsers.
+func tailLines(path string, process func(string), flush func()) {
 	var offset int64
 	if fi, err := os.Stat(path); err == nil {
 		offset = fi.Size() // start at end — don't replay history on (re)start
@@ -79,7 +88,7 @@ func tailMySQLGeneralLog(cfg Config, path string) {
 	for {
 		f, err := os.Open(path)
 		if err != nil {
-			log.Printf("audit-forward: open %s: %v — is the DB's general_log ON and writing here? retrying", path, err)
+			log.Printf("audit-forward: open %s: %v — is the DB's audit/general log ON and writing here? retrying", path, err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
@@ -102,6 +111,41 @@ func tailMySQLGeneralLog(cfg Config, path string) {
 		f.Close()
 		time.Sleep(1 * time.Second)
 	}
+}
+
+// ── PostgreSQL stderr log (audit-forward) ────────────────────────────────────
+// Needs log_statement='all' and log_line_prefix='%m [%p] %q%u@%d ', so each statement is:
+//   2026-01-02 15:04:05.000 UTC [1234] user@db LOG:  statement: SELECT ...
+// The extended/prepared protocol logs "execute <name>: <sql>". Background / session-less
+// lines carry no user@db (the %q stops the prefix there) and so never match.
+var pgLogRe = regexp.MustCompile(`^\S+ \S+ \S+ \[\d+\] (\S+)@(\S+) LOG:\s+(?:statement|execute[^:]*): (.*)$`)
+
+func tailPostgresLog(cfg Config, path string) {
+	var pendUser, pendSQL string
+	var havePend bool
+
+	flush := func() {
+		if havePend {
+			if sql := strings.TrimSpace(pendSQL); sql != "" && shouldForward(sql) {
+				forwardEvent(cfg, orDefault(pendUser, "unknown"), "", sql, 0, false)
+			}
+			havePend, pendSQL = false, ""
+		}
+	}
+
+	process := func(line string) {
+		m := pgLogRe.FindStringSubmatch(line)
+		if m == nil {
+			if havePend { // continuation of a multi-line statement
+				pendSQL += "\n" + line
+			}
+			return
+		}
+		flush()                                     // a new statement ends the previous one
+		pendUser, pendSQL, havePend = m[1], m[3], true // m[2] = database (unused; event uses TARGET_DB)
+	}
+
+	tailLines(path, process, flush)
 }
 
 // parseConnect pulls user + client host from "user@host on db using SSL/TLS".
