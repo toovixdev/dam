@@ -16,10 +16,12 @@ Restart=always
 RestartSec=5
 
 # Runs as root: host (eBPF) attaches uprobes to libssl + reads /proc; network opens an
-# AF_PACKET raw socket; proxy just listens on a port. All fine as root.
+# AF_PACKET raw socket; proxy just listens on a port; audit-forward (AgentLite) reads the
+# DB's native audit log, which the DB owns (e.g. /var/log/mysql 750 mysql:adm, files 640).
+# CAP_DAC_READ_SEARCH lets root bypass those read/traverse checks (the bounding set caps root
+# to exactly this list, so without it root can't read the log — that's a real AgentLite bug).
 User=root
-# Explicit bounding set documents exactly what the agent uses (root already holds these).
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_NET_RAW CAP_NET_ADMIN CAP_DAC_READ_SEARCH
 ProtectHome=true
 NoNewPrivileges=false
 
