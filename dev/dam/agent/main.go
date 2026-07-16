@@ -60,6 +60,11 @@ type Config struct {
 	// audit-forward (AgentLite) mode: tail the DB's native audit log on the host.
 	AuditLog    string // path to the native audit log file to tail
 	AuditSource string // audit type (audit_log | pgaudit | sql_server_audit | unified_audit_trail | profiler)
+	// AgentLite Pub/Sub publishing: when AuditTopic is set, audit events are PUBLISHED to
+	// this Pub/Sub topic (auth via the VM's SA / metadata token) instead of POSTed to the
+	// control plane. GCPProject auto-detects from the metadata server when empty.
+	AuditTopic string // Pub/Sub topic id to publish audit events to (e.g. toovix-dam-audit)
+	GCPProject string // GCP project id (defaults to the metadata server's project)
 }
 
 func env(k, d string) string {
@@ -95,6 +100,8 @@ func loadConfig() Config {
 		LargeResultBytes: int64(atoiDefault(env("LARGE_RESULT_BYTES", "1048576"), 1048576)), // 1 MiB default
 		AuditLog:    env("AUDIT_LOG", ""),
 		AuditSource: env("AUDIT_SOURCE", ""),
+		AuditTopic:  env("AUDIT_TOPIC", ""),
+		GCPProject:  env("GCP_PROJECT", ""),
 	}
 	if c.TargetDB == "" {
 		c.TargetDB = c.TargetHost + ":" + c.TargetPort
@@ -117,6 +124,18 @@ func main() {
 	agentID, tenantID := enrollWithRetry(cfg)
 	cfg.TenantID = tenantID
 	go heartbeatLoop(cfg, agentID)
+
+	// AgentLite: when AUDIT_TOPIC is set, PUBLISH audit events to Pub/Sub (auth via the VM's
+	// service account / metadata token) instead of POSTing to the control plane. Init failure
+	// (e.g. no metadata server off-GCP) is non-fatal — we fall back to the HTTP POST path.
+	if cfg.AuditTopic != "" {
+		if p, err := newPubsubPublisher(cfg.GCPProject, cfg.AuditTopic); err != nil {
+			log.Printf("AgentLite: Pub/Sub publisher init failed (%v) — falling back to HTTP POST to control plane", err)
+		} else {
+			auditPublisher = p
+			log.Printf("AgentLite: publishing audit events to Pub/Sub topic %q (project %s)", cfg.AuditTopic, p.project)
+		}
+	}
 
 	// Classification runs alongside ANY capture mode (it just needs a DB read login).
 	classifiable := cfg.Engine == "mysql" || cfg.Engine == "postgresql" || cfg.Engine == "mssql"
@@ -1821,18 +1840,32 @@ func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, lar
 		"source_host":   cfg.TargetHost,
 		"timestamp":     time.Now().UTC().Format("2006-01-02 15:04:05"),
 	}
-	// Ship OUTBOUND to the control plane (not straight to ClickHouse, which isn't
-	// reachable from a customer network). The control plane writes it to the data plane.
-	payload := map[string]interface{}{"token": cfg.EnrollToken, "host": cfg.TargetHost, "events": []interface{}{ev}}
+	// Ship OUTBOUND (not straight to ClickHouse, which isn't reachable from a customer
+	// network). Two transports, same envelope: AgentLite PUBLISHES to Pub/Sub when a topic
+	// is configured; otherwise POST to the control plane, which writes to the data plane.
+	payload := map[string]interface{}{
+		"source": "agentlite", "token": cfg.EnrollToken, "host": cfg.TargetHost,
+		"engine": cfg.Engine, "agent_type": agentTypeByMode[cfg.Mode], "events": []interface{}{ev},
+	}
 	body, _ := json.Marshal(payload)
-	resp, err := http.Post(cfg.ControlPlane+"/api/agents/events", "application/json", bytes.NewReader(body))
-	if err != nil {
-		log.Printf("[capture] event ship failed: %v", err)
+	if auditPublisher != nil {
+		if err := auditPublisher.publish(body, map[string]string{"source": "agentlite", "engine": cfg.Engine}); err != nil {
+			log.Printf("[capture] pubsub publish failed: %v", err)
+		}
 	} else {
-		resp.Body.Close()
+		resp, err := http.Post(cfg.ControlPlane+"/api/agents/events", "application/json", bytes.NewReader(body))
+		if err != nil {
+			log.Printf("[capture] event ship failed: %v", err)
+		} else {
+			resp.Body.Close()
+		}
 	}
 	log.Printf("[capture] %-6s rows=%-6d %-14s %s", detectOp(sql), rowCount, principal, truncate(sql, 70))
 }
+
+// auditPublisher is the AgentLite Pub/Sub publisher; nil when AUDIT_TOPIC is unset
+// (then forwardEvent POSTs to the control plane instead). Set once in main().
+var auditPublisher *pubsubPublisher
 
 // classifyTags maps the agent's classification scan (sensitive tables) to policy-taxonomy
 // tags (pii/pci/aadhaar), so a read of a sensitive table is tagged even when the query
