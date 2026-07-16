@@ -39,14 +39,6 @@ const APPLIC_ROWS = [
   ['OCI Autonomous', ['✗', 'm'], ['✗', 'm'], ['✗', 'm'], ['✓ Agentless', 'g'], 'Agentless (cloud stream)'],
 ];
 
-const PRESETS = [
-  { name: 'Lightweight', modes: ['network'], buys: 'Cheapest passive monitoring. Networked visibility only — no blocking, blind to local/IPC.', when: 'Low-risk, self-managed DBs', containers: 1 },
-  { name: 'Full visibility', rec: true, modes: ['network', 'host'], buys: 'Complete passive capture (wire + local). No blocking, no path change.', when: 'Recommended default for self-managed DBs', containers: 2 },
-  { name: 'Enforce', modes: ['proxy', 'network'], buys: 'Block routed traffic + catch proxy-bypass. Blind to local/IPC.', when: 'DBs that must block', containers: 2 },
-  { name: 'Crown jewel', modes: ['network', 'host', 'proxy'], buys: 'Everything + bypass + local. Highest overhead, redundant on the routed path.', when: 'Few highest-value, regulated DBs', containers: 3 },
-];
-
-const MODE_LABEL = { network: 'Network', host: 'Host (eBPF)', proxy: 'Inline Proxy' };
 const COLOR = { g: 'var(--green)', a: 'var(--amber)', m: 'var(--muted)', n: 'var(--ink)' };
 
 function Cell({ v }) {
@@ -456,31 +448,6 @@ export default function CaptureModes() {
         </div>
       </div>
 
-      {/* Posture presets → deploy */}
-      <div className="page-header" style={{ marginBottom: 8 }}>
-        <h1 style={{ fontSize: 15 }}>Ready? Pick a posture and deploy</h1>
-      </div>
-      <div className="grid2">
-        {PRESETS.map((p) => (
-          <div className="card" key={p.name}>
-            <div className="card-body">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <b style={{ fontSize: 14.5 }}>{p.name}</b>
-                {p.rec && <span className="pill ind">recommended</span>}
-                <span className="pill" style={{ marginLeft: 'auto' }}>{p.containers} container{p.containers > 1 ? 's' : ''}</span>
-              </div>
-              <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', margin: '4px 0 8px' }}>
-                {p.modes.map((m) => <span key={m} className={`mon-pill ${m === 'proxy' ? 'agentless' : 'agent'}`}>{MODE_LABEL[m]}</span>)}
-              </div>
-              <p className="muted" style={{ fontSize: 12.5, margin: '0 0 4px', lineHeight: 1.5 }}>{p.buys}</p>
-              <p style={{ fontSize: 12, margin: '0 0 12px' }}><b>Use when:</b> {p.when}</p>
-              <button className="btn-primary" style={{ width: '100%', justifyContent: 'center' }} onClick={() => navigate(`/agents?deploy=1&modes=${p.modes.join(',')}`)}>
-                Deploy this →
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
     </Layout>
   );
 }
