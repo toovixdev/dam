@@ -47,5 +47,14 @@ resource "google_compute_instance" "vm_db" {
     enable_secure_boot = true
   }
 
+  # Attach the default compute SA so on-VM agents can auth to Google APIs (Pub/Sub for the
+  # AgentLite forwarder) via the metadata server / ADC — SA keys are org-disabled. Changing a
+  # VM's service account requires it stopped, so let terraform stop/start it on update.
+  service_account {
+    email  = data.google_compute_default_service_account.default.email
+    scopes = ["cloud-platform"]
+  }
+  allow_stopping_for_update = true
+
   depends_on = [google_compute_router_nat.main]
 }

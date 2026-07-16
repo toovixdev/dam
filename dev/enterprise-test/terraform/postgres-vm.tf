@@ -94,6 +94,14 @@ resource "google_compute_instance" "pg_vm" {
     enable_secure_boot = true
   }
 
+  # Attach the default compute SA so an on-VM agent can auth to Google APIs (Pub/Sub) via the
+  # metadata server / ADC. Changing the SA requires the instance stopped.
+  service_account {
+    email  = data.google_compute_default_service_account.default.email
+    scopes = ["cloud-platform"]
+  }
+  allow_stopping_for_update = true
+
   depends_on = [google_compute_router_nat.main]
 }
 
