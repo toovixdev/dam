@@ -515,6 +515,24 @@ services:
       - dam-net
 
   # ═══════════════════════════════════════════════════════════
+  #  AGENTLITE AUDIT CONSUMER — Pub/Sub audit bus -> control-plane ingest bridge.
+  #  Idles locally (no PUBSUB_SUBSCRIPTION); on the GCP host set the subscription
+  #  and it streaming-pulls audit events, authing to Pub/Sub via the VM SA (ADC).
+  # ═══════════════════════════════════════════════════════════
+  dam-audit-consumer:
+    build: ./dam/audit-consumer
+    container_name: dam-audit-consumer
+    environment:
+      PUBSUB_SUBSCRIPTION: ${PUBSUB_SUBSCRIPTION:-}
+      GCP_PROJECT: ${GCP_PROJECT:-}
+      CONTROL_PLANE: http://dam-api:3000
+      CLOUDSQL_ENROLL_TOKEN: ${CLOUDSQL_ENROLL_TOKEN:-}
+    depends_on:
+      - dam-api
+    networks:
+      - dam-net
+
+  # ═══════════════════════════════════════════════════════════
   #  DISCOVERY AGENT — in-network DB scanner (port scan + fingerprint).
   #  Sits on client-net (reachability to DB subnets) and reports candidates.
   # ═══════════════════════════════════════════════════════════

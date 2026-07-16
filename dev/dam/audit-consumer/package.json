@@ -1,0 +1,9 @@
+{
+  "name": "dam-audit-consumer",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentLite audit consumer — Pub/Sub audit bus -> control-plane ingest bridge",
+  "dependencies": {
+    "@google-cloud/pubsub": "^4.9.0"
+  }
+}
