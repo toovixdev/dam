@@ -198,6 +198,10 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const [dbUser, setDbUser] = useState('');
   const [dbPass, setDbPass] = useState('');
   const [dbName, setDbName] = useState('');
+  // AgentLite (audit-forward) delivery: publish to Pub/Sub vs POST the control plane.
+  const [pubsub, setPubsub] = useState(true);
+  const [auditTopic, setAuditTopic] = useState('toovix-dam-audit');
+  const [gcpProject, setGcpProject] = useState('');
   const [instructions, setInstructions] = useState(null);
 
   const instance = instances.find((i) => i.id === instId);
@@ -249,6 +253,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
       token, cp, image, modes: [...modes], platform,
       target: instance?.instance || instance?.name, engine: instance?.engine,
       classify: useClassify, dbUser: dbUser.trim(), dbPass: dbPass.trim(), dbName: dbName.trim(),
+      pubsub, auditTopic: auditTopic.trim() || 'toovix-dam-audit', gcpProject: gcpProject.trim(),
     });
   };
   const done = () => { onDeployed(); onClose(); };
@@ -326,6 +331,27 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
               <b style={{ color: 'var(--green)' }}>AgentLite (Audit Forwarder)</b> is a lightweight forwarder on the DB host that tails the database&apos;s <b>native audit trail</b> and ships it out — no wire tap, no path change. It&apos;s <b>transport-independent</b> (captures TLS-encrypted sessions) and the recommended mode for <b>SQL Server, Oracle and MongoDB</b>. Requires the DB&apos;s native auditing enabled. After-the-fact — cannot block. (On PaaS the equivalent is <b>Agentless</b> — a cloud audit stream, no install.)
             </div>
           )}
+          {has('agentless') && (
+            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
+              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontSize: 12.5, lineHeight: 1.5 }}>
+                <input type="checkbox" checked={pubsub} onChange={(e) => { setPubsub(e.target.checked); setInstructions(null); }} style={{ marginTop: 3 }} />
+                <span><b>Publish to Pub/Sub</b> <span className="muted">— ship audit events to the Pub/Sub bus (VM service-account auth). Unchecked = POST straight to the control plane.</span></span>
+              </label>
+              {pubsub && (
+                <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
+                  <div className="form-field" style={{ flex: 1, margin: 0 }}>
+                    <label style={{ fontSize: 11.5 }}>Pub/Sub topic</label>
+                    <input value={auditTopic} onChange={(e) => { setAuditTopic(e.target.value); setInstructions(null); }} placeholder="toovix-dam-audit" />
+                  </div>
+                  <div className="form-field" style={{ flex: 1, margin: 0 }}>
+                    <label style={{ fontSize: 11.5 }}>GCP project <span className="muted">(optional — auto from metadata)</span></label>
+                    <input value={gcpProject} onChange={(e) => { setGcpProject(e.target.value); setInstructions(null); }} placeholder="(auto-detected on the VM)" />
+                  </div>
+                </div>
+              )}
+              <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>Grant the DB VM&apos;s service account <code>roles/pubsub.publisher</code> on the topic; the <b>dam-audit-consumer</b> pulls the subscription into the console.</div>
+            </div>
+          )}
         </>
       )}
 
@@ -387,7 +413,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
                 {MODES.find((x) => x.id === m)?.name}
                 {instructions.classify && m === instructions.modes[0] && <span className="pill info" style={{ marginLeft: 6 }}>+ classification</span>}
               </div>
-              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image, { classify: instructions.classify && m === instructions.modes[0], dbUser: instructions.dbUser, dbPass: instructions.dbPass, dbName: instructions.dbName })}</pre>
+              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image, { classify: instructions.classify && m === instructions.modes[0], dbUser: instructions.dbUser, dbPass: instructions.dbPass, dbName: instructions.dbName, pubsub: instructions.pubsub, auditTopic: instructions.auditTopic, gcpProject: instructions.gcpProject })}</pre>
             </div>
           ))}
           {instructions.classify && instructions.modes.length > 1 && (
@@ -418,9 +444,15 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   const eng = ({ postgres: 'postgresql' }[engine] || engine) || 'mysql';
   const agentless = m === 'agentless';
   const defPort = { postgresql: '5432', mssql: '1433', oracle: '1521', mongodb: '27017' }[eng] || '3306';
-  const auditSrc = { oracle: 'unified_audit_trail', mssql: 'sql_server_audit', postgresql: 'pgaudit', mysql: 'audit_log', mongodb: 'profiler' }[eng] || 'native_audit';
+  // The agent's audit-forward parser reads the MySQL/MariaDB GENERAL query log (not the
+  // audit_log plugin). Only MySQL/MariaDB are implemented today; other engines enroll + idle.
+  const auditSrc = { oracle: 'unified_audit_trail', mssql: 'sql_server_audit', postgresql: 'pgaudit', mysql: 'general_log', mariadb: 'general_log', mongodb: 'profiler' }[eng] || 'native_audit';
   // AgentLite tails this native audit source on the host (file where possible).
-  const auditLog = { mysql: '/var/lib/mysql/audit.log', mariadb: '/var/lib/mysql/server_audit.log', postgresql: '/var/log/postgresql/pgaudit.log', mssql: '/var/opt/mssql/audit/', oracle: '<UNIFIED_AUDIT_TRAIL>', mongodb: '/var/log/mongodb/audit.json' }[eng] || '<native-audit-log-path>';
+  const auditLog = { mysql: '/var/log/mysql/general.log', mariadb: '/var/log/mysql/general.log', postgresql: '/var/log/postgresql/pgaudit.log', mssql: '/var/opt/mssql/audit/', oracle: '<UNIFIED_AUDIT_TRAIL>', mongodb: '/var/log/mongodb/audit.json' }[eng] || '<native-audit-log-path>';
+  // AgentLite audit-forward is MySQL/MariaDB-only in the agent today — warn for anything else.
+  const warn = (agentless && !['mysql', 'mariadb'].includes(eng))
+    ? `# ⚠ AgentLite audit-forward currently supports MySQL/MariaDB only — ${eng} is NOT implemented\n#   yet: the agent enrolls and idles (no capture). For PostgreSQL use network or host mode.\n\n`
+    : '';
   const env = [
     `MODE=${agentless ? 'audit-forward' : m}`,
     `DB_ENGINE=${eng}`,
@@ -447,6 +479,12 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
       `AUDIT_SOURCE=${auditSrc}`,
       `AUDIT_LOG=${auditLog}`,
     );
+    // Publish to the Pub/Sub audit bus (auth via the host VM's service account / metadata token)
+    // instead of POSTing the control plane. Needs the VM SA to hold roles/pubsub.publisher.
+    if (opts.pubsub) {
+      env.push(`AUDIT_TOPIC=${opts.auditTopic || 'toovix-dam-audit'}`);
+      if (opts.gcpProject) env.push(`GCP_PROJECT=${opts.gcpProject}`);
+    }
   } else if (opts.classify) {
     // Data classification (optional) — the agent logs into the DB as a least-privilege
     // reader and classifies columns. Attached to a single container by the caller.
@@ -475,7 +513,9 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     const envLines = env.map((e) => `  -e ${e}`);
     const prereq = agentless
       ? `# Prerequisite: Docker on the DB host. AgentLite tails the DB's native audit log, so the
-#   database's own auditing must be ON, writing to ${auditLog}.
+#   database's own auditing must be ON, writing to ${auditLog}.${(eng === 'mysql' || eng === 'mariadb') ? `
+#   MySQL/MariaDB — enable the general query log to that file:
+#     SET GLOBAL general_log_file='${auditLog}'; SET GLOBAL general_log='ON';` : ''}
 `
       : `# Prerequisite: Docker must be installed on the VM / bare-metal host.
 #   Debian/Ubuntu:  curl -fsSL https://get.docker.com | sudo sh
@@ -497,7 +537,7 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
 #   specific NIC (e.g. eth0/ens4) for remote-only, or 'lo' for on-host only. Note:
 #   the passive sniffer reads PLAINTEXT — TLS-encrypted client sessions aren't decoded.
 ` : '';
-    return `${prereq}${note}docker run -d --name toovix-agent-${m} --restart unless-stopped${flags} \\
+    return `${warn}${prereq}${note}docker run -d --name toovix-agent-${m} --restart unless-stopped${flags} \\
 ${envLines.join(' \\\n')} \\
   ${img}`;
   }
@@ -507,7 +547,7 @@ ${envLines.join(' \\\n')} \\
     const classifySets = opts.classify
       ? ` \\\n  --set classify=true --set dbUser=${opts.dbUser || 'dam_svc'} --set dbPassword=${opts.dbPass || '<db-reader-password>'}${eng === 'postgresql' || eng === 'mssql' ? ` --set dbName=${opts.dbName || '<database-name>'}` : ''}`
       : '';
-    return `helm repo add toovix oci://registry.toovix.security/charts
+    return `${warn}helm repo add toovix oci://registry.toovix.security/charts
 helm install dam-${m} toovix/dam-agent \\
   --namespace toovix-dam --create-namespace \\
   --set token=${token} --set endpoint=${cp} \\
@@ -519,7 +559,7 @@ helm install dam-${m} toovix/dam-agent \\
   if (format === 'package') {
     // Templated unit: one .deb serves every mode. Each mode gets its own agent-<mode>.env, so
     // host/network/proxy coexist on the same host without colliding.
-    return `# Debian/Ubuntu (.deb) — RHEL/Rocky: sudo dnf install ./dam-agent-<ver>.x86_64.rpm
+    return `${warn}# Debian/Ubuntu (.deb) — RHEL/Rocky: sudo dnf install ./dam-agent-<ver>.x86_64.rpm
 curl -fsSL ${cp}/api/download/dam-agent_amd64.deb -o dam-agent.deb
 sudo dpkg -i dam-agent.deb   # installs the binary + the dam-agent@.service template (once)
 
@@ -532,7 +572,7 @@ journalctl -u dam-agent@${m} -f`;
   }
 
   // Default: static binary (eBPF embedded, no Docker, no deps) — installed via a systemd template.
-  return `# 1) Download the static binary (eBPF embedded, no deps). 'install' replaces it safely
+  return `${warn}# 1) Download the static binary (eBPF embedded, no deps). 'install' replaces it safely
 #    even if an agent is already running (avoids "text file busy").
 curl -fsSL ${cp}/api/download/dam-agent-linux-amd64 -o /tmp/dam-agent
 sudo install -D -m 0755 /tmp/dam-agent /usr/local/bin/dam-agent && rm -f /tmp/dam-agent
