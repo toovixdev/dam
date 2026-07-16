@@ -73,6 +73,17 @@ variable "vm_databases" {
   }
 }
 
+# ── The PostgreSQL-on-VM database (added to the shared VPC) ──
+variable "pg_vm" {
+  type = object({
+    name         = optional(string, "db-vm-pg")
+    machine_type = optional(string, "e2-small")
+    subnet_cidr  = optional(string, "10.40.0.0/24") # must not overlap the MySQL/Cloud SQL subnets
+    db_name      = optional(string, "inventory")
+  })
+  default = {}
+}
+
 # ── The Cloud SQL (PaaS) MySQL database, in its own VPC ──
 variable "cloudsql" {
   type = object({

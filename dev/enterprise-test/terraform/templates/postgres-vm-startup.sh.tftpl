@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# ── PostgreSQL installed NATIVELY (no Docker) — like a real DB host ──
+apt-get update -y
+apt-get install -y postgresql postgresql-contrib
+
+PGVER="$(ls /etc/postgresql | head -1)"       # e.g. 14 on Ubuntu 22.04
+PGCONF="/etc/postgresql/$${PGVER}/main"
+
+# Listen on the private NIC (still firewalled to the subnet only), and allow the
+# subnet + the app tier to auth with a password.
+echo "listen_addresses = '*'" >> "$${PGCONF}/postgresql.conf"
+echo "host all all ${subnet_cidr} md5" >> "$${PGCONF}/pg_hba.conf"
+systemctl enable postgresql
+systemctl restart postgresql
+for i in $(seq 1 30); do sudo -u postgres pg_isready -q && break; sleep 2; done
+
+# Superuser password + the test database + an app user + a least-privilege service user.
+sudo -u postgres psql <<EOSQL
+ALTER USER postgres WITH PASSWORD '${pg_root_password}';
+CREATE DATABASE ${db_name};
+CREATE USER app WITH PASSWORD '${pg_root_password}';
+GRANT ALL PRIVILEGES ON DATABASE ${db_name} TO app;
+CREATE USER dam_svc WITH PASSWORD '${dam_svc_password}';
+GRANT pg_monitor TO dam_svc;
+GRANT CONNECT ON DATABASE ${db_name} TO dam_svc;
+EOSQL
+
+# dam_svc = read-only monitor: SELECT on the app schema (current + future tables).
+sudo -u postgres psql -d ${db_name} <<EOSQL
+GRANT USAGE ON SCHEMA public TO dam_svc;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO dam_svc;
+EOSQL
+
+%{ if seed_b64 != "" ~}
+# ── Seed schema + data for this database ──
+echo '${seed_b64}' | base64 --decode > /tmp/seed.sql
+sudo -u postgres psql -d ${db_name} -f /tmp/seed.sql
+%{ endif ~}
+
+# ── Install Docker (so the TooVix DAM agent can run as a container; the static
+#    binary works too) — installed regardless of deploy_agents. ──
+apt-get install -y ca-certificates curl gnupg
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || true
+chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release; echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -y && apt-get install -y docker-ce docker-ce-cli containerd.io || apt-get install -y docker.io
+systemctl enable --now docker
+
+%{ if deploy_agents ~}
+# ── (Optional) auto-run the TooVix network agent — only when deploy_agents = true ──
+docker rm -f toovix-agent 2>/dev/null || true
+docker run -d --name toovix-agent --restart unless-stopped \
+  --network host --user 0 --cap-add NET_RAW --cap-add NET_ADMIN \
+  -e MODE=network -e DB_ENGINE=postgresql -e TARGET_HOST=127.0.0.1 -e TARGET_PORT=5432 \
+  -e TARGET_DB='${db_name}' -e DB_NAME='${db_name}' -e CAPTURE_IFACE='${capture_iface}' \
+  -e AGENT_ENROLL_TOKEN='${enroll_token}' -e CONTROL_PLANE='${control_plane_url}' \
+  -e CLICKHOUSE_URL='${clickhouse_url}' -e CLICKHOUSE_USER='${clickhouse_user}' -e CLICKHOUSE_PASSWORD='${clickhouse_password}' \
+  '${agent_image}'
+%{ endif ~}
