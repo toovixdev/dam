@@ -61,7 +61,17 @@ export default function Policies() {
   };
 
   const columns = [
-    { key: 'name', label: 'Rule', render: (v) => <b>{v}</b> },
+    { key: 'name', label: 'Rule', render: (v, row) => (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <b>{v}</b>
+        {row.inert_on_audit_instances > 0 && (
+          <span className="badge" style={{ fontSize: 10, color: 'var(--amber)', borderColor: 'var(--amber)' }}
+            title={`Volume/threshold rule — needs a result-visible capture mode (network / host / proxy). It can't fire on ${row.inert_on_audit_instances} instance(s) monitored via audit-log capture (AgentLite), where row counts aren't available.`}>
+            ⚠ audit-log gap
+          </span>
+        )}
+      </span>
+    ) },
     { key: 'rule_type', label: 'Type', render: (v) => <span className="badge">{v || '-'}</span> },
     { key: 'severity', label: 'Severity', render: (v) => <SeverityBadge severity={v || 'medium'} /> },
     { key: 'scope', label: 'Scope', render: (v) => <span className="mono" style={{ fontSize: 11.5 }}>{v || 'all'}</span> },
@@ -146,6 +156,12 @@ function PolicyDetail({ p, onStatus, onEdit }) {
         <span className={`badge ${(STATUS_BADGE[p.status] || STATUS_BADGE.disabled).cls} dot`}>{p.status}</span>
       </div>
       <p style={{ fontSize: 13, lineHeight: 1.5, margin: '0 0 12px' }}>{p.description || '—'}</p>
+
+      {p.inert_on_audit_instances > 0 && (
+        <div style={{ background: 'var(--amber-soft)', border: '1px solid var(--amber)', borderRadius: 8, padding: '10px 12px', margin: '0 0 12px', fontSize: 12.5, lineHeight: 1.55 }}>
+          <b style={{ color: 'var(--amber)' }}>⚠ Not effective on audit-log capture.</b> This rule thresholds on <b>rows returned</b>, but AgentLite (audit-log) capture records only the statement — <span className="mono">row_count</span> is always 0 there, so it <b>cannot fire</b> on <b>{p.inert_on_audit_instances}</b> instance{p.inert_on_audit_instances === 1 ? '' : 's'} monitored this way. Use <b>network</b> or <b>host (eBPF)</b> capture on those databases for volume-based detection.
+        </div>
+      )}
 
       {p.status === 'monitor' && (
         <div style={{ background: 'var(--info-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12.5, marginBottom: 12 }}>

@@ -6304,11 +6304,34 @@ app.post('/api/discovery/candidates/:id/dismiss', authRequired, async (req, res)
 });
 
 // ── Policies ──────────────────────────────────────────────
+// A rule needs the query RESULT (row_count) when it thresholds on rows_affected. Capture
+// modes that see the result — network, host_ebpf, inline_proxy — populate row_count; but
+// audit-log capture (AgentLite, agent_type 'audit_pull') sees only the STATEMENT, so
+// row_count is always 0 there and these rules can never fire on audit-log-only instances.
+function policyNeedsRowCount(def) {
+  let d = def;
+  if (typeof d === 'string') { try { d = JSON.parse(d); } catch { d = {}; } }
+  return !!(d && typeof d === 'object' && d.rows_affected && typeof d.rows_affected === 'object');
+}
+
 app.get('/api/policies', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
     'SELECT * FROM policies WHERE tenant_id = $1 ORDER BY created_at DESC', [req.user.tenantId]
   );
-  res.json(rows);
+  // Instances monitored ONLY by audit-log capture (AgentLite) — an audit_pull agent and no
+  // result-visible agent — where row_count is always 0, so rows_affected thresholds never match.
+  const auditOnly = parseInt((await pgPool.query(
+    `SELECT COUNT(*) AS n FROM db_instances i
+       WHERE i.tenant_id = $1
+         AND EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = i.id AND a.agent_type = 'audit_pull')
+         AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = i.id
+                         AND a.agent_type IN ('network','host_ebpf','inline_proxy'))`,
+    [req.user.tenantId]
+  )).rows[0].n) || 0;
+  res.json(rows.map((p) => {
+    const requires_result_capture = policyNeedsRowCount(p.rule_definition);
+    return { ...p, requires_result_capture, inert_on_audit_instances: requires_result_capture ? auditOnly : 0 };
+  }));
 });
 
 // Record a version snapshot whenever a rule changes (create / status / edit).
