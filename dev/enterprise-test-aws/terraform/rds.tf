@@ -40,5 +40,10 @@ resource "aws_instance" "seeder" {
     encrypted   = true
   }
 
+  # Pin to the deployed AMI; don't replace on a newer Ubuntu release.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = { Name = "${var.rds.name}-seeder" }
 }

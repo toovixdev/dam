@@ -19,5 +19,11 @@ resource "aws_instance" "vm" {
     encrypted   = true
   }
 
+  # Pin to the AMI already deployed; don't replace the VM when Canonical
+  # publishes a newer Ubuntu image (data.aws_ami.ubuntu uses most_recent).
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = { Name = each.key }
 }

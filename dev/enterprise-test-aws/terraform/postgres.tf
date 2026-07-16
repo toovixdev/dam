@@ -72,6 +72,11 @@ resource "aws_instance" "pg_vm" {
     encrypted   = true
   }
 
+  # Pin to the deployed AMI; don't replace on a newer Ubuntu release.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = { Name = var.pg_vm.name }
 }
 
