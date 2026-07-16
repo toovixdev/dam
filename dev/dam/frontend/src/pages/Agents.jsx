@@ -328,28 +328,36 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
           )}
           {has('agentless') && (
             <div style={{ background: 'rgba(22,163,74,.10)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
-              <b style={{ color: 'var(--green)' }}>AgentLite (Audit Forwarder)</b> is a lightweight forwarder on the DB host that tails the database&apos;s <b>native audit trail</b> and ships it out — no wire tap, no path change. It&apos;s <b>transport-independent</b> (captures TLS-encrypted sessions) and the recommended mode for <b>SQL Server, Oracle and MongoDB</b>. Requires the DB&apos;s native auditing enabled. After-the-fact — cannot block. (On PaaS the equivalent is <b>Agentless</b> — a cloud audit stream, no install.)
+              <b style={{ color: 'var(--green)' }}>AgentLite (Audit Forwarder)</b> is a lightweight forwarder on the DB host that tails the database&apos;s <b>native audit trail</b> and ships it out — no wire tap, no path change. It&apos;s <b>transport-independent</b> (captures TLS-encrypted sessions) and the recommended mode for <b>SQL Server, Oracle and MongoDB</b>. After-the-fact — cannot block. (On PaaS the equivalent is <b>Agentless</b> — a cloud audit stream, no install.)
+              <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--line)' }}>
+                <b>Prerequisites</b> (cloud-agnostic — same on GCP, AWS &amp; Azure):
+                <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+                  <li><b>Enable the database&apos;s native audit trail</b> on the host (MySQL/MariaDB general log, pgaudit, SQL Server Audit, Oracle Unified Audit, Mongo profiler).</li>
+                  <li>Allow the VM <b>outbound HTTPS (443)</b> to reach DAM (via the VPC&apos;s NAT for private VMs). No inbound rules are needed.</li>
+                </ul>
+                <div style={{ marginTop: 6 }}>Step-by-step: <a href="/guides/agentlite-mysql-vm.html" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--green)', fontWeight: 600 }}>Connect a MySQL-on-VM database with AgentLite ↗</a></div>
+              </div>
             </div>
           )}
           {has('agentless') && (
             <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontSize: 12.5, lineHeight: 1.5 }}>
                 <input type="checkbox" checked={pubsub} onChange={(e) => { setPubsub(e.target.checked); setInstructions(null); }} style={{ marginTop: 3 }} />
-                <span><b>Publish to Pub/Sub</b> <span className="muted">— ship audit events to the Pub/Sub bus (VM service-account auth). Unchecked = POST straight to the control plane.</span></span>
+                <span><b>Publish to an audit stream</b> <span className="muted">— ship events to your cloud&apos;s message bus (Pub/Sub · Kinesis · Event Hub) using the VM&apos;s own cloud identity, instead of POSTing the control plane. Adds a durable buffer that survives brief DAM outages. Unchecked = POST straight to the control plane.</span></span>
               </label>
               {pubsub && (
                 <div style={{ display: 'flex', gap: 10, marginTop: 10 }}>
                   <div className="form-field" style={{ flex: 1, margin: 0 }}>
-                    <label style={{ fontSize: 11.5 }}>Pub/Sub topic</label>
+                    <label style={{ fontSize: 11.5 }}>Stream / topic name</label>
                     <input value={auditTopic} onChange={(e) => { setAuditTopic(e.target.value); setInstructions(null); }} placeholder="toovix-dam-audit" />
                   </div>
                   <div className="form-field" style={{ flex: 1, margin: 0 }}>
-                    <label style={{ fontSize: 11.5 }}>GCP project <span className="muted">(optional — auto from metadata)</span></label>
+                    <label style={{ fontSize: 11.5 }}>Cloud project / namespace <span className="muted">(optional — auto-detected on the VM)</span></label>
                     <input value={gcpProject} onChange={(e) => { setGcpProject(e.target.value); setInstructions(null); }} placeholder="(auto-detected on the VM)" />
                   </div>
                 </div>
               )}
-              <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>Grant the DB VM&apos;s service account <code>roles/pubsub.publisher</code> on the topic; the <b>dam-audit-consumer</b> pulls the subscription into the console.</div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>Grant the DB VM&apos;s cloud identity <b>publish</b> rights on the stream (<code>roles/pubsub.publisher</code> on GCP · a <code>PutRecord</code> IAM policy on AWS · <b>Event Hubs Data Sender</b> on Azure); the <b>dam-audit-consumer</b> pulls it into the console. See the <a href="/guides/agentlite-mysql-vm.html" target="_blank" rel="noopener noreferrer">setup guide ↗</a>.</div>
             </div>
           )}
         </>

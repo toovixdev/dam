@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Connect a MySQL-on-VM database with AgentLite — TooVix DAM</title>
+<style>
+  :root{
+    --bg:#f5f7fa; --surface:#ffffff; --surface-2:#eef2f7; --ink:#1a2432; --ink-soft:#42506380;
+    --muted:#5a6779; --line:#dde3ec; --line-strong:#c8d1de;
+    --green:#12855b; --green-soft:#12855b14; --amber:#a86a12; --amber-soft:#a86a1216;
+    --danger:#c0392b; --code-bg:#1c2430; --code-ink:#e6edf5; --accent:#12855b;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0d121b; --surface:#141b26; --surface-2:#1a2331; --ink:#e6edf5; --ink-soft:#aab6c780;
+      --muted:#93a1b3; --line:#243040; --line-strong:#33425a;
+      --green:#3fc78a; --green-soft:#3fc78a16; --amber:#e0a94a; --amber-soft:#e0a94a16;
+      --danger:#e5736a; --code-bg:#0a0f16; --code-ink:#dfe7f0; --accent:#3fc78a;
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.6;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:860px;margin:0 auto;padding:40px 22px 96px}
+  header.hero{border-bottom:1px solid var(--line);padding-bottom:22px;margin-bottom:8px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 10px}
+  h1{font-size:clamp(25px,4.4vw,34px);line-height:1.12;margin:0 0 14px;letter-spacing:-.02em;text-wrap:balance}
+  .meta{display:flex;flex-wrap:wrap;gap:8px 10px;margin-top:6px}
+  .chip{font-size:12px;color:var(--muted);background:var(--surface-2);border:1px solid var(--line);border-radius:20px;padding:3px 11px}
+  .chip b{color:var(--ink);font-weight:600}
+  h2{font-size:19px;margin:40px 0 12px;letter-spacing:-.01em;padding-top:8px}
+  h3{font-size:15px;margin:24px 0 8px;color:var(--ink)}
+  p{margin:12px 0}
+  a{color:var(--accent);text-decoration:none;font-weight:600}
+  a:hover{text-decoration:underline}
+  ul{margin:12px 0;padding-left:22px}
+  li{margin:6px 0}
+  code{font-family:var(--mono);font-size:.88em;background:var(--surface-2);border:1px solid var(--line);border-radius:5px;padding:1px 5px;color:var(--ink)}
+  pre{background:var(--code-bg);color:var(--code-ink);border-radius:10px;padding:14px 16px;overflow-x:auto;margin:14px 0;border:1px solid var(--line-strong)}
+  pre code{background:none;border:0;padding:0;color:inherit;font-size:12.5px;line-height:1.6}
+  .cmt{color:#7f8ea3}
+  table{border-collapse:collapse;width:100%;margin:16px 0;font-size:13.5px;display:block;overflow-x:auto}
+  th,td{border:1px solid var(--line);padding:9px 12px;text-align:left;vertical-align:top}
+  th{background:var(--surface-2);font-weight:650;white-space:nowrap}
+  aside{border-left:3px solid var(--accent);background:var(--green-soft);border-radius:0 8px 8px 0;padding:11px 15px;margin:16px 0;font-size:13.5px}
+  aside.warn{border-left-color:var(--amber);background:var(--amber-soft)}
+  .ok{color:var(--green);font-weight:600}
+  .warn-i{color:var(--amber);font-weight:600}
+  .flow{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;font-family:var(--mono);font-size:12px;color:var(--muted);white-space:pre;overflow-x:auto;line-height:1.7}
+  hr{border:0;border-top:1px solid var(--line);margin:36px 0}
+  .toc{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:24px 0}
+  .toc b{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .toc ol{margin:8px 0 0;padding-left:20px;columns:2;font-size:13.5px}
+  .toc li{margin:3px 0}
+  footer{margin-top:48px;padding-top:18px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+  .back{display:inline-block;margin-bottom:20px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/agents">← Back to Deploy monitoring</a>
+  <header class="hero">
+    <p class="eyebrow">TooVix DAM · AgentLite setup guide</p>
+    <h1>Connect a MySQL-on-VM database with AgentLite</h1>
+    <p style="color:var(--muted);margin:0 0 14px;max-width:64ch">Monitor a MySQL database running on a Linux VM — in <b>GCP, AWS, or Azure</b> — using the AgentLite (audit-forward) approach. The steps are identical across clouds; only the outbound-egress setup differs.</p>
+    <div class="meta">
+      <span class="chip">⏱ <b>15–20 min</b></span>
+      <span class="chip">🔑 <b>sudo</b> on the DB VM + MySQL admin</span>
+      <span class="chip">🖥 Linux x86-64 · MySQL 5.7 / 8.x / MariaDB 10.x</span>
+    </div>
+  </header>
+
+  <div class="toc">
+    <b>On this page</b>
+    <ol>
+      <li><a href="#what">What AgentLite is</a></li>
+      <li><a href="#log">Enable the general query log</a></li>
+      <li><a href="#user">Read-only user (optional)</a></li>
+      <li><a href="#token">Get your enrollment token</a></li>
+      <li><a href="#install">Install &amp; run the agent</a></li>
+      <li><a href="#verify">Verify</a></li>
+      <li><a href="#egress">Per-cloud egress notes</a></li>
+      <li><a href="#bus">Publish to an audit stream (optional)</a></li>
+      <li><a href="#trouble">Troubleshooting</a></li>
+      <li><a href="#security">Security &amp; privacy</a></li>
+    </ol>
+  </div>
+
+  <h2 id="what">1. What AgentLite is (and what it isn't)</h2>
+  <p><b>AgentLite</b> is a lightweight forwarder you install <b>on the database host</b>. It <b>tails MySQL's own general query log</b> and ships each statement to TooVix DAM.</p>
+  <ul>
+    <li><span class="ok">✅ No wire tap, no proxy, no path change</span> — it reads a log file the database already writes.</li>
+    <li><span class="ok">✅ Transport-independent</span> — because it reads what the DB logs <em>after</em> decryption, it captures <b>TLS-encrypted</b> client sessions too.</li>
+    <li><span class="ok">✅ Works on private, no-public-IP databases</span> — the agent only makes <b>outbound</b> connections to DAM; DAM never connects into your network.</li>
+    <li><span class="warn-i">⚠️ Detective only</span> — it observes and alerts <b>after the fact</b>; it <b>cannot block</b> a query. (Use Inline Proxy mode if you need prevention.)</li>
+    <li><span class="warn-i">⚠️ Records all SQL</span> — the general log captures every statement from every session in cleartext on the VM. Treat the log file as sensitive (see §10).</li>
+  </ul>
+  <div class="flow">MySQL (general log)  →  AgentLite forwarder (on the DB VM)  →  TooVix DAM  →  Database Activity view
+                     reads /var/log/mysql/general.log      (HTTPS, or an audit stream)</div>
+  <p><b>Requirements:</b> Linux VM <b>x86-64 (amd64)</b> (arm64/Graviton not yet supported) · MySQL 5.7 / 8.x or MariaDB 10.x · <b>outbound HTTPS (443)</b> from the VM to your DAM control-plane URL (see §7).</p>
+
+  <hr />
+
+  <h2 id="log">2. Step 1 — Enable the MySQL general query log</h2>
+  <p>AgentLite reads MySQL's <b>general query log written to a file</b>. Enable it and point it at a known path. Log in as MySQL admin and run:</p>
+  <pre><code><span class="cmt">-- write the log to a FILE (not a table), at a fixed path</span>
+SET GLOBAL log_output      = 'FILE';
+SET GLOBAL general_log_file = '/var/log/mysql/general.log';
+SET GLOBAL general_log      = 'ON';</code></pre>
+  <p><b>Make it survive a MySQL restart</b> — the <code>SET GLOBAL</code> above is runtime-only. Add a config drop-in:</p>
+  <pre><code><span class="cmt"># Debian/Ubuntu: /etc/mysql/mysql.conf.d/  ·  RHEL/Rocky: /etc/my.cnf.d/</span>
+sudo tee /etc/mysql/mysql.conf.d/zz-toovix-audit.cnf &gt;/dev/null &lt;&lt;'EOF'
+[mysqld]
+log_output       = FILE
+general_log      = 1
+general_log_file = /var/log/mysql/general.log
+EOF</code></pre>
+  <p>Verify the file is being written:</p>
+  <pre><code>sudo tail -f /var/log/mysql/general.log   <span class="cmt"># run a query elsewhere; lines should appear</span></code></pre>
+  <aside><b>Note on volume:</b> the general log grows with every query. For busy databases, ensure log rotation (<code>logrotate</code>) and adequate disk. AgentLite tails the live file and handles rotation/truncation automatically.</aside>
+
+  <hr />
+
+  <h2 id="user">3. Step 2 — (Optional) Create a read-only user for classification</h2>
+  <p>DAM can classify which columns hold PII/PCI. This is <b>separate from capture</b> — it logs into MySQL as a <b>least-privilege reader</b>. Skip this if you only want activity capture.</p>
+  <pre><code>CREATE USER 'dam_svc'@'%' IDENTIFIED BY '&lt;choose-a-strong-password&gt;';
+GRANT SELECT, PROCESS ON *.* TO 'dam_svc'@'%';
+FLUSH PRIVILEGES;</code></pre>
+  <p><code>dam_svc</code> gets <b>read-only</b> access (<code>SELECT</code> for schema inspection, <code>PROCESS</code> for session metadata) — it can never modify data.</p>
+
+  <hr />
+
+  <h2 id="token">4. Step 3 — Get your enrollment token</h2>
+  <p>In the <b>TooVix DAM console</b>:</p>
+  <ul>
+    <li>Go to <b>Agents → Deploy monitoring</b> (or <b>Databases → register your instance</b>, then Deploy).</li>
+    <li>Select your instance and the <b>AgentLite (Audit Forwarder)</b> mode.</li>
+    <li>Copy the <b>enrollment token</b> (looks like <code>tvxenr_…</code>) and the <b>control-plane URL</b> (e.g. <code>https://dam.yourcompany.com</code>).</li>
+  </ul>
+  <p>The token binds the agent to <b>your workspace/tenant</b>, so captured activity is attributed correctly. The console also generates a ready-to-paste command — this guide explains each part so you can do it by hand.</p>
+
+  <hr />
+
+  <h2 id="install">5. Step 4 — Install &amp; run the agent</h2>
+  <p>Pick <b>one</b> install method. In all cases the agent needs to <b>read the general log</b> and <b>reach DAM over HTTPS</b>. Set these once:</p>
+  <pre><code>CONTROL_PLANE="https://dam.yourcompany.com"          <span class="cmt"># from Step 3</span>
+ENROLL_TOKEN="tvxenr_xxxxxxxxxxxxxxxxxxxx"            <span class="cmt"># from Step 3</span>
+AUDIT_LOG="/var/log/mysql/general.log"               <span class="cmt"># from Step 1</span>
+DB_VM_HOST="10.0.0.10"                               <span class="cmt"># THIS VM's private IP / hostname</span></code></pre>
+  <aside><b><code>DB_VM_HOST</code></b> is how DAM identifies this database instance — use the VM's <b>private IP or hostname</b>, matching the instance as registered in the console. It must be <b>unique per DB VM</b> (don't use <code>127.0.0.1</code>, or several VMs collapse into one record).</aside>
+
+  <h3>Option A — Docker (simplest)</h3>
+  <pre><code>docker run -d --name toovix-agent-audit --restart unless-stopped \
+  --user 0 \
+  -v ${AUDIT_LOG}:${AUDIT_LOG}:ro \
+  -e MODE=audit-forward \
+  -e DB_ENGINE=mysql \
+  -e TARGET_HOST=${DB_VM_HOST} \
+  -e TARGET_PORT=3306 \
+  -e AUDIT_SOURCE=general_log \
+  -e AUDIT_LOG=${AUDIT_LOG} \
+  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} \
+  -e CONTROL_PLANE=${CONTROL_PLANE} \
+  &lt;your-dam-agent-image&gt;            <span class="cmt"># e.g. registry.yourcompany.com/dam-agent:latest</span></code></pre>
+
+  <h3>Option B — Native package (.deb / .rpm) + systemd</h3>
+  <pre><code><span class="cmt"># Download the agent from your control plane</span>
+curl -fsSL ${CONTROL_PLANE}/api/download/dam-agent_amd64.deb -o dam-agent.deb   <span class="cmt"># Debian/Ubuntu</span>
+sudo dpkg -i dam-agent.deb
+<span class="cmt"># RHEL/Rocky:  curl -fsSL ${CONTROL_PLANE}/api/download/dam-agent_amd64.rpm -o dam-agent.rpm &amp;&amp; sudo dnf install -y ./dam-agent.rpm</span>
+
+<span class="cmt"># Configure this instance (templated unit: dam-agent@&lt;name&gt; reads /etc/toovix/agent-&lt;name&gt;.env)</span>
+sudo mkdir -p /etc/toovix
+sudo tee /etc/toovix/agent-audit.env &gt;/dev/null &lt;&lt;EOF
+MODE=audit-forward
+DB_ENGINE=mysql
+TARGET_HOST=${DB_VM_HOST}
+TARGET_PORT=3306
+AUDIT_SOURCE=general_log
+AUDIT_LOG=${AUDIT_LOG}
+AGENT_ENROLL_TOKEN=${ENROLL_TOKEN}
+CONTROL_PLANE=${CONTROL_PLANE}
+EOF
+
+sudo systemctl enable --now dam-agent@audit
+journalctl -u dam-agent@audit -f     <span class="cmt"># watch it enroll + start tailing</span></code></pre>
+  <aside>To also run <b>classification</b> (Step 2), add <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=&lt;the password&gt;</code> to the env / <code>-e</code> flags.</aside>
+  <p><b>A healthy start looks like:</b></p>
+  <pre><code>=== TooVix DAM Agent · mode=audit-forward engine=mysql target=…:3306 ===
+enrolled: agent=… instance=… tenant=…
+AgentLite audit-forward tailing /var/log/mysql/general.log (source=general_log engine=mysql)
+[capture] SELECT  rows=…  &lt;user&gt;  SELECT …</code></pre>
+
+  <hr />
+
+  <h2 id="verify">6. Step 5 — Verify</h2>
+  <ul>
+    <li>Run a distinctive query against MySQL over <b>TCP</b>, so it's logged:
+      <pre><code>mysql -h 127.0.0.1 -u &lt;someuser&gt; -p -e "SELECT 'dam-verify-123', NOW();"</code></pre>
+    </li>
+    <li>In the console, open <b>Databases → your instance → Database Activity</b> (in the <b>same workspace</b> the enrollment token belongs to).</li>
+    <li>Within a few seconds you should see <code>SELECT 'dam-verify-123'…</code> attributed to your DB and principal.</li>
+  </ul>
+  <p>If it appears — <b class="ok">you're done.</b> AgentLite is capturing.</p>
+
+  <hr />
+
+  <h2 id="egress">7. Per-cloud notes (egress + the private-VM case)</h2>
+  <p>The core steps are <b>identical on GCP, AWS, and Azure.</b> The only cloud-specific concern is giving the VM <b>outbound HTTPS (443)</b> to reach DAM — especially for <b>private (no public IP)</b> databases.</p>
+  <table>
+    <thead><tr><th>Cloud</th><th>Give the private DB VM outbound HTTPS</th><th>Reach it to install</th></tr></thead>
+    <tbody>
+      <tr><td><b>GCP</b></td><td><b>Cloud NAT</b> on the VPC/subnet (or an external IP). Egress firewall allows outbound by default.</td><td><b>IAP</b> SSH</td></tr>
+      <tr><td><b>AWS</b></td><td><b>NAT Gateway</b> + a route from the private subnet; Security Group <b>outbound 443</b> (default SG allows all egress).</td><td><b>SSM Session Manager</b></td></tr>
+      <tr><td><b>Azure</b></td><td>Default outbound or a <b>NAT Gateway</b>; NSG <b>outbound 443</b> (default <code>AllowInternetOutBound</code>).</td><td><b>Bastion / jump-box</b></td></tr>
+    </tbody>
+  </table>
+  <p>The agent <b>only dials out</b> — DAM never initiates a connection into your network, so <b>no inbound rules</b> are required for monitoring.</p>
+
+  <hr />
+
+  <h2 id="bus">8. (Optional) Publish to an audit stream instead of direct HTTPS</h2>
+  <p>Instead of POSTing DAM directly, the agent can publish audit events to your cloud's <b>message bus / audit stream</b> that DAM consumes — a durable buffer that survives brief DAM outages. This is optional; direct HTTPS (§5) works fine. The bus is the cloud-native stream for your provider:</p>
+  <table>
+    <thead><tr><th>Cloud</th><th>Audit stream</th><th>Publish permission on the VM's identity</th></tr></thead>
+    <tbody>
+      <tr><td><b>GCP</b></td><td>Cloud <b>Pub/Sub</b> topic</td><td><code>roles/pubsub.publisher</code> on the topic</td></tr>
+      <tr><td><b>AWS</b></td><td><b>Kinesis</b> stream (or SNS/SQS)</td><td>an IAM policy allowing <code>PutRecord</code> on the stream</td></tr>
+      <tr><td><b>Azure</b></td><td><b>Event Hub</b></td><td>the <b>Azure Event Hubs Data Sender</b> role</td></tr>
+    </tbody>
+  </table>
+  <p><b>Coordinate with your DAM operator</b> — they provide the <b>stream/topic name</b> and run the subscription consumer (<code>dam-audit-consumer</code>). The agent authenticates with the <b>VM's own attached cloud identity</b> (metadata server / managed identity) — <b>no key file</b>, since SA/secret keys are often disabled by org policy. Then add to the agent env:</p>
+  <pre><code>AUDIT_TOPIC=&lt;stream-or-topic-name&gt;     <span class="cmt"># e.g. toovix-dam-audit</span>
+GCP_PROJECT=&lt;project-id&gt;               <span class="cmt"># optional — auto-detected from the metadata server</span></code></pre>
+  <p>When <code>AUDIT_TOPIC</code> is set the agent <b>publishes to the stream</b>; when unset it POSTs the control plane over HTTPS. Everything else stays the same.</p>
+  <p><em>GCP example — grant the VM's service account publish, and attach it with cloud-platform scope:</em></p>
+  <pre><code>gcloud pubsub topics add-iam-policy-binding &lt;TOPIC&gt; \
+  --member="serviceAccount:&lt;VM_SERVICE_ACCOUNT_EMAIL&gt;" --role="roles/pubsub.publisher"
+<span class="cmt"># attach the SA (requires stop/start):</span>
+gcloud compute instances stop  &lt;VM&gt; --zone &lt;ZONE&gt;
+gcloud compute instances set-service-account &lt;VM&gt; --zone &lt;ZONE&gt; \
+  --service-account=&lt;VM_SERVICE_ACCOUNT_EMAIL&gt; --scopes=cloud-platform
+gcloud compute instances start &lt;VM&gt; --zone &lt;ZONE&gt;</code></pre>
+
+  <hr />
+
+  <h2 id="trouble">9. Troubleshooting</h2>
+  <table>
+    <thead><tr><th>Symptom</th><th>Cause &amp; fix</th></tr></thead>
+    <tbody>
+      <tr><td><code>audit-forward: open …/general.log: permission denied</code></td><td>The MySQL log is owned by <code>mysql</code> (dir <code>750 mysql:adm</code>, file <code>640</code>). The shipped <code>.deb</code>/<code>.rpm</code> unit runs as <b>root with <code>CAP_DAC_READ_SEARCH</code></b>, and Docker uses <code>--user 0</code> — both fine. A <b>custom</b> unit with a <code>CapabilityBoundingSet</code> must <b>add <code>CAP_DAC_READ_SEARCH</code></b>, or add the agent's user to the log's group and make it group-readable.</td></tr>
+      <tr><td>Nothing shows in Database Activity</td><td>1) <code>SHOW VARIABLES LIKE 'general_log%';</code> → is it <code>ON</code> and <code>log_output=FILE</code>? 2) Does <code>AUDIT_LOG</code> match <code>general_log_file</code>? 3) Agent logs: did it <b>enroll</b> and can it reach <code>CONTROL_PLANE</code> (outbound 443)?</td></tr>
+      <tr><td>Capture stops after a MySQL restart</td><td><code>general_log</code> was only set at runtime. Add the <b>my.cnf drop-in</b> from §2.</td></tr>
+      <tr><td>Queries run locally aren't captured</td><td>Use <b>TCP</b> (<code>mysql -h 127.0.0.1 …</code>) and confirm the log is receiving writes.</td></tr>
+      <tr><td>Stream publish fails (e.g. <code>403</code> / init failed)</td><td>The VM has <b>no cloud identity attached</b>, or it lacks <b>publish</b> permission on the stream. See §8.</td></tr>
+      <tr><td>Wrong workspace</td><td>View the console in the <b>same tenant/workspace</b> the enrollment token belongs to; agents are tenant-scoped.</td></tr>
+    </tbody>
+  </table>
+
+  <hr />
+
+  <h2 id="security">10. Security &amp; privacy notes</h2>
+  <ul>
+    <li><b>The general query log contains every SQL statement</b> (from all apps and users) in cleartext on the VM. Restrict file permissions, enable rotation, and treat it as sensitive data.</li>
+    <li><b>AgentLite is detective, not preventive</b> — it alerts after the fact and cannot block. For real-time blocking, use <b>Inline Proxy</b> mode.</li>
+    <li><b>The agent only makes outbound connections</b> to DAM (HTTPS, or your audit stream). No inbound ports are opened; DAM never connects into your database network.</li>
+    <li><b>Least privilege:</b> the optional <code>dam_svc</code> user is read-only (<code>SELECT, PROCESS</code>). Rotate its password per your policy.</li>
+  </ul>
+
+  <footer>
+    Questions, or a non-MySQL engine (PostgreSQL / SQL Server / Oracle / MongoDB)? Contact your TooVix DAM operator — AgentLite audit-forward currently supports MySQL/MariaDB; other engines use network, host, or inline-proxy capture.
+  </footer>
+</div>
+</body>
+</html>
