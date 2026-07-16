@@ -16,15 +16,17 @@ const PATHS = [
   ['Local / IPC (Unix socket, shared mem)', ['✗', 'm'], ['✗', 'm'], ['✓ only one', 'g']],
 ];
 
-const COMBO_COLS = ['Network', 'Host', 'Proxy', 'Net + Host', 'Proxy + Net', 'All 3'];
+const COMBO_COLS = ['Network', 'Host', 'Proxy', 'Net + Host', 'Proxy + Net', 'All 3', 'AgentLite'];
 const COMBO_ROWS = [
-  ['Networked SQL visibility', [['✓', 'g'], ['✓', 'g'], ['Routed only', 'a'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g']]],
-  ['Local / IPC visibility', [['✗', 'm'], ['✓', 'g'], ['✗', 'm'], ['✓', 'g'], ['✗', 'm'], ['✓', 'g']]],
-  ['Real end-user attribution', [['✗', 'm'], ['Partial', 'a'], ['✓', 'g'], ['Partial', 'a'], ['✓', 'g'], ['✓', 'g']]],
-  ['Block / quarantine', [['✗', 'm'], ['Local only', 'a'], ['✓', 'g'], ['✗', 'm'], ['✓', 'g'], ['✓', 'g']]],
-  ['Reroutes clients?', [['no', 'm'], ['no', 'm'], ['YES', 'a'], ['no', 'm'], ['YES', 'a'], ['YES', 'a']]],
-  ['Install on DB host?', [['no', 'm'], ['YES', 'a'], ['no', 'm'], ['on host', 'a'], ['no', 'm'], ['on host', 'a']]],
-  ['Containers to deploy', [['1', 'n'], ['1', 'n'], ['1', 'n'], ['2', 'n'], ['2', 'n'], ['3', 'n']]],
+  ['Networked SQL visibility', [['✓', 'g'], ['✓', 'g'], ['Routed only', 'a'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g']]],
+  ['Local / IPC visibility', [['✗', 'm'], ['✓', 'g'], ['✗', 'm'], ['✓', 'g'], ['✗', 'm'], ['✓', 'g'], ['✓', 'g']]],
+  ['Sees TLS-encrypted traffic', [['✗', 'm'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g']]],
+  ['Result size / row counts', [['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✗', 'm']]],
+  ['Real end-user attribution', [['✗', 'm'], ['Partial', 'a'], ['✓', 'g'], ['Partial', 'a'], ['✓', 'g'], ['✓', 'g'], ['Partial', 'a']]],
+  ['Block / quarantine', [['✗', 'm'], ['Local only', 'a'], ['✓', 'g'], ['✗', 'm'], ['✓', 'g'], ['✓', 'g'], ['✗', 'm']]],
+  ['Reroutes clients?', [['no', 'm'], ['no', 'm'], ['YES', 'a'], ['no', 'm'], ['YES', 'a'], ['YES', 'a'], ['no', 'm']]],
+  ['Install on DB host?', [['no', 'm'], ['YES', 'a'], ['no', 'm'], ['on host', 'a'], ['no', 'm'], ['on host', 'a'], ['on host', 'a']]],
+  ['Containers to deploy', [['1', 'n'], ['1', 'n'], ['1', 'n'], ['2', 'n'], ['2', 'n'], ['3', 'n'], ['1', 'n']]],
 ];
 
 const APPLIC_COLS = ['Deployment', 'Network', 'Host', 'Inline Proxy', 'AgentLite / Agentless', 'Recommended'];
@@ -339,6 +341,9 @@ export default function CaptureModes() {
               ))}
             </tbody>
           </table>
+        </div>
+        <div className="card-body" style={{ paddingTop: 10, fontSize: 12, lineHeight: 1.55 }}>
+          <span className="muted"><b style={{ color: 'var(--ink)' }}>AgentLite</b> reads the database’s own native audit log, so with zero touch it captures every path — including local/IPC and <b>TLS-encrypted</b> sessions — but it’s <b>statement-level</b>: it sees <b>what</b> ran, not <b>how many rows</b> came back, and can’t block. (<b>Agentless</b> is the same capture off-host, for PaaS.) So volume / threshold rules (bulk read, bulk export) don’t fire on AgentLite — those need Network, Host, or Proxy.</span>
         </div>
       </div>
 
