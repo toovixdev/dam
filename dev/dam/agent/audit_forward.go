@@ -14,12 +14,21 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
 func runAuditForward(cfg Config) {
 	if cfg.AuditLog == "" {
 		log.Fatalf("audit-forward: AUDIT_LOG (path to the native audit log) is required")
+	}
+	// Single-instance guard: only ONE audit-forward agent per host+log may run. Two forwarders
+	// tailing the same log double every event — which happens when leftover systemd template
+	// instances coexist (e.g. dam-agent@audit + dam-agent@agentlite). Take an exclusive lock
+	// keyed to the log path; a duplicate refuses to start rather than double-count.
+	if !lockAuditForward(cfg.AuditLog) {
+		log.Printf("audit-forward: another AgentLite is already tailing %s on this host — refusing to start a duplicate (prevents double-counted events). Exiting.", cfg.AuditLog)
+		os.Exit(0)
 	}
 	log.Printf("AgentLite audit-forward tailing %s (source=%s engine=%s)", cfg.AuditLog, cfg.AuditSource, cfg.Engine)
 	switch cfg.Engine {
@@ -31,6 +40,29 @@ func runAuditForward(cfg Config) {
 		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql) — enrolled + idle", cfg.Engine)
 		select {}
 	}
+}
+
+// auditLockFile holds the single-instance lock for the process lifetime (the OS releases it on exit).
+var auditLockFile *os.File
+
+// lockAuditForward takes an exclusive, non-blocking flock keyed to the audit-log path so only one
+// audit-forward agent per host+log can run. Returns false if another live instance holds the lock;
+// returns true (fail-open) if no lock file can be created, so a lock-file quirk never blocks capture.
+func lockAuditForward(path string) bool {
+	name := "toovix-agentlite" + strings.ReplaceAll(path, "/", "_") + ".lock"
+	for _, dir := range []string{"/run", "/tmp"} {
+		f, err := os.OpenFile(dir+"/"+name, os.O_CREATE|os.O_RDWR, 0o644)
+		if err != nil {
+			continue
+		}
+		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+			f.Close()
+			return false // held by another live audit-forward instance
+		}
+		auditLockFile = f // keep open for the process lifetime
+		return true
+	}
+	return true // couldn't create a lock file anywhere — don't block capture over that
 }
 
 // MySQL general-log FILE line: "<time>\t   <id> <Command>\t<argument>". The time column is
