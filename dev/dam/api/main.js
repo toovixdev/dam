@@ -603,11 +603,15 @@ async function runAuthMigration() {
     for (const col of [
       'rule VARCHAR(120)', 'user_type VARCHAR(60)', 'flags TEXT[] DEFAULT \'{}\'',
       'action VARCHAR(40)', 'subtype VARCHAR(60)', 'object_name VARCHAR(160)',
-      'rows_affected VARCHAR(40)', 'client_ip VARCHAR(60)', 'program VARCHAR(60)',
+      'rows_affected VARCHAR(40)', 'client_ip VARCHAR(255)', 'program VARCHAR(60)',
       'sensitivity_tags TEXT[] DEFAULT \'{}\'', 'why TEXT', 'rule_condition TEXT',
     ]) {
       await client.query(`ALTER TABLE alerts ADD COLUMN IF NOT EXISTS ${col}`);
     }
+    // client_ip stores hostnames too (e.g. a GCP internal FQDN is ~63 chars), not just IPs.
+    // Widen it on existing DBs so the detection-engine alert INSERT can't overflow the old
+    // VARCHAR(60) — that error silently aborted the whole detection pass (no alerts written).
+    await client.query(`ALTER TABLE alerts ALTER COLUMN client_ip TYPE VARCHAR(255)`);
     // Backfill older alerts so the detail popup always has content.
     await client.query(
       `UPDATE alerts SET
@@ -9589,7 +9593,7 @@ async function runDetectionEngine() {
                                  rule, action, subtype, object_name, rows_affected, client_ip, sensitivity_tags, why, rule_condition)
              VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'open',$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id, created_at`,
             [tenantId, dbByName[ev.database_name] || dbByHost[ev.source_host] || null, p.id, p.severity, ev.principal, p.name, ev.sql_text, score,
-             p.name, ev.operation, ev.operation, object, rowsTxt, ev.client_ip || '', ev.tags || [], p.description,
+             p.name, ev.operation, ev.operation, object, rowsTxt, (ev.client_ip || '').slice(0, 255), ev.tags || [], p.description,
              typeof p.rule_definition === 'string' ? p.rule_definition : JSON.stringify(p.rule_definition || {})]
           );
           try { broadcast({ type: 'alert', alert: { id: ins.rows[0].id, severity: p.severity, principal: ev.principal, database: ev.database_name, summary: p.name, anomaly_score: score, timestamp: ins.rows[0].created_at } }); } catch (e) { /* WS optional */ }
