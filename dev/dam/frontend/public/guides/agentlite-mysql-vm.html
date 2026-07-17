@@ -224,6 +224,9 @@ AgentLite audit-forward tailing /var/log/mysql/general.log (source=general_log e
 
   <h2 id="bus">8. (Optional) Publish to an audit stream instead of direct HTTPS</h2>
   <p>Instead of POSTing DAM directly, the agent can publish audit events to your cloud's <b>message bus / audit stream</b> that DAM consumes — a durable buffer that survives brief DAM outages. This is optional; direct HTTPS (§5) works fine. The bus is the cloud-native stream for your provider:</p>
+
+  <aside class="warn"><b>⚠️ The stream is never automatic.</b> On every cloud you <b>provision the stream yourself</b> and grant access — a fresh database or VM emits <b>nothing</b> to a stream until you configure it. There are always two parts: <b>(1)</b> create the stream (a Pub/Sub topic, Kinesis stream, or Event Hub), and <b>(2)</b> grant the publisher (this agent's VM identity) <em>and</em> the DAM consumer access to it.</aside>
+
   <table>
     <thead><tr><th>Cloud</th><th>Audit stream</th><th>Publish permission on the VM's identity</th></tr></thead>
     <tbody>
@@ -244,6 +247,8 @@ gcloud compute instances stop  &lt;VM&gt; --zone &lt;ZONE&gt;
 gcloud compute instances set-service-account &lt;VM&gt; --zone &lt;ZONE&gt; \
   --service-account=&lt;VM_SERVICE_ACCOUNT_EMAIL&gt; --scopes=cloud-platform
 gcloud compute instances start &lt;VM&gt; --zone &lt;ZONE&gt;</code></pre>
+
+  <aside><b>Two ways the audit reaches the stream.</b> With <b>AgentLite on a VM</b> (this guide), the on-host forwarder <b>publishes directly</b> to the stream — no cloud log sink is involved. For a <b>managed / PaaS database</b> (the <b>Agentless</b> path) there's no host to install on, so the <b>cloud itself routes</b> the database's native audit into the stream — e.g. a Cloud SQL log sink → Pub/Sub, an <b>RDS Database Activity Stream</b> → Kinesis, or an <b>Azure SQL diagnostic setting</b> → Event Hub. Either way, DAM just consumes the stream.</aside>
 
   <hr />
 
