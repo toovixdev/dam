@@ -51,10 +51,13 @@ resource "azurerm_eventhub_authorization_rule" "dam_listen" {
 }
 
 # ── Turn on Azure SQL auditing and route it to the hub ────────────────────────────────
-# log_monitoring_enabled routes audit to the diagnostic-settings destinations below
-# (Event Hub) rather than requiring a storage account.
-resource "azurerm_mssql_server_extended_auditing_policy" "paas" {
-  server_id              = azurerm_mssql_server.paas.id
+# IMPORTANT: this must be DATABASE-level auditing, not server-level. Server-level auditing
+# paired with a database-scoped diagnostic setting captures NOTHING (the DB's own audit stays
+# Disabled), so no events ever reach the hub. Database-level auditing with log_monitoring_enabled
+# routes the DB's audit to the diagnostic-settings destination (the Event Hub below). Verified:
+# ~2-minute end-to-end latency query→hub→ClickHouse.
+resource "azurerm_mssql_database_extended_auditing_policy" "paas" {
+  database_id            = azurerm_mssql_database.paas.id
   log_monitoring_enabled = true
 }
 
@@ -69,7 +72,7 @@ resource "azurerm_monitor_diagnostic_setting" "sql_audit" {
     category = "SQLSecurityAuditEvents"
   }
 
-  depends_on = [azurerm_mssql_server_extended_auditing_policy.paas]
+  depends_on = [azurerm_mssql_database_extended_auditing_policy.paas]
 }
 
 # ── Outputs to configure the DAM connector (once the Event Hub consumer ships) ─────────
