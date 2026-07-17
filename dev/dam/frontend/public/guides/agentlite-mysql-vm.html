@@ -64,12 +64,12 @@
   <a class="back" href="/agents">← Back to Deploy monitoring</a>
   <header class="hero">
     <p class="eyebrow">TooVix DAM · AgentLite setup guide</p>
-    <h1>Connect a MySQL-on-VM database with AgentLite</h1>
-    <p style="color:var(--muted);margin:0 0 14px;max-width:64ch">Monitor a MySQL database running on a Linux VM — in <b>GCP, AWS, or Azure</b> — using the AgentLite (audit-forward) approach. The steps are identical across clouds; only the outbound-egress setup differs.</p>
+    <h1>Connect a self-managed database with AgentLite</h1>
+    <p style="color:var(--muted);margin:0 0 14px;max-width:64ch">Monitor a <b>MySQL</b> or <b>PostgreSQL</b> database on a Linux VM — in <b>GCP, AWS, or Azure</b> — using the AgentLite (audit-forward) approach. The steps are identical across clouds; only the per-engine audit setup (§2) and outbound-egress (§7) differ. <b>SQL Server</b> takes a different path — see §2.</p>
     <div class="meta">
       <span class="chip">⏱ <b>15–20 min</b></span>
-      <span class="chip">🔑 <b>sudo</b> on the DB VM + MySQL admin</span>
-      <span class="chip">🖥 Linux x86-64 · MySQL 5.7 / 8.x / MariaDB 10.x</span>
+      <span class="chip">🔑 <b>sudo</b> on the DB VM + DB admin</span>
+      <span class="chip">🖥 Linux x86-64 · MySQL 5.7/8.x · MariaDB 10.x · PostgreSQL 12+</span>
     </div>
   </header>
 
@@ -77,7 +77,7 @@
     <b>On this page</b>
     <ol>
       <li><a href="#what">What AgentLite is</a></li>
-      <li><a href="#log">Enable the general query log</a></li>
+      <li><a href="#log">Enable the native audit log (per engine)</a></li>
       <li><a href="#user">Read-only user (optional)</a></li>
       <li><a href="#token">Get your enrollment token</a></li>
       <li><a href="#install">Install &amp; run the agent</a></li>
@@ -90,7 +90,7 @@
   </div>
 
   <h2 id="what">1. What AgentLite is (and what it isn't)</h2>
-  <p><b>AgentLite</b> is a lightweight forwarder you install <b>on the database host</b>. It <b>tails MySQL's own general query log</b> and ships each statement to TooVix DAM.</p>
+  <p><b>AgentLite</b> is a lightweight forwarder you install <b>on the database host</b>. It <b>tails the database's own audit log</b> — MySQL's general query log or PostgreSQL's statement log — and ships each statement to TooVix DAM.</p>
   <ul>
     <li><span class="ok">✅ No wire tap, no proxy, no path change</span> — it reads a log file the database already writes.</li>
     <li><span class="ok">✅ Transport-independent</span> — because it reads what the DB logs <em>after</em> decryption, it captures <b>TLS-encrypted</b> client sessions too.</li>
@@ -98,19 +98,23 @@
     <li><span class="warn-i">⚠️ Detective only</span> — it observes and alerts <b>after the fact</b>; it <b>cannot block</b> a query. (Use Inline Proxy mode if you need prevention.)</li>
     <li><span class="warn-i">⚠️ Records all SQL</span> — the general log captures every statement from every session in cleartext on the VM. Treat the log file as sensitive (see §10).</li>
   </ul>
-  <div class="flow">MySQL (general log)  →  AgentLite forwarder (on the DB VM)  →  TooVix DAM  →  Database Activity view
-                     reads /var/log/mysql/general.log      (HTTPS, or an audit stream)</div>
-  <p><b>Requirements:</b> Linux VM <b>x86-64 (amd64)</b> (arm64/Graviton not yet supported) · MySQL 5.7 / 8.x or MariaDB 10.x · <b>outbound HTTPS (443)</b> from the VM to your DAM control-plane URL (see §7).</p>
+  <div class="flow">DB audit log  →  AgentLite forwarder (on the DB VM)  →  TooVix DAM  →  Database Activity view
+              (MySQL general log / PostgreSQL log)     (HTTPS, or an audit stream)</div>
+  <p><b>Requirements:</b> Linux VM <b>x86-64 (amd64)</b> (arm64/Graviton not yet supported) · <b>MySQL 5.7/8.x, MariaDB 10.x, or PostgreSQL 12+</b> · <b>outbound HTTPS (443)</b> from the VM to your DAM control-plane URL (see §7).</p>
+  <aside class="warn"><b>SQL Server?</b> AgentLite audit-forward doesn't apply — SQL Server Audit is a <b>binary</b> <code>.sqlaudit</code> trail, not a text log a forwarder can tail. For <b>Azure SQL / managed SQL Server</b>, use the <b>Agentless</b> path (DB Auditing → Event Hub → DAM). See <a href="#log">§2 → SQL Server</a>.</aside>
 
   <hr />
 
-  <h2 id="log">2. Step 1 — Enable the MySQL general query log</h2>
-  <p>AgentLite reads MySQL's <b>general query log written to a file</b>. Enable it and point it at a known path. Log in as MySQL admin and run:</p>
-  <pre><code><span class="cmt">-- write the log to a FILE (not a table), at a fixed path</span>
+  <h2 id="log">2. Step 1 — Enable the native audit log (choose your engine)</h2>
+  <p>AgentLite tails a log the database writes. Enable it for your engine at a known path — you'll pass that path as <code>AUDIT_LOG</code> in §5.</p>
+
+  <h3>🐬 MySQL / MariaDB — general query log</h3>
+  <p>As MySQL admin, write the general log to a FILE at a fixed path:</p>
+  <pre><code><span class="cmt">-- runtime (takes effect now):</span>
 SET GLOBAL log_output      = 'FILE';
 SET GLOBAL general_log_file = '/var/log/mysql/general.log';
 SET GLOBAL general_log      = 'ON';</code></pre>
-  <p><b>Make it survive a MySQL restart</b> — the <code>SET GLOBAL</code> above is runtime-only. Add a config drop-in:</p>
+  <p>Persist it across restarts (the <code>SET GLOBAL</code> above is runtime-only):</p>
   <pre><code><span class="cmt"># Debian/Ubuntu: /etc/mysql/mysql.conf.d/  ·  RHEL/Rocky: /etc/my.cnf.d/</span>
 sudo tee /etc/mysql/mysql.conf.d/zz-toovix-audit.cnf &gt;/dev/null &lt;&lt;'EOF'
 [mysqld]
@@ -118,18 +122,47 @@ log_output       = FILE
 general_log      = 1
 general_log_file = /var/log/mysql/general.log
 EOF</code></pre>
-  <p>Verify the file is being written:</p>
-  <pre><code>sudo tail -f /var/log/mysql/general.log   <span class="cmt"># run a query elsewhere; lines should appear</span></code></pre>
-  <aside><b>Note on volume:</b> the general log grows with every query. For busy databases, ensure log rotation (<code>logrotate</code>) and adequate disk. AgentLite tails the live file and handles rotation/truncation automatically.</aside>
+  <p>Agent settings → <code>DB_ENGINE=mysql</code> · <code>AUDIT_SOURCE=general_log</code> · <code>AUDIT_LOG=/var/log/mysql/general.log</code> · <code>TARGET_PORT=3306</code></p>
+
+  <h3>🐘 PostgreSQL — statement logging</h3>
+  <p>AgentLite parses PostgreSQL's <b>standard statement log</b>. Turn on statement logging and set the exact <code>log_line_prefix</code> the parser expects, then reload — <b>no restart needed</b>:</p>
+  <pre><code>sudo -u postgres psql -c "ALTER SYSTEM SET log_statement = 'all';"
+sudo -u postgres psql -c "ALTER SYSTEM SET log_line_prefix = '%m [%p] %u@%d ';"
+sudo -u postgres psql -c "SELECT pg_reload_conf();"</code></pre>
+  <aside class="warn"><b>The <code>log_line_prefix</code> matters.</b> AgentLite matches lines shaped <code>&lt;time&gt; [pid] user@db LOG:&nbsp; statement: …</code> — if your prefix differs, statements won't be parsed. This uses PostgreSQL's <b>built-in</b> logging; the pgaudit extension is <b>not</b> required.</aside>
+  <p>The file is the cluster's main log, e.g. <code>/var/log/postgresql/postgresql-16-main.log</code> (match your PG major version). Agent settings → <code>DB_ENGINE=postgresql</code> · <code>AUDIT_SOURCE=pgaudit</code> · <code>AUDIT_LOG=/var/log/postgresql/postgresql-&lt;ver&gt;-main.log</code> · <code>TARGET_PORT=5432</code></p>
+
+  <h3>🪟 SQL Server — use <em>Agentless</em>, not AgentLite</h3>
+  <p>AgentLite <b>doesn't support SQL Server</b>: SQL Server Audit writes a <b>binary</b> <code>.sqlaudit</code> trail (read via <code>sys.fn_get_audit_file</code>), not a text log a forwarder can tail. Instead:</p>
+  <ul>
+    <li><b>Azure SQL / SQL Managed Instance (PaaS):</b> use <b>Agentless</b> — enable <b>database-level Auditing → Event Hub</b>, and the DAM connector consumes it (verified ~2-min end-to-end):
+      <pre><code>az sql db audit-policy update -g &lt;RG&gt; -s &lt;SERVER&gt; -n &lt;DB&gt; \
+  --state Enabled --event-hub-target-state Enabled \
+  --event-hub &lt;HUB&gt; --event-hub-authorization-rule-id &lt;SEND_RULE_ID&gt; \
+  --actions BATCH_COMPLETED_GROUP SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP</code></pre>
+      <b>Must be <em>database</em>-level</b> — server-level auditing with a DB-scoped diagnostic setting captures nothing.</li>
+    <li><b>SQL Server on a VM (self-managed):</b> AgentLite audit-forward for SQL Server is <b>on the roadmap</b> (needs a <code>sys.fn_get_audit_file</code> / Windows Event-Log collector). For now use network / inline-proxy capture.</li>
+  </ul>
+  <p><b>Classification works for SQL Server regardless</b> — it uses a read-only login over TDS, not the audit log.</p>
+
+  <aside><b>Verify (MySQL/PG):</b> <code>sudo tail -f &lt;AUDIT_LOG&gt;</code> and run a query elsewhere — lines should appear. AgentLite tails the live file and handles rotation/truncation automatically; ensure <code>logrotate</code> + disk headroom on busy DBs.</aside>
 
   <hr />
 
   <h2 id="user">3. Step 2 — (Optional) Create a read-only user for classification</h2>
-  <p>DAM can classify which columns hold PII/PCI. This is <b>separate from capture</b> — it logs into MySQL as a <b>least-privilege reader</b>. Skip this if you only want activity capture.</p>
-  <pre><code>CREATE USER 'dam_svc'@'%' IDENTIFIED BY '&lt;choose-a-strong-password&gt;';
+  <p>DAM can classify which columns hold PII/PCI. This is <b>separate from capture</b> — it logs into the database as a <b>least-privilege reader</b>. Skip this if you only want activity capture.</p>
+  <p><b>MySQL / MariaDB:</b></p>
+  <pre><code>CREATE USER 'dam_svc'@'%' IDENTIFIED BY '&lt;strong-password&gt;';
 GRANT SELECT, PROCESS ON *.* TO 'dam_svc'@'%';
 FLUSH PRIVILEGES;</code></pre>
-  <p><code>dam_svc</code> gets <b>read-only</b> access (<code>SELECT</code> for schema inspection, <code>PROCESS</code> for session metadata) — it can never modify data.</p>
+  <p><b>PostgreSQL:</b></p>
+  <pre><code>CREATE USER dam_svc WITH PASSWORD '&lt;strong-password&gt;';
+GRANT pg_monitor TO dam_svc;
+GRANT CONNECT ON DATABASE &lt;db&gt; TO dam_svc;
+\c &lt;db&gt;
+GRANT USAGE ON SCHEMA public TO dam_svc;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;</code></pre>
+  <p><code>dam_svc</code> is <b>read-only</b> — it inspects schema/metadata but can never modify data. Pass it as <code>DB_USER</code>/<code>DB_PASSWORD</code> with <code>CLASSIFY=true</code> (PostgreSQL also needs <code>DB_NAME</code>).</p>
 
   <hr />
 
@@ -145,7 +178,7 @@ FLUSH PRIVILEGES;</code></pre>
   <hr />
 
   <h2 id="install">5. Step 4 — Install &amp; run the agent</h2>
-  <p>Pick <b>one</b> install method. In all cases the agent needs to <b>read the general log</b> and <b>reach DAM over HTTPS</b>. Set these once:</p>
+  <p>Pick <b>one</b> install method. The agent needs to <b>read the audit log</b> (§2) and <b>reach DAM over HTTPS</b>. The examples below use <b>MySQL</b> values; for <b>PostgreSQL</b> swap <code>DB_ENGINE=postgresql</code>, <code>TARGET_PORT=5432</code>, <code>AUDIT_SOURCE=pgaudit</code>, and the PG log path from §2. Set these once:</p>
   <pre><code>CONTROL_PLANE="https://dam.yourcompany.com"          <span class="cmt"># from Step 3</span>
 ENROLL_TOKEN="tvxenr_xxxxxxxxxxxxxxxxxxxx"            <span class="cmt"># from Step 3</span>
 AUDIT_LOG="/var/log/mysql/general.log"               <span class="cmt"># from Step 1</span>

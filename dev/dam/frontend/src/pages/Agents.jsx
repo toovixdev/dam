@@ -335,7 +335,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
                   <li><b>Enable the database&apos;s native audit trail</b> on the host (MySQL/MariaDB general log, pgaudit, SQL Server Audit, Oracle Unified Audit, Mongo profiler).</li>
                   <li>Allow the VM <b>outbound HTTPS (443)</b> to reach DAM (via the VPC&apos;s NAT for private VMs). No inbound rules are needed.</li>
                 </ul>
-                <div style={{ marginTop: 6 }}>Step-by-step: <a href="/guides/agentlite-mysql-vm.html" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--green)', fontWeight: 600 }}>Connect a MySQL-on-VM database with AgentLite ↗</a></div>
+                <div style={{ marginTop: 6 }}>Step-by-step: <a href="/guides/agentlite-mysql-vm.html" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--green)', fontWeight: 600 }}>Connect a self-managed database with AgentLite (MySQL · PostgreSQL · SQL Server) ↗</a></div>
               </div>
             </div>
           )}
