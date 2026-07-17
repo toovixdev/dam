@@ -1,17 +1,28 @@
 # TooVix DAM — automatic HTTPS (Let's Encrypt) reverse proxy.
 # Caddy terminates TLS on 443 and forwards to the Vite dev servers, which already
-# proxy /api, /auth and /ws to dam-api internally — so the browser only ever talks
-# to Caddy over HTTPS. Certs are obtained + renewed automatically.
+# proxy /api, /auth and /ws to dam-api internally.
 #
 # DNS: point both names' A records at the GCP VM's static IP before starting Caddy.
 
 dam.suchirasoistories.in {
-    reverse_proxy dam-react:5173
+    # Self-hosted Docker registry for the agent image — PULL-ONLY from the internet.
+    # Push happens internally on the DAM host (localhost:5001); external writes -> 403.
+    @registry_write {
+        path /v2/*
+        method POST PUT PATCH DELETE
+    }
+    @registry_read path /v2/*
+    handle @registry_write {
+        respond "registry is read-only" 403
+    }
+    handle @registry_read {
+        reverse_proxy dam-registry:5000
+    }
+    handle {
+        reverse_proxy dam-react:5173
+    }
 }
 
-# Admin console (optional). To expose it: create an A record for this name → the VM IP,
-# then uncomment this block and `docker compose restart dam-caddy`. Leaving it commented
-# avoids Caddy failing/retrying on a name that has no DNS record.
-# admin-dam.suchirasoistories.in {
-#     reverse_proxy dam-admin-react:5174
-# }
+admin-dam.suchirasoistories.in {
+    reverse_proxy dam-admin-react:5174
+}
