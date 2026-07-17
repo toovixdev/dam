@@ -183,11 +183,23 @@ The agent **only dials out** — DAM never initiates a connection into your netw
 
 ---
 
-## 8. (GCP only, optional) Publish to Pub/Sub instead of direct HTTPS
+## 8. (Optional) Publish to an audit stream instead of direct HTTPS
 
-On **GCP**, you can decouple the agent from DAM by publishing audit events to a **Cloud Pub/Sub** topic that DAM consumes (durable buffer; survives brief DAM outages). This is optional — direct HTTPS (§5) works fine.
+Instead of POSTing events to DAM over HTTPS (§5), the forwarder can **publish to a cloud audit stream** that DAM consumes. This **decouples** the agent from DAM — a durable buffer that survives brief DAM outages and smooths traffic bursts. Optional; direct HTTPS works fine.
 
-**Coordinate with your DAM operator** — they provide the **topic name** and run the subscription consumer. Then:
+### An audit stream is never automatic
+On every cloud you **provision the stream yourself** and grant access — a fresh database or VM emits **nothing** to a stream until you configure it. There are always two parts: **(1)** create the stream, and **(2)** grant the publisher (this agent) *and* the DAM consumer access to it. **Coordinate with your DAM operator** — they own the stream name and run the consumer.
+
+| Cloud | Audit stream | Supported by the VM forwarder today? |
+|-------|--------------|--------------------------------------|
+| **GCP** | Cloud **Pub/Sub** topic | ✅ Yes — the forwarder publishes directly (steps below) |
+| **AWS** | **Kinesis** data stream | ❌ Not yet — keep direct HTTPS on AWS VMs |
+| **Azure** | **Event Hub** | ❌ Not yet — keep direct HTTPS on Azure VMs |
+
+> **Kinesis and Event Hub** are the streams used by the **Agentless (PaaS)** path — where the *managed database's* native audit is routed into the stream **by the cloud** (e.g. an RDS Database Activity Stream, or an Azure SQL diagnostic setting → Event Hub), not by this on-host forwarder. Letting the forwarder publish to them is planned; **for now, on AWS/Azure VMs keep `CONTROL_PLANE` (HTTPS) and skip this section.**
+
+### GCP — publish to Pub/Sub
+For the AgentLite forwarder, the agent publishes **directly** to a Pub/Sub topic — you do **not** need a Cloud Logging sink (that sink is only for the *Agentless/PaaS* path). So the setup is just: create the topic, let the agent publish to it, and point the env vars at it.
 
 1. **Attach a service account to the VM** with the `roles/pubsub.publisher` role on the topic. Because service-account **keys** are often disabled by org policy, the agent authenticates via the **VM's attached service account** (metadata server / ADC) — no key file needed.
    ```bash
