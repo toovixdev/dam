@@ -239,14 +239,38 @@ AgentLite audit-forward tailing /var/log/mysql/general.log (source=general_log e
   <pre><code>AUDIT_TOPIC=&lt;stream-or-topic-name&gt;     <span class="cmt"># e.g. toovix-dam-audit</span>
 GCP_PROJECT=&lt;project-id&gt;               <span class="cmt"># optional — auto-detected from the metadata server</span></code></pre>
   <p>When <code>AUDIT_TOPIC</code> is set the agent <b>publishes to the stream</b>; when unset it POSTs the control plane over HTTPS. Everything else stays the same.</p>
-  <p><em>GCP example — grant the VM's service account publish, and attach it with cloud-platform scope:</em></p>
-  <pre><code>gcloud pubsub topics add-iam-policy-binding &lt;TOPIC&gt; \
+  <p>Provision the stream and grant the VM's own identity publish access — <b>examples for each cloud</b>. The agent authenticates through the VM's metadata service (attached SA / instance role / managed identity), so <b>no key files</b>:</p>
+
+  <h3>GCP — Cloud Pub/Sub</h3>
+  <pre><code>gcloud pubsub topics create toovix-dam-audit
+gcloud pubsub topics add-iam-policy-binding toovix-dam-audit \
   --member="serviceAccount:&lt;VM_SERVICE_ACCOUNT_EMAIL&gt;" --role="roles/pubsub.publisher"
-<span class="cmt"># attach the SA (requires stop/start):</span>
-gcloud compute instances stop  &lt;VM&gt; --zone &lt;ZONE&gt;
+<span class="cmt"># attach the SA to the VM (requires stop/start):</span>
+gcloud compute instances stop &lt;VM&gt; --zone &lt;ZONE&gt;
 gcloud compute instances set-service-account &lt;VM&gt; --zone &lt;ZONE&gt; \
   --service-account=&lt;VM_SERVICE_ACCOUNT_EMAIL&gt; --scopes=cloud-platform
-gcloud compute instances start &lt;VM&gt; --zone &lt;ZONE&gt;</code></pre>
+gcloud compute instances start &lt;VM&gt; --zone &lt;ZONE&gt;
+<span class="cmt"># agent env →</span>  AUDIT_TOPIC=toovix-dam-audit   GCP_PROJECT=&lt;project-id&gt;  <span class="cmt"># (project optional)</span></code></pre>
+
+  <h3>AWS — Kinesis Data Stream</h3>
+  <pre><code>aws kinesis create-stream --stream-name toovix-dam-audit --shard-count 1
+<span class="cmt"># let the EC2 instance role publish (agent uses the instance profile via IMDS — no keys):</span>
+aws iam put-role-policy --role-name &lt;EC2_INSTANCE_ROLE&gt; --policy-name toovix-dam-publish \
+  --policy-document '{"Version":"2012-10-17","Statement":[{"Effect":"Allow",
+    "Action":["kinesis:PutRecord","kinesis:PutRecords"],
+    "Resource":"arn:aws:kinesis:&lt;REGION&gt;:&lt;ACCOUNT_ID&gt;:stream/toovix-dam-audit"}]}'
+<span class="cmt"># agent env →</span>  AUDIT_TOPIC=toovix-dam-audit   AWS_REGION=&lt;region&gt;</code></pre>
+
+  <h3>Azure — Event Hub</h3>
+  <pre><code>az eventhubs namespace create -g &lt;RG&gt; -n &lt;NAMESPACE&gt; --sku Standard
+az eventhubs eventhub create  -g &lt;RG&gt; --namespace-name &lt;NAMESPACE&gt; -n toovix-dam-audit
+<span class="cmt"># give the VM's managed identity the Data Sender role (agent uses managed identity via IMDS — no keys):</span>
+az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
+  --role "Azure Event Hubs Data Sender" \
+  --scope "/subscriptions/&lt;SUB&gt;/resourceGroups/&lt;RG&gt;/providers/Microsoft.EventHub/namespaces/&lt;NAMESPACE&gt;/eventhubs/toovix-dam-audit"
+<span class="cmt"># agent env →</span>  AUDIT_TOPIC=toovix-dam-audit   AZURE_EVENTHUB_NAMESPACE=&lt;namespace&gt;</code></pre>
+
+  <aside class="warn"><b>Implementation status:</b> the agent's built-in <code>AUDIT_TOPIC</code> publisher ships for <b>GCP Pub/Sub</b> today; the <b>AWS (Kinesis)</b> and <b>Azure (Event Hub)</b> blocks show the equivalent provisioning and are the roadmap for those streams. On <b>all three clouds right now</b>, the <b>direct-HTTPS path (§5)</b> works with no stream at all — use it unless your DAM operator runs a stream consumer for your cloud.</aside>
 
   <aside><b>Two ways the audit reaches the stream.</b> With <b>AgentLite on a VM</b> (this guide), the on-host forwarder <b>publishes directly</b> to the stream — no cloud log sink is involved. For a <b>managed / PaaS database</b> (the <b>Agentless</b> path) there's no host to install on, so the <b>cloud itself routes</b> the database's native audit into the stream — e.g. a Cloud SQL log sink → Pub/Sub, an <b>RDS Database Activity Stream</b> → Kinesis, or an <b>Azure SQL diagnostic setting</b> → Event Hub. Either way, DAM just consumes the stream.</aside>
 
