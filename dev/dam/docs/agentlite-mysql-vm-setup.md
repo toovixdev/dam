@@ -1,14 +1,14 @@
-# Integrating a MySQL-on-VM Database with TooVix DAM — AgentLite Setup Guide
+# Connect a Self-Managed Database to TooVix DAM — AgentLite Setup Guide
 
-**Audience:** a customer/operator with a **MySQL database running on a Linux VM** in **GCP, AWS, or Azure** who wants that database monitored by TooVix DAM using the **AgentLite (audit-forward)** approach.
+**Audience:** a customer/operator with a **MySQL or PostgreSQL database running on a Linux VM** in **GCP, AWS, or Azure** who wants it monitored by TooVix DAM using the **AgentLite (audit-forward)** approach. **SQL Server** takes a different path — see §2.
 
-**Time:** ~15–20 minutes. **Access needed:** `sudo`/root on the DB VM, and MySQL admin (`root`) to enable auditing.
+**Time:** ~15–20 minutes. **Access needed:** `sudo`/root on the DB VM, and DB admin to enable auditing.
 
 ---
 
 ## 1. What AgentLite is (and what it isn't)
 
-**AgentLite** is a lightweight forwarder you install **on the database host**. It **tails MySQL's own general query log** and ships each statement to TooVix DAM.
+**AgentLite** is a lightweight forwarder you install **on the database host**. It **tails the database's own audit log** — MySQL's general query log or PostgreSQL's statement log — and ships each statement to TooVix DAM.
 
 - ✅ **No wire tap, no proxy, no path change** — it reads a log file the database already writes.
 - ✅ **Transport-independent** — because it reads what the DB logs *after* decryption, it captures **TLS-encrypted** client sessions too.
@@ -18,31 +18,35 @@
 
 **Flow:**
 ```
-MySQL (general log)  →  AgentLite forwarder (on the DB VM)  →  TooVix DAM  →  Database Activity view
-                         reads /var/log/mysql/general.log      (HTTPS, or GCP Pub/Sub)
+DB audit log  →  AgentLite forwarder (on the DB VM)  →  TooVix DAM  →  Database Activity view
+ (MySQL general log / PostgreSQL log)   (HTTPS, or an audit stream)
 ```
 
 **Requirements:**
 - Linux VM, **x86-64 (amd64)**. (arm64 / Graviton is not supported yet.)
-- MySQL 5.7 / 8.x (or MariaDB 10.x).
+- **MySQL 5.7 / 8.x, MariaDB 10.x, or PostgreSQL 12+.**
 - **Outbound HTTPS (443)** from the VM to your DAM control-plane URL. See §7 for per-cloud egress.
+
+> **SQL Server?** AgentLite audit-forward doesn't apply — SQL Server Audit is a **binary** `.sqlaudit` trail (read via `sys.fn_get_audit_file`), not a text log a forwarder can tail. For **Azure SQL / managed SQL Server**, use the **Agentless** path (database-level Auditing → Event Hub → DAM). See §2 → SQL Server.
 
 ---
 
-## 2. Step 1 — Enable the MySQL general query log
+## 2. Step 1 — Enable the native audit log (choose your engine)
 
-AgentLite reads MySQL's **general query log written to a file**. Enable it and point it at a known path.
+AgentLite tails a log the database writes. Enable it for your engine at a known path — you'll pass that path as `AUDIT_LOG` in §5.
 
-Log in as MySQL admin and run:
+### 🐬 MySQL / MariaDB — general query log
+
+As MySQL admin, write the general log to a FILE at a fixed path:
 
 ```sql
--- write the log to a FILE (not a table), at a fixed path
+-- runtime (takes effect now):
 SET GLOBAL log_output      = 'FILE';
 SET GLOBAL general_log_file = '/var/log/mysql/general.log';
 SET GLOBAL general_log      = 'ON';
 ```
 
-**Make it survive a MySQL restart** — the `SET GLOBAL` above is runtime-only. Add a config drop-in:
+Persist it across restarts (the `SET GLOBAL` above is runtime-only):
 
 ```bash
 # Debian/Ubuntu: /etc/mysql/mysql.conf.d/  ·  RHEL/Rocky: /etc/my.cnf.d/
@@ -54,26 +58,65 @@ general_log_file = /var/log/mysql/general.log
 EOF
 ```
 
-Verify the file is being written:
+Agent settings → `DB_ENGINE=mysql` · `AUDIT_SOURCE=general_log` · `AUDIT_LOG=/var/log/mysql/general.log` · `TARGET_PORT=3306`
+
+### 🐘 PostgreSQL — statement logging
+
+AgentLite parses PostgreSQL's **standard statement log**. Turn on statement logging and set the exact `log_line_prefix` the parser expects, then reload — **no restart needed**:
+
 ```bash
-sudo tail -f /var/log/mysql/general.log   # run a query in another session; lines should appear
+sudo -u postgres psql -c "ALTER SYSTEM SET log_statement = 'all';"
+sudo -u postgres psql -c "ALTER SYSTEM SET log_line_prefix = '%m [%p] %u@%d ';"
+sudo -u postgres psql -c "SELECT pg_reload_conf();"
 ```
 
-> **Note on volume:** the general log grows with every query. For busy databases, ensure log rotation (`logrotate`) and adequate disk. AgentLite tails the live file and handles rotation/truncation automatically.
+> **The `log_line_prefix` matters.** AgentLite matches lines shaped `<time> [pid] user@db LOG:  statement: …`. If your prefix differs, statements won't be parsed. This uses PostgreSQL's **built-in** logging; the **pgaudit** extension is **not** required.
+
+The file is the cluster's main log, e.g. `/var/log/postgresql/postgresql-16-main.log` (match your PG major version).
+Agent settings → `DB_ENGINE=postgresql` · `AUDIT_SOURCE=pgaudit` · `AUDIT_LOG=/var/log/postgresql/postgresql-<ver>-main.log` · `TARGET_PORT=5432`
+
+### 🪟 SQL Server — use *Agentless*, not AgentLite
+
+AgentLite **doesn't support SQL Server**: SQL Server Audit writes a **binary** `.sqlaudit` trail (read via `sys.fn_get_audit_file`), not a text log a forwarder can tail. Instead:
+
+- **Azure SQL / SQL Managed Instance (PaaS):** use **Agentless** — enable **database-level Auditing → Event Hub**, and the DAM connector consumes it (verified ~2-min end-to-end):
+  ```bash
+  az sql db audit-policy update -g <RG> -s <SERVER> -n <DB> \
+    --state Enabled --event-hub-target-state Enabled \
+    --event-hub <HUB> --event-hub-authorization-rule-id <SEND_RULE_ID> \
+    --actions BATCH_COMPLETED_GROUP SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP
+  ```
+  **Must be *database*-level** — server-level auditing with a DB-scoped diagnostic setting captures nothing.
+- **SQL Server on a VM (self-managed):** AgentLite audit-forward for SQL Server is **on the roadmap** (needs a `sys.fn_get_audit_file` / Windows Event-Log collector). For now use network / inline-proxy capture.
+
+**Classification works for SQL Server regardless** — it uses a read-only login over TDS, not the audit log.
+
+> **Verify (MySQL/PG):** `sudo tail -f <AUDIT_LOG>` and run a query elsewhere — lines should appear. AgentLite tails the live file and handles rotation/truncation automatically; ensure `logrotate` + disk headroom on busy DBs.
 
 ---
 
 ## 3. Step 2 — (Optional) Create a read-only user for classification
 
-DAM can classify which columns hold PII/PCI. This is **separate from capture** — it logs into MySQL as a **least-privilege reader**. Skip this if you only want activity capture.
+DAM can classify which columns hold PII/PCI. This is **separate from capture** — it logs into the database as a **least-privilege reader**. Skip this if you only want activity capture.
 
+**MySQL / MariaDB:**
 ```sql
-CREATE USER 'dam_svc'@'%' IDENTIFIED BY '<choose-a-strong-password>';
+CREATE USER 'dam_svc'@'%' IDENTIFIED BY '<strong-password>';
 GRANT SELECT, PROCESS ON *.* TO 'dam_svc'@'%';
 FLUSH PRIVILEGES;
 ```
 
-`dam_svc` gets **read-only** access (`SELECT` for schema inspection, `PROCESS` for session metadata) — it can never modify data.
+**PostgreSQL:**
+```sql
+CREATE USER dam_svc WITH PASSWORD '<strong-password>';
+GRANT pg_monitor TO dam_svc;
+GRANT CONNECT ON DATABASE <db> TO dam_svc;
+\c <db>
+GRANT USAGE ON SCHEMA public TO dam_svc;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;
+```
+
+`dam_svc` is **read-only** — it inspects schema/metadata but can never modify data. Pass it as `DB_USER`/`DB_PASSWORD` with `CLASSIFY=true` (PostgreSQL also needs `DB_NAME`).
 
 ---
 
