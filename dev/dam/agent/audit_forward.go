@@ -9,6 +9,7 @@ package main
 
 import (
 	"bufio"
+	"database/sql"
 	"io"
 	"log"
 	"os"
@@ -36,9 +37,71 @@ func runAuditForward(cfg Config) {
 		tailMySQLGeneralLog(cfg, cfg.AuditLog)
 	case "postgresql", "postgres":
 		tailPostgresLog(cfg, cfg.AuditLog)
+	case "mssql", "sqlserver":
+		tailSqlServerAudit(cfg)
 	default:
-		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql) — enrolled + idle", cfg.Engine)
+		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql/mssql) — enrolled + idle", cfg.Engine)
 		select {}
+	}
+}
+
+// tailSqlServerAudit forwards SQL Server's own audit trail. Unlike MySQL/PG, SQL Server Audit
+// writes a BINARY .sqlaudit trail (not a text log we can tail), so we read it over TDS by polling
+// sys.fn_get_audit_file() — which also means the agent can run on a separate Linux host and reach
+// a Windows SQL Server over the network (no agent on Windows needed).
+//
+// Setup required on the DB: a Server Audit (TO FILE) + a Server Audit Specification (e.g.
+// BATCH_COMPLETED_GROUP / SCHEMA_OBJECT_ACCESS_GROUP), both ENABLED. The login in DB_USER needs
+// CONTROL SERVER (to read the audit file). AUDIT_LOG must be the .sqlaudit path pattern, e.g.
+// 'C:\SQLAudit\*.sqlaudit' (Windows) or '/var/opt/mssql/audit/*.sqlaudit' (Linux).
+func tailSqlServerAudit(cfg Config) {
+	if cfg.DBUser == "" {
+		log.Fatalf("audit-forward(mssql): DB_USER/DB_PASSWORD are required — the agent reads the audit over TDS (needs CONTROL SERVER)")
+	}
+	pollSec := atoiDefault(env("AUDIT_POLL_SEC", "10"), 10)
+	db, err := sql.Open("sqlserver", mssqlDSN(cfg, orDefault(cfg.DBName, "master")))
+	if err != nil {
+		log.Fatalf("audit-forward(mssql): open: %v", err)
+	}
+	db.SetMaxOpenConns(2)
+	defer db.Close()
+
+	const q = `SELECT event_time, sequence_number,
+	       COALESCE(server_principal_name, session_server_principal_name, '') AS principal,
+	       COALESCE(client_ip, '') AS client_ip,
+	       COALESCE(statement, '') AS statement
+	FROM sys.fn_get_audit_file(@path, DEFAULT, DEFAULT)
+	WHERE event_time > @wm AND statement IS NOT NULL AND LEN(statement) > 0
+	ORDER BY event_time, sequence_number`
+
+	// Start from the newest existing record so we don't replay history on (re)start.
+	wm := time.Now().UTC()
+	_ = db.QueryRow(`SELECT ISNULL(MAX(event_time), SYSUTCDATETIME()) FROM sys.fn_get_audit_file(@path, DEFAULT, DEFAULT)`,
+		sql.Named("path", cfg.AuditLog)).Scan(&wm)
+
+	for {
+		rows, err := db.Query(q, sql.Named("path", cfg.AuditLog), sql.Named("wm", wm))
+		if err != nil {
+			log.Printf("audit-forward(mssql): read %s: %v — is SQL Server Audit ON, the path correct, and does DB_USER have CONTROL SERVER? retrying", cfg.AuditLog, err)
+			time.Sleep(time.Duration(pollSec) * time.Second)
+			continue
+		}
+		for rows.Next() {
+			var et time.Time
+			var seq int64
+			var principal, clientIP, statement string
+			if err := rows.Scan(&et, &seq, &principal, &clientIP, &statement); err != nil {
+				continue
+			}
+			if s := strings.TrimSpace(statement); s != "" && shouldForward(s) {
+				forwardEvent(cfg, orDefault(principal, "unknown"), clientIP, s, 0, false)
+			}
+			if et.After(wm) {
+				wm = et
+			}
+		}
+		rows.Close()
+		time.Sleep(time.Duration(pollSec) * time.Second)
 	}
 }
 
