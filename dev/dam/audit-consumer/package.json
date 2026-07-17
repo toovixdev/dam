@@ -1,9 +1,10 @@
 {
   "name": "dam-audit-consumer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "AgentLite audit consumer — Pub/Sub audit bus -> control-plane ingest bridge",
+  "description": "DAM audit consumer — one service, per-cloud source adapters (GCP Pub/Sub, Azure Event Hub) → control-plane ingest",
   "dependencies": {
-    "@google-cloud/pubsub": "^4.9.0"
+    "@google-cloud/pubsub": "^4.9.0",
+    "@azure/event-hubs": "^5.12.0"
   }
 }

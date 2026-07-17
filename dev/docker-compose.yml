@@ -523,10 +523,17 @@ services:
     build: ./dam/audit-consumer
     container_name: dam-audit-consumer
     environment:
+      # GCP Pub/Sub source (Cloud SQL sink + AgentLite forwarder)
       PUBSUB_SUBSCRIPTION: ${PUBSUB_SUBSCRIPTION:-}
       GCP_PROJECT: ${GCP_PROJECT:-}
-      CONTROL_PLANE: http://dam-api:3000
       CLOUDSQL_ENROLL_TOKEN: ${CLOUDSQL_ENROLL_TOKEN:-}
+      # Azure Event Hub source (Azure SQL Auditing → Event Hub)
+      EVENTHUB_CONNECTION_STRING: ${EVENTHUB_CONNECTION_STRING:-}
+      EVENTHUB_NAME: ${EVENTHUB_NAME:-toovix-dam-audit}
+      EVENTHUB_CONSUMER_GROUP: ${EVENTHUB_CONSUMER_GROUP:-toovix-dam}
+      EVENTHUB_START: ${EVENTHUB_START:-latest}
+      AZURESQL_ENROLL_TOKEN: ${AZURESQL_ENROLL_TOKEN:-}
+      CONTROL_PLANE: http://dam-api:3000
     depends_on:
       - dam-api
     networks:
