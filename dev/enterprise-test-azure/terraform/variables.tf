@@ -15,9 +15,19 @@ variable "name_prefix" {
   default     = "toovix-sqltest"
 }
 
+variable "ssh443_source_ip" {
+  description = <<-EOT
+    Source allowed to reach the jump-box on SSH-over-443. Defaults to "Internet" (any
+    public IP) because SSH is key-only and clients are often behind CGNAT with rotating
+    egress IPs, where a single-IP allow rule fails. Set to a specific CIDR to lock down.
+  EOT
+  type    = string
+  default = "Internet"
+}
+
 variable "admin_source_ip" {
   description = <<-EOT
-    Your public IP (CIDR) allowed to reach the jump-box on SSH — e.g. "203.0.113.10/32".
+    Your public IP (CIDR) allowed to reach the jump-box on SSH (port 22) — e.g. "203.0.113.10/32".
     Get it with: echo "$(curl -s ifconfig.me)/32". Changing locations? Just update this and re-apply.
   EOT
   type        = string

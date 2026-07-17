@@ -54,6 +54,13 @@ resource "azurerm_linux_virtual_machine" "jumpbox" {
     sudo apt-get update -y
     sudo ACCEPT_EULA=Y apt-get install -y mssql-tools18 unixodbc-dev
     echo 'export PATH="$PATH:/opt/mssql-tools18/bin"' | sudo tee /etc/profile.d/mssql.sh
+    # Offer SSH on 443 too — many networks block outbound 22 but allow 443. Ubuntu uses
+    # socket activation (ssh.socket) which only listens on 22 by default; a socket drop-in
+    # adds 443 (IPv4) so sshd accepts both. sshd stays key-only (PasswordAuthentication no).
+    sudo mkdir -p /etc/systemd/system/ssh.socket.d
+    printf '[Socket]\nListenStream=0.0.0.0:443\n' | sudo tee /etc/systemd/system/ssh.socket.d/toovix-443.conf >/dev/null
+    sudo systemctl daemon-reload
+    sudo systemctl restart ssh.socket
   EOT
   )
 }

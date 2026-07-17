@@ -53,8 +53,11 @@ resource "azurerm_network_security_group" "jumpbox" {
     source_address_prefix      = var.admin_source_ip
     destination_address_prefix = "*"
   }
-  # SSH also offered on 443 — many office/corporate firewalls block outbound 22
-  # but allow 443. sshd on the jump-box is configured to listen on both.
+  # SSH also offered on 443 — many office/corporate firewalls block outbound 22 but allow
+  # 443. The jump-box's cloud-init configures sshd to listen on both. This rule defaults
+  # to Internet (any source) because SSH is KEY-ONLY and clients are often behind CGNAT
+  # (rotating egress IPs), where a single-IP allow rule can't work. Set ssh443_source_ip
+  # to a specific CIDR if you have a stable IP and want to lock it down.
   security_rule {
     name                       = "allow-ssh-443-from-admin"
     priority                   = 105
@@ -63,7 +66,7 @@ resource "azurerm_network_security_group" "jumpbox" {
     protocol                   = "Tcp"
     source_port_range          = "*"
     destination_port_range     = "443"
-    source_address_prefix      = var.admin_source_ip
+    source_address_prefix      = var.ssh443_source_ip
     destination_address_prefix = "*"
   }
 }
