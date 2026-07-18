@@ -38,7 +38,12 @@ func runAuditForward(cfg Config) {
 	case "postgresql", "postgres":
 		tailPostgresLog(cfg, cfg.AuditLog)
 	case "mssql", "sqlserver":
-		tailSqlServerAudit(cfg)
+		src := strings.ToLower(cfg.AuditSource)
+		if strings.Contains(src, "xevent") || strings.Contains(src, "extended") {
+			tailSqlServerXEvents(cfg) // richer source: carries row_count
+		} else {
+			tailSqlServerAudit(cfg)
+		}
 	default:
 		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql/mssql) — enrolled + idle", cfg.Engine)
 		select {}
@@ -103,6 +108,82 @@ func tailSqlServerAudit(cfg Config) {
 		rows.Close()
 		time.Sleep(time.Duration(pollSec) * time.Second)
 	}
+}
+
+// tailSqlServerXEvents forwards SQL Server statements from an Extended Events session — which,
+// unlike SQL Server Audit, carries the ROW COUNT (plus duration/reads). It polls the session's
+// .xel file target over TDS via sys.fn_xe_file_target_read_file and pulls each field straight out
+// of the event XML in-query (no XML parsing here). Selected with AUDIT_SOURCE=xevents; AUDIT_LOG
+// is the .xel path pattern (e.g. 'C:\SQLAudit\ToovixXE*.xel'). DB_USER needs VIEW SERVER STATE.
+//
+// DB setup: an event session on sqlserver.sql_statement_completed / rpc_completed with the
+// server_principal_name + client_hostname actions, filtered to the target DB, to an event_file.
+func tailSqlServerXEvents(cfg Config) {
+	if cfg.DBUser == "" {
+		log.Fatalf("audit-forward(mssql/xevents): DB_USER/DB_PASSWORD required (reads the XE target over TDS)")
+	}
+	pollSec := atoiDefault(env("AUDIT_POLL_SEC", "10"), 10)
+	db, err := sql.Open("sqlserver", mssqlDSN(cfg, orDefault(cfg.DBName, "master")))
+	if err != nil {
+		log.Fatalf("audit-forward(mssql/xevents): open: %v", err)
+	}
+	db.SetMaxOpenConns(2)
+	defer db.Close()
+
+	const q = `SELECT timestamp_utc,
+	    x.value('(event/data[@name="row_count"]/value)[1]','bigint') AS rows_out,
+	    x.value('(event/action[@name="server_principal_name"]/value)[1]','nvarchar(128)') AS principal,
+	    x.value('(event/action[@name="client_hostname"]/value)[1]','nvarchar(256)') AS client_host,
+	    x.value('(event/data[@name="statement"]/value)[1]','nvarchar(max)') AS statement
+	  FROM sys.fn_xe_file_target_read_file(@path, NULL, NULL, NULL)
+	  CROSS APPLY (SELECT TRY_CAST(event_data AS XML)) AS t(x)
+	  WHERE timestamp_utc > @wm
+	  ORDER BY timestamp_utc`
+
+	wm := time.Now().UTC()
+	_ = db.QueryRow(`SELECT ISNULL(MAX(timestamp_utc), SYSUTCDATETIME()) FROM sys.fn_xe_file_target_read_file(@path, NULL, NULL, NULL)`,
+		sql.Named("path", cfg.AuditLog)).Scan(&wm)
+
+	for {
+		rows, err := db.Query(q, sql.Named("path", cfg.AuditLog), sql.Named("wm", wm))
+		if err != nil {
+			log.Printf("audit-forward(mssql/xevents): read %s: %v — is the XE session ON, the path correct, and does DB_USER have VIEW SERVER STATE? retrying", cfg.AuditLog, err)
+			time.Sleep(time.Duration(pollSec) * time.Second)
+			continue
+		}
+		for rows.Next() {
+			var et time.Time
+			var rowCount sql.NullInt64
+			var principal, clientHost, statement sql.NullString
+			if err := rows.Scan(&et, &rowCount, &principal, &clientHost, &statement); err != nil {
+				continue
+			}
+			if et.After(wm) {
+				wm = et
+			}
+			s := strings.TrimSpace(statement.String)
+			if s == "" || !shouldForward(s) || isMssqlSystemStmt(s) {
+				continue
+			}
+			forwardEvent(cfg, orDefault(principal.String, "unknown"), clientHost.String, s, int(rowCount.Int64), false)
+		}
+		rows.Close()
+		time.Sleep(time.Duration(pollSec) * time.Second)
+	}
+}
+
+// isMssqlSystemStmt drops SQL Server's own catalog/monitoring reads. XEvents is statement-scoped
+// (it sees every statement in the DB, unlike the object-scoped audit), so we filter the sys.*/
+// information_schema chatter — including the agent's own poll — in code.
+func isMssqlSystemStmt(sqlText string) bool {
+	u := strings.ToLower(sqlText)
+	for _, p := range []string{"sys.fn_xe_file_target", "sys.fn_get_audit_file", "information_schema.",
+		"sys.database_scoped_configurations", "sys.dm_", "sys.database_audit", "sys.configurations"} {
+		if strings.Contains(u, p) {
+			return true
+		}
+	}
+	return strings.HasPrefix(strings.TrimSpace(u), "select @@")
 }
 
 // auditLockFile holds the single-instance lock for the process lifetime (the OS releases it on exit).
