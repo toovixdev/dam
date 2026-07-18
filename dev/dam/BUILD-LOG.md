@@ -2218,3 +2218,51 @@ Two fixes were needed once it hit a real kernel + real MySQL (both committed):
    SSLRequest bumps the sequence — switched to detecting the handshake by shape (first non-command
    packet), so `gotUser`/`queryAttrs`/principal parse correctly on the below-TLS stream.
 - Added opt-in `CAPTURE_DEBUG` logging to the host path (raw READ/WRITE events) — how #2 was found.
+
+## 66. AgentLite — MongoDB collector via the database profiler
+
+Added MongoDB to the audit-forward (AgentLite) path, alongside MySQL/PostgreSQL/SQL Server
+(`agent/mongo_forward.go`). MongoDB **Community has no audit log at all** — auditing is an
+Enterprise/Atlas feature — so unlike the MySQL/PG collectors there is no file to tail. The
+equivalent source is the built-in **profiler**: `mongod` writes one document per operation into
+the capped `<db>.system.profile`, which the collector polls over the wire. That means it needs a
+DB login (like the SQL Server collectors) but does **not** need to run on the DB host, so the
+same code path covers **Atlas** and any remote mongod via `MONGO_URI`.
+
+Three things that shaped the design:
+
+1. **Self-observation is a feedback loop.** Reading `system.profile` is itself a profiled
+   operation, so a naive collector observes its own reads, forwards them, and generates more —
+   growing every poll. Guarded by tagging our connection (`appName=toovix-dam-agentlite`) plus a
+   `system.*` / `admin` / `local` / `config` namespace filter. Confirmed in testing: the agent
+   saw only its own polls and forwarded nothing.
+2. **Operation can't be sniffed from the text.** `detectOp` matches SQL keyword prefixes, which
+   would label every Mongo statement `OTHER`. Added `forwardEventOp` (operation passed by the
+   caller); `forwardEvent` delegates to it, so existing callers are unchanged.
+3. **CRUD entries don't carry a command name.** For `op = insert|update|remove`, `command` holds
+   the write *spec* (`{q:…, u:…}`), not `{update: "users"}` — so reading the first field gives
+   `"q"` and the statement rendered as an anonymous `db.runCommand({"q":…})`, **losing the
+   collection name** (which `classifyTags` matches on). Discriminated on shape: a command doc's
+   first value is a string (the collection); a write spec's is a document.
+
+Statements render mongosh-style (`db.users.find({"email":…})`) rather than as fake SQL — honest,
+and the shared tagging still works because field/collection names appear in the rendered filter.
+
+**Verified end-to-end** against `db-vm-mongo` (GCP test estate, MongoDB 7.0) with a stub control
+plane: SELECT/INSERT/UPDATE/DELETE/DDL all captured with correct `row_count`, principal, client
+IP and `pii` tags; 10 events for 10 operations, unchanged across 9 idle poll cycles, zero
+duplicates. Guide updated (markdown + published HTML).
+
+**Two known gaps, both documented in the guide:**
+- **Classification doesn't run for Mongo** — `classifiable` in main.go is mysql|postgresql|mssql;
+  the scanner reads `information_schema`, which has no Mongo equivalent (schemaless collections
+  need document sampling). Consequence: a read of a sensitive collection that doesn't name a
+  sensitive field, e.g. `db.kyc_documents.find({status:"verified"})`, arrives **untagged**.
+- **`row_count` under-reports large reads** — a `find` reports only its first batch (101 docs),
+  so a 10k-document read looks like 101 rows. `MONGO_INCLUDE_GETMORE=true` emits every cursor
+  batch for true read volume; default off. Worth reconsidering the default for exfil policies.
+
+Operational note: `system.profile` is **capped**, so profiler capture is best-effort, not a
+guaranteed trail — and at a 5s poll the agent's own reads were 56 of 71 documents in it, i.e. the
+collector's polling itself evicts real events on a busy instance. Longer `AUDIT_POLL_SEC` or a
+larger profile collection is the mitigation.

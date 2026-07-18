@@ -65,11 +65,11 @@
   <header class="hero">
     <p class="eyebrow">TooVix DAM · AgentLite setup guide</p>
     <h1>Connect a self-managed database with AgentLite</h1>
-    <p style="color:var(--muted);margin:0 0 14px;max-width:64ch">Monitor a <b>MySQL</b> or <b>PostgreSQL</b> database on a Linux VM — in <b>GCP, AWS, or Azure</b> — using the AgentLite (audit-forward) approach. The steps are identical across clouds; only the per-engine audit setup (§2) and outbound-egress (§7) differ. <b>SQL Server</b> takes a different path — see §2.</p>
+    <p style="color:var(--muted);margin:0 0 14px;max-width:64ch">Monitor a <b>MySQL</b>, <b>PostgreSQL</b>, or <b>MongoDB</b> database on a Linux VM — in <b>GCP, AWS, or Azure</b> — using the AgentLite (audit-forward) approach. The steps are identical across clouds; only the per-engine telemetry setup (§2) and outbound-egress (§7) differ. <b>SQL Server</b> and <b>MongoDB</b> take a different path — see §2.</p>
     <div class="meta">
       <span class="chip">⏱ <b>15–20 min</b></span>
       <span class="chip">🔑 <b>sudo</b> on the DB VM + DB admin</span>
-      <span class="chip">🖥 Linux x86-64 · MySQL 5.7/8.x · MariaDB 10.x · PostgreSQL 12+</span>
+      <span class="chip">🖥 Linux x86-64 · MySQL 5.7/8.x · MariaDB 10.x · PostgreSQL 12+ · SQL Server 2017+ · MongoDB 4.4+</span>
     </div>
   </header>
 
@@ -90,17 +90,18 @@
   </div>
 
   <h2 id="what">1. What AgentLite is (and what it isn't)</h2>
-  <p><b>AgentLite</b> is a lightweight forwarder you install <b>on the database host</b>. It <b>tails the database's own audit log</b> — MySQL's general query log or PostgreSQL's statement log — and ships each statement to TooVix DAM.</p>
+  <p><b>AgentLite</b> is a lightweight forwarder that reads <b>telemetry the database already produces</b> and ships each statement to TooVix DAM. For <b>MySQL and PostgreSQL</b> it tails a log file <b>on the database host</b>. For <b>SQL Server and MongoDB</b> there is no text log to tail, so it <b>polls the database's own telemetry over the network</b> — those two need a DB login but can run on a <b>separate host</b> (see §2).</p>
   <ul>
-    <li><span class="ok">✅ No wire tap, no proxy, no path change</span> — it reads a log file the database already writes.</li>
+    <li><span class="ok">✅ No wire tap, no proxy, no path change</span> — it reads telemetry the database already produces.</li>
     <li><span class="ok">✅ Transport-independent</span> — because it reads what the DB logs <em>after</em> decryption, it captures <b>TLS-encrypted</b> client sessions too.</li>
     <li><span class="ok">✅ Works on private, no-public-IP databases</span> — the agent only makes <b>outbound</b> connections to DAM; DAM never connects into your network.</li>
     <li><span class="warn-i">⚠️ Detective only</span> — it observes and alerts <b>after the fact</b>; it <b>cannot block</b> a query. (Use Inline Proxy mode if you need prevention.)</li>
     <li><span class="warn-i">⚠️ Records all SQL</span> — the general log captures every statement from every session in cleartext on the VM. Treat the log file as sensitive (see §10).</li>
   </ul>
-  <div class="flow">DB audit log  →  AgentLite forwarder (on the DB VM)  →  TooVix DAM  →  Database Activity view
-              (MySQL general log / PostgreSQL log)     (HTTPS, or an audit stream)</div>
-  <p><b>Requirements:</b> Linux VM <b>x86-64 (amd64)</b> (arm64/Graviton not yet supported) · <b>MySQL 5.7/8.x, MariaDB 10.x, or PostgreSQL 12+</b> · <b>outbound HTTPS (443)</b> from the VM to your DAM control-plane URL (see §7).</p>
+  <div class="flow">DB telemetry  →  AgentLite forwarder  →  TooVix DAM  →  Database Activity view
+ (MySQL general log / PostgreSQL log /    (HTTPS, or an audit stream)
+  SQL Server audit / MongoDB profiler)</div>
+  <p><b>Requirements:</b> Linux VM <b>x86-64 (amd64)</b> (arm64/Graviton not yet supported) · <b>MySQL 5.7/8.x, MariaDB 10.x, PostgreSQL 12+, SQL Server 2017+, or MongoDB 4.4+</b> · <b>outbound HTTPS (443)</b> from the VM to your DAM control-plane URL (see §7).</p>
   <aside class="warn"><b>SQL Server?</b> AgentLite audit-forward doesn't apply — SQL Server Audit is a <b>binary</b> <code>.sqlaudit</code> trail, not a text log a forwarder can tail. For <b>Azure SQL / managed SQL Server</b>, use the <b>Agentless</b> path (DB Auditing → Event Hub → DAM). See <a href="#log">§2 → SQL Server</a>.</aside>
 
   <hr />
@@ -164,7 +165,57 @@ ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- STA
   <p><b>Azure SQL / Managed Instance (PaaS)</b> can't host any collector — use <b>Agentless</b> instead (database-level Auditing → Event Hub, consumed by the DAM connector; verified ~2-min end-to-end). <b>Must be <em>database</em>-level</b> — server-level auditing with a DB-scoped diagnostic setting captures nothing.</p>
   <p><b>Classification works for SQL Server either way</b> — it uses a read-only login over TDS, not the audit trail.</p>
 
-  <aside><b>Verify (MySQL/PG):</b> <code>sudo tail -f &lt;AUDIT_LOG&gt;</code> and run a query elsewhere — lines should appear. AgentLite tails the live file and handles rotation/truncation automatically; ensure <code>logrotate</code> + disk headroom on busy DBs.</aside>
+  <h3>🍃 MongoDB — database profiler</h3>
+  <p>MongoDB <b>Community has no audit log at all</b> (auditing is an Enterprise/Atlas feature), so there is no file to tail. The equivalent source is the built-in <b>database profiler</b>: with profiling on, <code>mongod</code> writes one document per operation into the capped collection <code>&lt;db&gt;.system.profile</code>, and AgentLite <b>polls that collection over the wire</b>. Like SQL Server, this means the collector needs a <b>DB login</b> but <b>does not have to run on the DB host</b> — so the same path covers <b>Atlas</b> and any remote <code>mongod</code>.</p>
+
+  <p>Enable profiling for the database you want monitored:</p>
+  <pre><code>use &lt;db&gt;
+<span class="cmt">// level 2 = every operation, slowms 0 = don't filter by duration</span>
+db.setProfilingLevel(2, { slowms: 0 })</code></pre>
+
+  <p>Persist it across restarts (the command above is runtime-only, exactly like MySQL's <code>SET GLOBAL</code>):</p>
+  <pre><code><span class="cmt"># /etc/mongod.conf</span>
+operationProfiling:
+  mode: all
+  slowOpThresholdMs: 0</code></pre>
+
+  <p>Create the monitoring login — <code>dbAdmin</code> is what lets the agent turn profiling on itself:</p>
+  <pre><code>use admin
+db.createUser({
+  user: 'dam_svc',
+  pwd: '&lt;strong-password&gt;',
+  roles: [
+    { role: 'clusterMonitor', db: 'admin' },   <span class="cmt">// read profiling status</span>
+    { role: 'read',           db: '&lt;db&gt;' },    <span class="cmt">// read system.profile + data</span>
+    { role: 'dbAdmin',        db: '&lt;db&gt;' }     <span class="cmt">// set the profiling level</span>
+  ]
+})</code></pre>
+
+  <p>Agent → <code>DB_ENGINE=mongodb</code> · <code>AUDIT_SOURCE=profiler</code> · <code>TARGET_PORT=27017</code> · <code>DB_NAME=&lt;db&gt;</code> · <code>DB_USER</code>/<code>DB_PASSWORD</code>. <b>No <code>AUDIT_LOG</code></b> — the source is the database connection, not a file.</p>
+
+  <table>
+    <thead><tr><th>Extra setting</th><th>Default</th><th>What it does</th></tr></thead>
+    <tbody>
+      <tr><td><code>MONGO_URI</code></td><td><em>built from host/port/user</em></td><td>Full connection string; use for <b>Atlas</b> (<code>mongodb+srv://…</code>) or custom TLS/replica-set options. Overrides the others.</td></tr>
+      <tr><td><code>MONGO_AUTH_SOURCE</code></td><td><code>admin</code></td><td>Auth database, if your user lives elsewhere.</td></tr>
+      <tr><td><code>AUDIT_POLL_SEC</code></td><td><code>10</code></td><td>How often <code>system.profile</code> is polled.</td></tr>
+      <tr><td><code>MONGO_AUTO_PROFILE</code></td><td><code>true</code></td><td>Let the agent enable profiling at startup. <code>false</code> to manage it server-side only.</td></tr>
+      <tr><td><code>MONGO_INCLUDE_GETMORE</code></td><td><code>false</code></td><td>See the row-count warning below.</td></tr>
+    </tbody>
+  </table>
+
+  <aside class="warn"><b>⚠️ Three limits specific to the profiler — read before relying on this trail.</b>
+    <ol>
+      <li><b><code>system.profile</code> is capped</b> (1 MB default, ≈ a few thousand operations). On a busy instance it wraps faster than the poll interval and operations are <b>lost</b> — profiler capture is <b>best-effort, not a guaranteed audit trail</b>. Enlarge it if that matters: <code>db.setProfilingLevel(0)</code>, <code>db.system.profile.drop()</code>, <code>db.createCollection('system.profile', { capped: true, size: 100000000 })</code>, then re-enable.</li>
+      <li><b><code>row_count</code> under-reports large reads by default.</b> A <code>find</code> reports only its first batch (101 documents), so a 10,000-document read looks like 101 rows. Set <code>MONGO_INCLUDE_GETMORE=true</code> to emit every cursor batch and get true read volume — at roughly one extra event per 100 documents. <b>Turn this on if you use bulk-read/exfiltration policies.</b></li>
+      <li><b>Profiling costs write throughput</b> on the server, and the agent's own polling consumes space in the capped collection. A longer <code>AUDIT_POLL_SEC</code> reduces both.</li>
+    </ol>
+  </aside>
+
+  <aside><b>Statements appear in Mongo syntax, not SQL</b> — <code>db.users.find({"email":"…"})</code> — because that's what actually ran. Operations still map onto the normal taxonomy (<code>SELECT</code>/<code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code>/<code>DDL</code>/<code>GRANT</code>), so existing policies and views work unchanged.</aside>
+
+  <aside><b>Verify (MySQL/PG):</b> <code>sudo tail -f &lt;AUDIT_LOG&gt;</code> and run a query elsewhere — lines should appear. AgentLite tails the live file and handles rotation/truncation automatically; ensure <code>logrotate</code> + disk headroom on busy DBs.<br />
+  <b>Verify (MongoDB):</b> run a query, then <code>db.system.profile.find().sort({ts:-1}).limit(5)</code> — documents should appear.</aside>
 
   <hr />
 
@@ -182,6 +233,7 @@ GRANT CONNECT ON DATABASE &lt;db&gt; TO dam_svc;
 GRANT USAGE ON SCHEMA public TO dam_svc;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;</code></pre>
   <p><code>dam_svc</code> is <b>read-only</b> — it inspects schema/metadata but can never modify data. Pass it as <code>DB_USER</code>/<code>DB_PASSWORD</code> with <code>CLASSIFY=true</code> (PostgreSQL also needs <code>DB_NAME</code>).</p>
+  <aside class="warn"><b>MongoDB: classification is not supported yet.</b> <code>CLASSIFY=true</code> is ignored for <code>DB_ENGINE=mongodb</code> — the scanner reads <code>information_schema</code>, which has no MongoDB equivalent (collections are schemaless, so classifying them means sampling documents). Capture still tags statements whose <b>text</b> contains sensitive field names (<code>email</code>, <code>aadhaar</code>, <code>ssn</code>, <code>card</code>…), but a read of a sensitive collection that doesn't name such a field — e.g. <code>db.kyc_documents.find({status:"verified"})</code> — will arrive <b>untagged</b>. If you rely on sensitive-collection policies, raise this with your DAM operator.</aside>
 
   <hr />
 
@@ -240,6 +292,30 @@ EOF
 sudo systemctl enable --now dam-agent@audit
 journalctl -u dam-agent@audit -f     <span class="cmt"># watch it enroll + start tailing</span></code></pre>
   <aside>To also run <b>classification</b> (Step 2), add <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=&lt;the password&gt;</code> to the env / <code>-e</code> flags.</aside>
+
+  <h3>MongoDB variant</h3>
+  <p>There's no log file, so drop <code>AUDIT_LOG</code> and the <code>-v</code> log mount, and supply the connection instead. The collector needs no privileged access to the host and can run <b>anywhere</b> that can reach <code>27017</code>:</p>
+  <pre><code>docker run -d --name toovix-agent-audit --restart unless-stopped \
+  -e MODE=audit-forward \
+  -e DB_ENGINE=mongodb \
+  -e AUDIT_SOURCE=profiler \
+  -e TARGET_HOST=${DB_VM_HOST} \
+  -e TARGET_PORT=27017 \
+  -e DB_NAME=&lt;db&gt; \
+  -e DB_USER=dam_svc -e DB_PASSWORD=&lt;password&gt; \
+  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} \
+  -e CONTROL_PLANE=${CONTROL_PLANE} \
+  &lt;your-dam-agent-image&gt;
+<span class="cmt"># Atlas / replica sets: replace TARGET_* and DB_USER/DB_PASSWORD with</span>
+<span class="cmt">#   -e MONGO_URI='mongodb+srv://user:pass@cluster.xxxxx.mongodb.net/'</span>
+<span class="cmt"># but keep TARGET_HOST set — it's how DAM identifies the instance.</span></code></pre>
+  <p><b>A healthy MongoDB start looks like:</b></p>
+  <pre><code>=== TooVix DAM Agent · mode=audit-forward engine=mongodb target=10.0.0.10:27017 ===
+enrolled: agent=… instance=… tenant=…
+AgentLite audit-forward tailing mongodb-10.0.0.10-27017-&lt;db&gt; (source=profiler engine=mongodb)
+audit-forward(mongodb): profiler already at level 2 (slowms=0)
+audit-forward(mongodb): polling &lt;db&gt;.system.profile every 10s (watermark …)
+[capture] SELECT  rows=2  app  db.users.find({"country":"UK"})</code></pre>
   <p><b>A healthy start looks like:</b></p>
   <pre><code>=== TooVix DAM Agent · mode=audit-forward engine=mysql target=…:3306 ===
 enrolled: agent=… instance=… tenant=…
@@ -338,6 +414,10 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
       <tr><td>Queries run locally aren't captured</td><td>Use <b>TCP</b> (<code>mysql -h 127.0.0.1 …</code>) and confirm the log is receiving writes.</td></tr>
       <tr><td>Stream publish fails (e.g. <code>403</code> / init failed)</td><td>The VM has <b>no cloud identity attached</b>, or it lacks <b>publish</b> permission on the stream. See §8.</td></tr>
       <tr><td>Wrong workspace</td><td>View the console in the <b>same tenant/workspace</b> the enrollment token belongs to; agents are tenant-scoped.</td></tr>
+      <tr><td>MongoDB: <code>could not enable profiling</code></td><td>The login lacks <b><code>dbAdmin</code></b> on the target DB. Either grant it, or enable profiling server-side (<code>operationProfiling.mode: all</code>) and set <code>MONGO_AUTO_PROFILE=false</code>. Until profiling is on, <b>capture is empty</b>.</td></tr>
+      <tr><td>MongoDB: agent starts but captures nothing</td><td>1) <code>db.getProfilingStatus()</code> → is <code>was: 2</code>? 2) Does <code>DB_NAME</code> match the database the queries actually run against? Operations on <b>other</b> databases, and on <code>admin</code>/<code>local</code>/<code>config</code>, are deliberately ignored. 3) Check <code>db.system.profile.countDocuments()</code> grows.</td></tr>
+      <tr><td>MongoDB: big reads show <code>row_count</code> ≈ 101</td><td>Expected — that's the first cursor batch. Set <code>MONGO_INCLUDE_GETMORE=true</code> (§2).</td></tr>
+      <tr><td>MongoDB: gaps in the trail under load</td><td><code>system.profile</code> is <b>capped</b> and wrapped before the agent polled. Lower <code>AUDIT_POLL_SEC</code> and/or enlarge the collection (§2).</td></tr>
     </tbody>
   </table>
 
@@ -349,10 +429,11 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
     <li><b>AgentLite is detective, not preventive</b> — it alerts after the fact and cannot block. For real-time blocking, use <b>Inline Proxy</b> mode.</li>
     <li><b>The agent only makes outbound connections</b> to DAM (HTTPS, or your audit stream). No inbound ports are opened; DAM never connects into your database network.</li>
     <li><b>Least privilege:</b> the optional <code>dam_svc</code> user is read-only (<code>SELECT, PROCESS</code>). Rotate its password per your policy.</li>
+    <li><b>MongoDB:</b> <code>system.profile</code> contains <b>query filters and inserted documents</b>, so it holds real data values on the server — treat the profiler as sensitive, and note that enabling it is a <b>visible change to the database's behaviour</b> (write overhead), not a passive read. The <code>dam_svc</code> role set is read-only over data; <code>dbAdmin</code> is there only to toggle the profiling level.</li>
   </ul>
 
   <footer>
-    Questions, or a non-MySQL engine (PostgreSQL / SQL Server / Oracle / MongoDB)? Contact your TooVix DAM operator — AgentLite audit-forward currently supports MySQL/MariaDB; other engines use network, host, or inline-proxy capture.
+    Questions, or an engine not covered here (Oracle / others)? Contact your TooVix DAM operator. AgentLite audit-forward supports <b>MySQL/MariaDB, PostgreSQL, SQL Server, and MongoDB</b>; other engines use network, host, or inline-proxy capture.
   </footer>
 </div>
 </body>
