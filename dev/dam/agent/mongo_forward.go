@@ -409,3 +409,136 @@ func mongoJSON(v interface{}) string {
 	s = strings.TrimSuffix(strings.TrimPrefix(s, `{"v":`), `}`)
 	return strings.TrimSpace(s)
 }
+
+// ── Classification (schema inference by sampling) ────────────────────
+//
+// SQL engines expose information_schema, so classification there reads an exact, complete
+// column list. MongoDB has no such catalog: a collection's fields exist only inside its
+// documents, and two documents in one collection need not share a shape. So the field set is
+// INFERRED — sample N documents per collection and union their keys.
+//
+// The accuracy trade-off is real and worth stating plainly: a sensitive field that appears in
+// only a handful of rare documents can be missed entirely. Mongo classification is therefore
+// PROBABILISTIC where SQL classification is exact. Raise MONGO_CLASSIFY_SAMPLE to narrow the
+// gap at the cost of a heavier scan.
+
+func isMongoEngine(engine string) bool { return engine == "mongodb" || engine == "mongo" }
+
+// flattenKeys walks a document and collects field paths ("addr.postal_code"). Nested objects
+// are followed to maxDepth; an array is represented by the union of the keys of the object
+// elements it holds, since that is where field names actually live.
+func flattenKeys(d bson.D, prefix string, depth, maxDepth int, out map[string]string) {
+	for _, e := range d {
+		path := e.Key
+		if prefix != "" {
+			path = prefix + "." + e.Key
+		}
+		switch v := e.Value.(type) {
+		case bson.D:
+			if depth < maxDepth {
+				flattenKeys(v, path, depth+1, maxDepth, out)
+			}
+		case bson.A:
+			if depth < maxDepth {
+				for _, item := range v {
+					if sub, ok := item.(bson.D); ok {
+						flattenKeys(sub, path, depth+1, maxDepth, out)
+					}
+				}
+			}
+		default:
+			// Leaf. Record the BSON type name for display; first writer wins, which is fine
+			// because the type is informational and the classifier keys off the NAME.
+			if _, seen := out[path]; !seen {
+				out[path] = bsonTypeName(e.Value)
+			}
+		}
+	}
+}
+
+func bsonTypeName(v interface{}) string {
+	switch v.(type) {
+	case string:
+		return "string"
+	case int32, int64, float64:
+		return "number"
+	case bool:
+		return "bool"
+	case time.Time:
+		return "date"
+	case nil:
+		return "null"
+	}
+	return "object"
+}
+
+// mongoClassifyObjects samples every user collection in the target database and returns the
+// same objAgg set the SQL collector produces, so reporting is shared.
+func mongoClassifyObjects(cfg Config) (map[string]*objAgg, []string, error) {
+	dbName := mongoDatabase(cfg)
+	sampleN := int64(atoiDefault(env("MONGO_CLASSIFY_SAMPLE", "100"), 100))
+	maxDepth := atoiDefault(env("MONGO_CLASSIFY_DEPTH", "3"), 3)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(mongoURI(cfg)).
+		SetAppName(mongoAppName).SetServerSelectionTimeout(10*time.Second))
+	if err != nil {
+		return nil, nil, fmt.Errorf("classification(mongodb): connect: %w", err)
+	}
+	defer client.Disconnect(ctx)
+
+	db := client.Database(dbName)
+	colls, err := db.ListCollectionNames(ctx, bson.D{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("classification(mongodb): list collections (needs read on %s): %w", dbName, err)
+	}
+
+	objs := map[string]*objAgg{}
+	var objOrder []string
+	for _, coll := range colls {
+		// system.profile is the agent's own capture source, and the other system.* collections
+		// are server internals — neither is user data.
+		if strings.HasPrefix(coll, "system.") {
+			continue
+		}
+		cur, err := db.Collection(coll).Aggregate(ctx, []bson.D{{{Key: "$sample", Value: bson.D{{Key: "size", Value: sampleN}}}}})
+		if err != nil {
+			log.Printf("classification(mongodb): sample %s.%s failed: %v", dbName, coll, err)
+			continue
+		}
+		fields := map[string]string{}
+		docs := 0
+		for cur.Next(ctx) {
+			var d bson.D
+			if err := cur.Decode(&d); err != nil {
+				continue
+			}
+			flattenKeys(d, "", 0, maxDepth, fields)
+			docs++
+		}
+		cur.Close(ctx)
+
+		o := &objAgg{dbName: dbName, schema: dbName, table: coll, total: len(fields)}
+		for path, typ := range fields {
+			if path == "_id" {
+				continue
+			}
+			if tag, sens, ok := classifyCol(path); ok {
+				o.cols = append(o.cols, map[string]interface{}{
+					"column_name": path, "data_type": typ, "tags": []string{tag},
+					"sensitivity": sens, "detection_method": "pattern",
+					// Lower than the SQL path's 0.85: the field set is sampled, not authoritative.
+					"confidence": 0.75, "is_masked": false,
+				})
+			}
+		}
+		key := dbName + "\x00" + dbName + "\x00" + coll
+		objs[key] = o
+		objOrder = append(objOrder, key)
+		log.Printf("classification(mongodb): %s.%s — %d fields from %d sampled docs, %d sensitive",
+			dbName, coll, len(fields), docs, len(o.cols))
+	}
+	return objs, objOrder, nil
+}

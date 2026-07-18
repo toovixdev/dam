@@ -9,7 +9,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -73,6 +75,40 @@ func env(k, d string) string {
 	}
 	return d
 }
+
+// ── The agent's own SQL must never appear as customer activity ───────────────
+//
+// The agent logs into the monitored database itself (classification scans, database discovery,
+// SQL Server audit polls). Every capture mode then observes those queries and ships them as
+// events — so the audit trail fills with the agent watching itself, e.g.
+//   SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns …
+// It's the SQL twin of the MongoDB profiler feedback loop (see shouldForwardMongo).
+//
+// The fix is to MARK our own statements and drop exactly those, rather than blanket-dropping
+// reads of information_schema — a real attacker enumerating the schema is precisely the kind of
+// reconnaissance a DAM must keep reporting.
+//
+// The marker is RANDOM PER PROCESS, deliberately. A fixed, documented string would be an evasion
+// hole: anyone could append it to their own queries and disappear from the audit trail. This one
+// isn't guessable and changes on every restart.
+var agentQueryTag = newAgentQueryTag()
+
+func newAgentQueryTag() string {
+	b := make([]byte, 6)
+	if _, err := rand.Read(b); err != nil {
+		// Should never happen; fall back to a per-process-ish value rather than a constant.
+		return fmt.Sprintf("/* toovix-dam:%d */", os.Getpid())
+	}
+	return "/* toovix-dam:" + hex.EncodeToString(b) + " */"
+}
+
+// tagAgentQuery prefixes a statement the agent itself runs. Prefix, not suffix: capture paths
+// truncate long statements (the eBPF window, packet framing), and a trailing marker could be
+// cut off — leaving the query looking like customer traffic.
+func tagAgentQuery(q string) string { return agentQueryTag + " " + q }
+
+// isAgentOwnQuery reports whether this statement was issued by this agent process.
+func isAgentOwnQuery(sql string) bool { return strings.Contains(sql, agentQueryTag) }
 
 func loadConfig() Config {
 	c := Config{
@@ -138,12 +174,13 @@ func main() {
 	}
 
 	// Classification runs alongside ANY capture mode (it just needs a DB read login).
-	classifiable := cfg.Engine == "mysql" || cfg.Engine == "postgresql" || cfg.Engine == "mssql"
+	classifiable := cfg.Engine == "mysql" || cfg.Engine == "postgresql" || cfg.Engine == "mssql" ||
+		isMongoEngine(cfg.Engine)
 	if cfg.Classify && cfg.DBUser != "" && classifiable {
-		go classifyLoop(cfg)     // periodic (CLASSIFY_INTERVAL_MIN)
-		go scanTriggerLoop(cfg)  // on-demand — the "Run Scan" button
+		go classifyLoop(cfg)    // periodic (CLASSIFY_INTERVAL_MIN)
+		go scanTriggerLoop(cfg) // on-demand — the "Run Scan" button
 	} else if cfg.Classify {
-		log.Printf("classification enabled but skipped (need DB_USER and engine mysql|postgresql|mssql; postgres/mssql also need DB_NAME)")
+		log.Printf("classification enabled but skipped (need DB_USER and engine mysql|postgresql|mssql|mongodb; postgres/mssql/mongodb also need DB_NAME)")
 	}
 
 	switch cfg.Mode {
@@ -895,7 +932,7 @@ func resolvePGDatabases(cfg Config) ([]string, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT datname FROM pg_database WHERE datistemplate = false AND datallowconn = true ORDER BY datname`)
+	rows, err := db.Query(tagAgentQuery(`SELECT datname FROM pg_database WHERE datistemplate = false AND datallowconn = true ORDER BY datname`))
 	if err != nil {
 		return nil, err
 	}
@@ -926,7 +963,7 @@ func scanTargets(cfg Config) ([]scanTarget, error) {
 			ORDER BY table_schema, table_name, ordinal_position`
 		ts := make([]scanTarget, 0, len(dbList))
 		for _, d := range dbList {
-			ts = append(ts, scanTarget{driver: "postgres", dsn: pgDSN(cfg, d), query: q, dbLabel: d})
+			ts = append(ts, scanTarget{driver: "postgres", dsn: pgDSN(cfg, d), query: tagAgentQuery(q), dbLabel: d})
 		}
 		return ts, nil
 	}
@@ -944,7 +981,7 @@ func scanTargets(cfg Config) ([]scanTarget, error) {
 			ORDER BY table_schema, table_name, ordinal_position`
 		ts := make([]scanTarget, 0, len(dbList))
 		for _, d := range dbList {
-			ts = append(ts, scanTarget{driver: "sqlserver", dsn: mssqlDSN(cfg, d), query: q, dbLabel: d})
+			ts = append(ts, scanTarget{driver: "sqlserver", dsn: mssqlDSN(cfg, d), query: tagAgentQuery(q), dbLabel: d})
 		}
 		return ts, nil
 	}
@@ -952,7 +989,7 @@ func scanTargets(cfg Config) ([]scanTarget, error) {
 		WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
 		ORDER BY table_schema, table_name, ordinal_position`
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/information_schema?timeout=8s&readTimeout=20s&allowNativePasswords=true", cfg.DBUser, cfg.DBPass, cfg.TargetHost, cfg.TargetPort)
-	return []scanTarget{{driver: "mysql", dsn: dsn, query: q, dbLabel: ""}}, nil
+	return []scanTarget{{driver: "mysql", dsn: dsn, query: tagAgentQuery(q), dbLabel: ""}}, nil
 }
 
 // mssqlDSN builds a go-mssqldb URL for one database. encrypt=disable keeps the scan
@@ -986,7 +1023,7 @@ func resolveMSSQLDatabases(cfg Config) ([]string, error) {
 		return nil, err
 	}
 	defer db.Close()
-	rows, err := db.Query("SELECT name FROM sys.databases WHERE database_id > 4 AND state = 0 ORDER BY name")
+	rows, err := db.Query(tagAgentQuery("SELECT name FROM sys.databases WHERE database_id > 4 AND state = 0 ORDER BY name"))
 	if err != nil {
 		return nil, err
 	}
@@ -1001,19 +1038,34 @@ func resolveMSSQLDatabases(cfg Config) ([]string, error) {
 	return out, nil
 }
 
+// objAgg is one scanned object (SQL table or Mongo collection) plus the sensitive
+// fields found in it. Shared by the SQL and MongoDB collectors, which differ only in
+// how they enumerate fields — everything downstream of that is identical.
+type objAgg struct {
+	dbName, schema, table string
+	total                 int
+	cols                  []map[string]interface{}
+}
+
 func runClassificationScan(cfg Config) error {
+	objs := map[string]*objAgg{}
+	var objOrder []string
+
+	// MongoDB has no information_schema to query, so it enumerates fields by sampling
+	// documents instead. See mongoClassifyObjects for what that costs in accuracy.
+	if isMongoEngine(cfg.Engine) {
+		var err error
+		objs, objOrder, err = mongoClassifyObjects(cfg)
+		if err != nil {
+			return err
+		}
+		return reportClassification(cfg, objs, objOrder)
+	}
+
 	targets, err := scanTargets(cfg)
 	if err != nil {
 		return err
 	}
-
-	type objAgg struct {
-		dbName, schema, table string
-		total                 int
-		cols                  []map[string]interface{}
-	}
-	objs := map[string]*objAgg{}
-	var objOrder []string
 	for _, t := range targets {
 		db, err := sql.Open(t.driver, t.dsn)
 		if err != nil {
@@ -1055,6 +1107,13 @@ func runClassificationScan(cfg Config) error {
 		db.Close()
 	}
 
+	return reportClassification(cfg, objs, objOrder)
+}
+
+// reportClassification groups scanned objects by database, refreshes the sensitive-table
+// map used to tag captured reads, and posts the inventory to the control plane. Engine-agnostic:
+// the SQL and MongoDB collectors both hand it the same objAgg set.
+func reportClassification(cfg Config, objs map[string]*objAgg, objOrder []string) error {
 	// Group by schema (= database in MySQL). We report EVERY scanned schema — including
 	// those with zero sensitive columns — with per-database totals, so the control plane
 	// can compute real classification coverage (columns scanned vs. sensitive found).
@@ -1825,6 +1884,11 @@ func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, lar
 func forwardEventOp(cfg Config, principal, clientIP, sql, op string, rowCount int, large bool) {
 	sql = strings.TrimSpace(sql)
 	if sql == "" {
+		return
+	}
+	// Drop the agent's own database traffic. Checked HERE because every capture mode
+	// (network, host, proxy, audit-forward) funnels through this one function.
+	if isAgentOwnQuery(sql) {
 		return
 	}
 	tags := detectTags(sql)
