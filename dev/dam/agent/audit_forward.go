@@ -10,6 +10,7 @@ package main
 import (
 	"bufio"
 	"database/sql"
+	"fmt"
 	"io"
 	"log"
 	"os"
@@ -130,44 +131,55 @@ func tailSqlServerXEvents(cfg Config) {
 	db.SetMaxOpenConns(2)
 	defer db.Close()
 
-	const q = `SELECT timestamp_utc,
+	// NOTE on incremental reads: XEvents' file_offset is BLOCK-level (many events share one), and
+	// predicates on fn_xe_file_target_read_file don't filter reliably (a WHERE on timestamp_utc
+	// returns nothing even when newer rows exist). So we read the target and de-duplicate in Go by
+	// (offset|timestamp|statement). The first pass only seeds the seen-set so we don't replay
+	// history. The XE file rolls over (max_file_size/max_rollover_files), which bounds the read.
+	const q = `SELECT file_offset, CONVERT(varchar(23), timestamp_utc, 126) AS ts,
 	    x.value('(event/data[@name="row_count"]/value)[1]','bigint') AS rows_out,
 	    x.value('(event/action[@name="server_principal_name"]/value)[1]','nvarchar(128)') AS principal,
 	    x.value('(event/action[@name="client_hostname"]/value)[1]','nvarchar(256)') AS client_host,
 	    x.value('(event/data[@name="statement"]/value)[1]','nvarchar(max)') AS statement
 	  FROM sys.fn_xe_file_target_read_file(@path, NULL, NULL, NULL)
 	  CROSS APPLY (SELECT TRY_CAST(event_data AS XML)) AS t(x)
-	  WHERE timestamp_utc > @wm
-	  ORDER BY timestamp_utc`
+	  ORDER BY file_offset`
 
-	wm := time.Now().UTC()
-	_ = db.QueryRow(`SELECT ISNULL(MAX(timestamp_utc), SYSUTCDATETIME()) FROM sys.fn_xe_file_target_read_file(@path, NULL, NULL, NULL)`,
-		sql.Named("path", cfg.AuditLog)).Scan(&wm)
+	seen := map[string]bool{}
+	first := true
 
 	for {
-		rows, err := db.Query(q, sql.Named("path", cfg.AuditLog), sql.Named("wm", wm))
+		rows, err := db.Query(q, sql.Named("path", cfg.AuditLog))
 		if err != nil {
-			log.Printf("audit-forward(mssql/xevents): read %s: %v — is the XE session ON, the path correct, and does DB_USER have VIEW SERVER STATE? retrying", cfg.AuditLog, err)
+			log.Printf("audit-forward(mssql/xevents): read %s: %v — is the XE session started (STATE=START), the path correct, and does DB_USER have VIEW SERVER STATE? retrying", cfg.AuditLog, err)
 			time.Sleep(time.Duration(pollSec) * time.Second)
 			continue
 		}
+		cur := make(map[string]bool, len(seen)+16)
 		for rows.Next() {
-			var et time.Time
+			var offset sql.NullInt64
+			var ts sql.NullString
 			var rowCount sql.NullInt64
 			var principal, clientHost, statement sql.NullString
-			if err := rows.Scan(&et, &rowCount, &principal, &clientHost, &statement); err != nil {
+			if err := rows.Scan(&offset, &ts, &rowCount, &principal, &clientHost, &statement); err != nil {
 				continue
 			}
-			if et.After(wm) {
-				wm = et
-			}
 			s := strings.TrimSpace(statement.String)
-			if s == "" || !shouldForward(s) || isMssqlSystemStmt(s) {
+			if s == "" {
+				continue
+			}
+			key := fmt.Sprintf("%d|%s|%s", offset.Int64, ts.String, s)
+			cur[key] = true
+			if first || seen[key] { // seed on the first pass; skip anything already forwarded
+				continue
+			}
+			if !shouldForward(s) || isMssqlSystemStmt(s) {
 				continue
 			}
 			forwardEvent(cfg, orDefault(principal.String, "unknown"), clientHost.String, s, int(rowCount.Int64), false)
 		}
 		rows.Close()
+		seen, first = cur, false
 		time.Sleep(time.Duration(pollSec) * time.Second)
 	}
 }
