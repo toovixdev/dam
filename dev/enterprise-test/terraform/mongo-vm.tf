@@ -31,14 +31,28 @@ resource "random_password" "mongo_vm_root" {
   special = false
 }
 
+resource "random_password" "mongo_vm_app" {
+  length  = 20
+  special = false
+}
+
 resource "random_password" "mongo_vm_dam_svc" {
   length  = 20
   special = false
 }
 
+# One secret per account. `app` gets its own password — it must never share root's.
+locals {
+  mongo_vm_passwords = {
+    "root"    = random_password.mongo_vm_root.result
+    "app"     = random_password.mongo_vm_app.result
+    "dam-svc" = random_password.mongo_vm_dam_svc.result
+  }
+}
+
 resource "google_secret_manager_secret" "mongo_vm" {
-  for_each  = toset(["root", "dam-svc"])
-  secret_id = "toovix-${var.mongo_vm.name}-${each.value}"
+  for_each  = local.mongo_vm_passwords
+  secret_id = "toovix-${var.mongo_vm.name}-${each.key}"
   labels    = var.labels
   replication {
     auto {}
@@ -46,9 +60,9 @@ resource "google_secret_manager_secret" "mongo_vm" {
 }
 
 resource "google_secret_manager_secret_version" "mongo_vm" {
-  for_each    = toset(["root", "dam-svc"])
-  secret      = google_secret_manager_secret.mongo_vm[each.value].id
-  secret_data = each.value == "root" ? random_password.mongo_vm_root.result : random_password.mongo_vm_dam_svc.result
+  for_each    = local.mongo_vm_passwords
+  secret      = google_secret_manager_secret.mongo_vm[each.key].id
+  secret_data = each.value
 }
 
 resource "google_compute_instance" "mongo_vm" {
@@ -80,6 +94,7 @@ resource "google_compute_instance" "mongo_vm" {
     mongo_version       = var.mongo_vm.mongo_version
     seed_b64            = fileexists("${path.module}/seed/${var.mongo_vm.db_name}.js") ? base64encode(file("${path.module}/seed/${var.mongo_vm.db_name}.js")) : ""
     mongo_root_password = random_password.mongo_vm_root.result
+    app_password        = random_password.mongo_vm_app.result
     dam_svc_password    = random_password.mongo_vm_dam_svc.result
     agent_image         = var.agent_image
     control_plane_url   = var.dam_control_plane_url
