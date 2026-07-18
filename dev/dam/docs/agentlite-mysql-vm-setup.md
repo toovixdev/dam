@@ -139,19 +139,31 @@ operationProfiling:
   slowOpThresholdMs: 0
 ```
 
-Create the monitoring login — `dbAdmin` is what lets the agent turn profiling on itself:
+Create the monitoring login. Enabling the profiler needs the `enableProfiler` action — **don't grant `dbAdmin` for it.** `dbAdmin` bundles `dropCollection` and `dropIndex`, so a monitoring account holding it could **destroy data**. Create a custom role with just the one action instead:
+
 ```javascript
+// 1. a role that can ONLY toggle profiling
+use <db>
+db.createRole({
+  role: 'toovixProfiler',
+  privileges: [ { resource: { db: '<db>', collection: '' }, actions: [ 'enableProfiler' ] } ],
+  roles: []
+})
+
+// 2. the monitoring user
 use admin
 db.createUser({
   user: 'dam_svc',
   pwd: '<strong-password>',
   roles: [
-    { role: 'clusterMonitor', db: 'admin' },   // read profiling status
-    { role: 'read',           db: '<db>' },    // read system.profile + data
-    { role: 'dbAdmin',        db: '<db>' }     // set the profiling level
+    { role: 'clusterMonitor',  db: 'admin' },  // read profiling status
+    { role: 'read',            db: '<db>' },   // read system.profile + data
+    { role: 'toovixProfiler',  db: '<db>' }    // set the profiling level, nothing else
   ]
 })
 ```
+
+> Verified: this role set can read data, read `system.profile` and call `setProfilingLevel` — and is **denied** create, drop and write. If you'd rather not create a custom role, enable profiling server-side (`operationProfiling.mode: all`), set `MONGO_AUTO_PROFILE=false`, and drop the third role entirely — then `read` + `clusterMonitor` is all the agent needs.
 
 Agent settings → `DB_ENGINE=mongodb` · `AUDIT_SOURCE=profiler` · `TARGET_PORT=27017` · `DB_NAME=<db>` · `DB_USER=dam_svc` · `DB_PASSWORD=…`
 **No `AUDIT_LOG`** — the source is the database connection, not a file.
@@ -387,7 +399,7 @@ A healthy start then logs: `AgentLite: publishing audit events to Pub/Sub topic 
 | Queries run locally aren't captured | Use **TCP** (`mysql -h 127.0.0.1 …`); the general log records them either way, but confirm the log is actually receiving writes. |
 | GCP: `AgentLite: Pub/Sub publisher init failed` or `pubsub publish failed: 403` | The VM has **no service account attached**, or the SA lacks `roles/pubsub.publisher` on the topic. See §8. |
 | Wrong workspace | You must view the DAM console in the **same tenant/workspace** the enrollment token belongs to; agents are tenant-scoped. |
-| MongoDB: `could not enable profiling` | The login lacks **`dbAdmin`** on the target DB. Either grant it, or enable profiling server-side (`operationProfiling.mode: all`) and set `MONGO_AUTO_PROFILE=false`. Until profiling is on, **capture is empty**. |
+| MongoDB: `could not enable profiling` | The login lacks the **`enableProfiler`** action on the target DB. Grant the `toovixProfiler` role from §2 — **not `dbAdmin`**, which also allows dropping collections. Or enable profiling server-side (`operationProfiling.mode: all`) and set `MONGO_AUTO_PROFILE=false`. Until profiling is on, **capture is empty**. |
 | MongoDB: agent starts but captures nothing | 1) `db.getProfilingStatus()` → is `was: 2`? 2) Does `DB_NAME` match the database the queries actually run against? Operations on **other** databases, and on `admin`/`local`/`config`, are deliberately ignored. 3) Is anything running? Check `db.system.profile.countDocuments()` grows. |
 | MongoDB: big reads show `row_count` ≈ 101 | Expected — that's the first cursor batch. Set `MONGO_INCLUDE_GETMORE=true` (§2). |
 | MongoDB: gaps in the trail under load | `system.profile` is **capped** and wrapped before the agent polled. Lower `AUDIT_POLL_SEC` and/or enlarge the collection (§2). |
@@ -400,7 +412,7 @@ A healthy start then logs: `AgentLite: publishing audit events to Pub/Sub topic 
 - **AgentLite is detective, not preventive** — it alerts after the fact and cannot block. For real-time blocking of a specific database, use **Inline Proxy** mode instead.
 - **The agent only makes outbound connections** to DAM (HTTPS, or Pub/Sub on GCP). No inbound ports are opened; DAM never connects into your database network.
 - **Least privilege:** the optional `dam_svc` user is read-only (`SELECT, PROCESS`). Rotate its password per your policy.
-- **MongoDB:** `system.profile` contains **query filters and inserted documents**, so it holds real data values on the server — treat the profiler as sensitive, and note that enabling it is a **visible change to the database's behaviour** (write overhead), not a passive read. The `dam_svc` role set is read-only over data; `dbAdmin` is there only to toggle the profiling level.
+- **MongoDB:** `system.profile` contains **query filters and inserted documents**, so it holds real data values on the server — treat the profiler as sensitive, and note that enabling it is a **visible change to the database's behaviour** (write overhead), not a passive read. Keep `dam_svc` on the `toovixProfiler` custom role from §2: **`dbAdmin` would let a monitoring account drop collections**, which is far more privilege than capture requires.
 
 ---
 

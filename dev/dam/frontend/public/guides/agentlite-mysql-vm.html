@@ -179,17 +179,27 @@ operationProfiling:
   mode: all
   slowOpThresholdMs: 0</code></pre>
 
-  <p>Create the monitoring login — <code>dbAdmin</code> is what lets the agent turn profiling on itself:</p>
-  <pre><code>use admin
+  <p>Create the monitoring login. Enabling the profiler needs the <code>enableProfiler</code> action — <b>don't grant <code>dbAdmin</code> for it.</b> <code>dbAdmin</code> bundles <code>dropCollection</code> and <code>dropIndex</code>, so a monitoring account holding it could <b>destroy data</b>. Create a custom role with just the one action instead:</p>
+  <pre><code><span class="cmt">// 1. a role that can ONLY toggle profiling</span>
+use &lt;db&gt;
+db.createRole({
+  role: 'toovixProfiler',
+  privileges: [ { resource: { db: '&lt;db&gt;', collection: '' }, actions: [ 'enableProfiler' ] } ],
+  roles: []
+})
+
+<span class="cmt">// 2. the monitoring user</span>
+use admin
 db.createUser({
   user: 'dam_svc',
   pwd: '&lt;strong-password&gt;',
   roles: [
-    { role: 'clusterMonitor', db: 'admin' },   <span class="cmt">// read profiling status</span>
-    { role: 'read',           db: '&lt;db&gt;' },    <span class="cmt">// read system.profile + data</span>
-    { role: 'dbAdmin',        db: '&lt;db&gt;' }     <span class="cmt">// set the profiling level</span>
+    { role: 'clusterMonitor',  db: 'admin' },  <span class="cmt">// read profiling status</span>
+    { role: 'read',            db: '&lt;db&gt;' },   <span class="cmt">// read system.profile + data</span>
+    { role: 'toovixProfiler',  db: '&lt;db&gt;' }    <span class="cmt">// set the profiling level, nothing else</span>
   ]
 })</code></pre>
+  <aside>Verified: this role set can read data, read <code>system.profile</code> and call <code>setProfilingLevel</code> — and is <b>denied</b> create, drop and write. If you'd rather not create a custom role, enable profiling server-side (<code>operationProfiling.mode: all</code>), set <code>MONGO_AUTO_PROFILE=false</code>, and drop the third role entirely — then <code>read</code> + <code>clusterMonitor</code> is all the agent needs.</aside>
 
   <p>Agent → <code>DB_ENGINE=mongodb</code> · <code>AUDIT_SOURCE=profiler</code> · <code>TARGET_PORT=27017</code> · <code>DB_NAME=&lt;db&gt;</code> · <code>DB_USER</code>/<code>DB_PASSWORD</code>. <b>No <code>AUDIT_LOG</code></b> — the source is the database connection, not a file.</p>
 
@@ -414,7 +424,7 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
       <tr><td>Queries run locally aren't captured</td><td>Use <b>TCP</b> (<code>mysql -h 127.0.0.1 …</code>) and confirm the log is receiving writes.</td></tr>
       <tr><td>Stream publish fails (e.g. <code>403</code> / init failed)</td><td>The VM has <b>no cloud identity attached</b>, or it lacks <b>publish</b> permission on the stream. See §8.</td></tr>
       <tr><td>Wrong workspace</td><td>View the console in the <b>same tenant/workspace</b> the enrollment token belongs to; agents are tenant-scoped.</td></tr>
-      <tr><td>MongoDB: <code>could not enable profiling</code></td><td>The login lacks <b><code>dbAdmin</code></b> on the target DB. Either grant it, or enable profiling server-side (<code>operationProfiling.mode: all</code>) and set <code>MONGO_AUTO_PROFILE=false</code>. Until profiling is on, <b>capture is empty</b>.</td></tr>
+      <tr><td>MongoDB: <code>could not enable profiling</code></td><td>The login lacks the <b><code>enableProfiler</code></b> action on the target DB. Grant the <code>toovixProfiler</code> role from §2 — <b>not <code>dbAdmin</code></b>, which also allows dropping collections. Or enable profiling server-side (<code>operationProfiling.mode: all</code>) and set <code>MONGO_AUTO_PROFILE=false</code>. Until profiling is on, <b>capture is empty</b>.</td></tr>
       <tr><td>MongoDB: agent starts but captures nothing</td><td>1) <code>db.getProfilingStatus()</code> → is <code>was: 2</code>? 2) Does <code>DB_NAME</code> match the database the queries actually run against? Operations on <b>other</b> databases, and on <code>admin</code>/<code>local</code>/<code>config</code>, are deliberately ignored. 3) Check <code>db.system.profile.countDocuments()</code> grows.</td></tr>
       <tr><td>MongoDB: big reads show <code>row_count</code> ≈ 101</td><td>Expected — that's the first cursor batch. Set <code>MONGO_INCLUDE_GETMORE=true</code> (§2).</td></tr>
       <tr><td>MongoDB: gaps in the trail under load</td><td><code>system.profile</code> is <b>capped</b> and wrapped before the agent polled. Lower <code>AUDIT_POLL_SEC</code> and/or enlarge the collection (§2).</td></tr>
@@ -429,7 +439,7 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
     <li><b>AgentLite is detective, not preventive</b> — it alerts after the fact and cannot block. For real-time blocking, use <b>Inline Proxy</b> mode.</li>
     <li><b>The agent only makes outbound connections</b> to DAM (HTTPS, or your audit stream). No inbound ports are opened; DAM never connects into your database network.</li>
     <li><b>Least privilege:</b> the optional <code>dam_svc</code> user is read-only (<code>SELECT, PROCESS</code>). Rotate its password per your policy.</li>
-    <li><b>MongoDB:</b> <code>system.profile</code> contains <b>query filters and inserted documents</b>, so it holds real data values on the server — treat the profiler as sensitive, and note that enabling it is a <b>visible change to the database's behaviour</b> (write overhead), not a passive read. The <code>dam_svc</code> role set is read-only over data; <code>dbAdmin</code> is there only to toggle the profiling level.</li>
+    <li><b>MongoDB:</b> <code>system.profile</code> contains <b>query filters and inserted documents</b>, so it holds real data values on the server — treat the profiler as sensitive, and note that enabling it is a <b>visible change to the database's behaviour</b> (write overhead), not a passive read. Keep <code>dam_svc</code> on the <code>toovixProfiler</code> custom role from §2: <b><code>dbAdmin</code> would let a monitoring account drop collections</b>, which is far more privilege than capture requires.</li>
   </ul>
 
   <footer>
