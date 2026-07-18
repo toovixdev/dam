@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# ── MongoDB Community installed NATIVELY (no Docker) — like a real DB host ──
+apt-get update -y
+apt-get install -y ca-certificates curl gnupg
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://pgp.mongodb.com/server-${mongo_version}.asc \
+  | gpg --dearmor -o /etc/apt/keyrings/mongodb-server-${mongo_version}.gpg
+chmod a+r /etc/apt/keyrings/mongodb-server-${mongo_version}.gpg
+echo "deb [ arch=amd64,arm64 signed-by=/etc/apt/keyrings/mongodb-server-${mongo_version}.gpg ] https://repo.mongodb.org/apt/ubuntu $(. /etc/os-release; echo $VERSION_CODENAME)/mongodb-org/${mongo_version} multiverse" \
+  > /etc/apt/sources.list.d/mongodb-org-${mongo_version}.list
+apt-get update -y
+apt-get install -y mongodb-org
+
+# Listen on the private NIC (still firewalled to the app tier only) and turn the built-in
+# profiler on for the whole server — MongoDB Community has no audit log, so `system.profile`
+# is what the DAM agent tails. Profiling set in config so it survives reboots.
+cat > /etc/mongod.conf <<'EOCONF'
+storage:
+  dbPath: /var/lib/mongodb
+systemLog:
+  destination: file
+  logAppend: true
+  path: /var/log/mongodb/mongod.log
+net:
+  port: 27017
+  bindIp: 0.0.0.0
+operationProfiling:
+  mode: all
+  slowOpThresholdMs: 0
+EOCONF
+
+systemctl enable mongod
+systemctl restart mongod
+
+# Wait for mongod to accept connections (localhost exception still open — no auth yet).
+for i in $(seq 1 60); do
+  mongosh --quiet --eval 'db.adminCommand({ping:1})' >/dev/null 2>&1 && break
+  sleep 2
+done
+
+# ── Users: root superuser + a least-privilege DAM monitor. ──
+# dam_svc needs: clusterMonitor (server/profiler status), read on the target DB (includes
+# system.profile), and dbAdmin so the agent can set the profiling level itself.
+mongosh --quiet <<EOJS
+db = db.getSiblingDB('admin');
+db.createUser({
+  user: 'root',
+  pwd: '${mongo_root_password}',
+  roles: [ { role: 'root', db: 'admin' } ]
+});
+db.createUser({
+  user: 'app',
+  pwd: '${mongo_root_password}',
+  roles: [ { role: 'readWrite', db: '${db_name}' } ]
+});
+db.createUser({
+  user: 'dam_svc',
+  pwd: '${dam_svc_password}',
+  roles: [
+    { role: 'clusterMonitor', db: 'admin' },
+    { role: 'read', db: '${db_name}' },
+    { role: 'dbAdmin', db: '${db_name}' }
+  ]
+});
+EOJS
+
+%{ if seed_b64 != "" ~}
+# ── Seed collections + data for this database (runs pre-auth, via localhost) ──
+echo '${seed_b64}' | base64 --decode > /tmp/seed.js
+mongosh --quiet --file /tmp/seed.js
+rm -f /tmp/seed.js
+%{ endif ~}
+
+# ── Now lock it down: require auth, restart. ──
+cat >> /etc/mongod.conf <<'EOCONF'
+security:
+  authorization: enabled
+EOCONF
+systemctl restart mongod
+
+for i in $(seq 1 60); do
+  mongosh --quiet -u root -p '${mongo_root_password}' --authenticationDatabase admin \
+    --eval 'db.adminCommand({ping:1})' >/dev/null 2>&1 && break
+  sleep 2
+done
+
+# ── Install Docker (so the TooVix DAM agent can run as a container; the static
+#    binary works too) — installed regardless of deploy_agents. ──
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg || true
+chmod a+r /etc/apt/keyrings/docker.gpg
+echo "deb [signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release; echo $VERSION_CODENAME) stable" > /etc/apt/sources.list.d/docker.list
+apt-get update -y && apt-get install -y docker-ce docker-ce-cli containerd.io || apt-get install -y docker.io
+systemctl enable --now docker
+
+%{ if deploy_agents ~}
+# ── (Optional) auto-run the TooVix MongoDB agent — only when deploy_agents = true.
+#    MongoDB path is audit_pull (tails system.profile), not packet capture. ──
+docker rm -f toovix-agent 2>/dev/null || true
+docker run -d --name toovix-agent --restart unless-stopped \
+  --network host \
+  -e MODE=audit_pull -e DB_ENGINE=mongodb -e TARGET_HOST=127.0.0.1 -e TARGET_PORT=27017 \
+  -e TARGET_DB='${db_name}' -e DB_NAME='${db_name}' \
+  -e MONGO_USER=dam_svc -e MONGO_PASSWORD='${dam_svc_password}' \
+  -e AGENT_ENROLL_TOKEN='${enroll_token}' -e CONTROL_PLANE='${control_plane_url}' \
+  -e CLICKHOUSE_URL='${clickhouse_url}' -e CLICKHOUSE_USER='${clickhouse_user}' -e CLICKHOUSE_PASSWORD='${clickhouse_password}' \
+  '${agent_image}'
+%{ endif ~}

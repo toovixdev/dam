@@ -84,6 +84,18 @@ variable "pg_vm" {
   default = {}
 }
 
+# ── The MongoDB-on-VM database (added to the shared VPC) ──
+variable "mongo_vm" {
+  type = object({
+    name          = optional(string, "db-vm-mongo")
+    machine_type  = optional(string, "e2-small")
+    subnet_cidr   = optional(string, "10.50.0.0/24") # must not overlap the MySQL/PG/Cloud SQL subnets
+    db_name       = optional(string, "profiles")
+    mongo_version = optional(string, "7.0")
+  })
+  default = {}
+}
+
 # ── The Cloud SQL (PaaS) MySQL database, in its own VPC ──
 variable "cloudsql" {
   type = object({

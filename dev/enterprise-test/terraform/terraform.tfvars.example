@@ -9,6 +9,23 @@ vm_databases = {
   "db-vm-b" = { subnet_cidr = "10.20.0.0/24", db_name = "customers", machine_type = "e2-small" }
 }
 
+# 1 PostgreSQL-on-VM (added to the shared VPC; own subnet + 5432 firewall).
+pg_vm = {
+  name         = "db-vm-pg"
+  machine_type = "e2-small"
+  subnet_cidr  = "10.40.0.0/24"
+  db_name      = "inventory"
+}
+
+# 1 MongoDB-on-VM (added to the shared VPC; own subnet + 27017 firewall).
+mongo_vm = {
+  name          = "db-vm-mongo"
+  machine_type  = "e2-small"
+  subnet_cidr   = "10.50.0.0/24"
+  db_name       = "profiles"
+  mongo_version = "7.0"
+}
+
 # 1 Cloud SQL for MySQL (PaaS), private IP, in its own VPC.
 cloudsql = {
   name        = "db-paas"
