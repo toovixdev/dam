@@ -1815,6 +1815,14 @@ func readLenencInt(b []byte) (uint64, int) {
 
 // ── Event forwarding to the control plane ────────────────────────────
 func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, large bool) {
+	forwardEventOp(cfg, principal, clientIP, sql, detectOp(sql), rowCount, large)
+}
+
+// forwardEventOp is forwardEvent with the operation supplied by the caller instead of being
+// sniffed from the statement text. Non-SQL engines need this: MongoDB's statement renders as
+// `db.users.find({...})`, which detectOp's SQL-keyword prefixes would only ever call "OTHER" —
+// the collector knows the real operation from the profiler's op/command fields.
+func forwardEventOp(cfg Config, principal, clientIP, sql, op string, rowCount int, large bool) {
 	sql = strings.TrimSpace(sql)
 	if sql == "" {
 		return
@@ -1831,7 +1839,7 @@ func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, lar
 		"database_name": cfg.TargetDB,
 		"principal":     principal,
 		"client_ip":     clientIP,
-		"operation":     detectOp(sql),
+		"operation":     op,
 		"sql_text":      truncate(sql, 500),
 		"tags":          dedupTags(tags),
 		"agent_type":    agentTypeByMode[cfg.Mode],
@@ -1860,7 +1868,7 @@ func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, lar
 			resp.Body.Close()
 		}
 	}
-	log.Printf("[capture] %-6s rows=%-6d %-14s %s", detectOp(sql), rowCount, principal, truncate(sql, 70))
+	log.Printf("[capture] %-6s rows=%-6d %-14s %s", op, rowCount, principal, truncate(sql, 70))
 }
 
 // auditPublisher is the AgentLite Pub/Sub publisher; nil when AUDIT_TOPIC is unset

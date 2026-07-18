@@ -21,18 +21,26 @@ import (
 )
 
 func runAuditForward(cfg Config) {
-	if cfg.AuditLog == "" {
+	// MongoDB has no audit log to tail (Community has no auditing at all) — its source is the
+	// profiler COLLECTION, read over the wire. So AUDIT_LOG is required for every engine but
+	// mongo, where the lock is keyed to the target instead.
+	isMongo := cfg.Engine == "mongodb" || cfg.Engine == "mongo"
+	if cfg.AuditLog == "" && !isMongo {
 		log.Fatalf("audit-forward: AUDIT_LOG (path to the native audit log) is required")
+	}
+	lockKey := cfg.AuditLog
+	if isMongo {
+		lockKey = fmt.Sprintf("mongodb-%s-%s-%s", cfg.TargetHost, cfg.TargetPort, mongoDatabase(cfg))
 	}
 	// Single-instance guard: only ONE audit-forward agent per host+log may run. Two forwarders
 	// tailing the same log double every event — which happens when leftover systemd template
 	// instances coexist (e.g. dam-agent@audit + dam-agent@agentlite). Take an exclusive lock
 	// keyed to the log path; a duplicate refuses to start rather than double-count.
-	if !lockAuditForward(cfg.AuditLog) {
-		log.Printf("audit-forward: another AgentLite is already tailing %s on this host — refusing to start a duplicate (prevents double-counted events). Exiting.", cfg.AuditLog)
+	if !lockAuditForward(lockKey) {
+		log.Printf("audit-forward: another AgentLite is already tailing %s on this host — refusing to start a duplicate (prevents double-counted events). Exiting.", lockKey)
 		os.Exit(0)
 	}
-	log.Printf("AgentLite audit-forward tailing %s (source=%s engine=%s)", cfg.AuditLog, cfg.AuditSource, cfg.Engine)
+	log.Printf("AgentLite audit-forward tailing %s (source=%s engine=%s)", lockKey, cfg.AuditSource, cfg.Engine)
 	switch cfg.Engine {
 	case "mysql", "mariadb", "":
 		tailMySQLGeneralLog(cfg, cfg.AuditLog)
@@ -45,8 +53,10 @@ func runAuditForward(cfg Config) {
 		} else {
 			tailSqlServerAudit(cfg)
 		}
+	case "mongodb", "mongo":
+		tailMongoProfiler(cfg) // system.profile over the wire (see mongo_forward.go)
 	default:
-		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql/mssql) — enrolled + idle", cfg.Engine)
+		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql/mssql/mongodb) — enrolled + idle", cfg.Engine)
 		select {}
 	}
 }

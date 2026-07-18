@@ -7,6 +7,7 @@ require (
 	github.com/go-sql-driver/mysql v1.8.1
 	github.com/lib/pq v1.12.3
 	github.com/microsoft/go-mssqldb v1.7.0
+	go.mongodb.org/mongo-driver v1.17.1
 )
 
 require (
