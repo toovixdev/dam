@@ -75,21 +75,49 @@ sudo -u postgres psql -c "SELECT pg_reload_conf();"
 The file is the cluster's main log, e.g. `/var/log/postgresql/postgresql-16-main.log` (match your PG major version).
 Agent settings → `DB_ENGINE=postgresql` · `AUDIT_SOURCE=pgaudit` · `AUDIT_LOG=/var/log/postgresql/postgresql-<ver>-main.log` · `TARGET_PORT=5432`
 
-### 🪟 SQL Server — use *Agentless*, not AgentLite
+### 🪟 SQL Server — AgentLite runs *remotely* (nothing on Windows)
 
-AgentLite **doesn't support SQL Server**: SQL Server Audit writes a **binary** `.sqlaudit` trail (read via `sys.fn_get_audit_file`), not a text log a forwarder can tail. Instead:
+SQL Server's telemetry is **binary**, not a text log — so instead of tailing a file, AgentLite **polls it over TDS**. That's a bonus: the collector is a **Linux** container that only needs network reach to port **1433**, so **nothing is installed on the Windows DB host**. Pick one of two sources:
 
-- **Azure SQL / SQL Managed Instance (PaaS):** use **Agentless** — enable **database-level Auditing → Event Hub**, and the DAM connector consumes it (verified ~2-min end-to-end):
-  ```bash
-  az sql db audit-policy update -g <RG> -s <SERVER> -n <DB> \
-    --state Enabled --event-hub-target-state Enabled \
-    --event-hub <HUB> --event-hub-authorization-rule-id <SEND_RULE_ID> \
-    --actions BATCH_COMPLETED_GROUP SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP
-  ```
-  **Must be *database*-level** — server-level auditing with a DB-scoped diagnostic setting captures nothing.
-- **SQL Server on a VM (self-managed):** AgentLite audit-forward for SQL Server is **on the roadmap** (needs a `sys.fn_get_audit_file` / Windows Event-Log collector). For now use network / inline-proxy capture.
+| Source | `AUDIT_SOURCE` | Scoping | Row counts |
+|---|---|---|---|
+| **SQL Server Audit** | `sql_server_audit` | **object-level** — audit only your tables (very clean) | ❌ |
+| **Extended Events** | `xevents` | statement-level (agent filters `sys.*` noise) | ✅ **yes** |
 
-**Classification works for SQL Server regardless** — it uses a read-only login over TDS, not the audit log.
+**Option 1 — SQL Server Audit** (clean scoping, no row counts). Scope with a *database* audit spec on the schema; a DATABASE-wide spec also captures `sys.*` reads:
+```sql
+CREATE SERVER AUDIT ToovixAudit TO FILE (FILEPATH='C:\SQLAudit\', MAXSIZE=50 MB, MAX_ROLLOVER_FILES=5) WITH (ON_FAILURE=CONTINUE);
+ALTER SERVER AUDIT ToovixAudit WITH (STATE=ON);
+-- in your database: audit the dbo schema only (excludes sys / INFORMATION_SCHEMA)
+CREATE DATABASE AUDIT SPECIFICATION ToovixDbAudit FOR SERVER AUDIT ToovixAudit
+  ADD (SELECT, INSERT, UPDATE, DELETE ON SCHEMA::dbo BY public) WITH (STATE=ON);
+```
+Agent → `AUDIT_SOURCE=sql_server_audit` · `AUDIT_LOG=C:\SQLAudit\*.sqlaudit`
+
+**Option 2 — Extended Events** (adds **row counts**, which unlock the bulk-read / large-result policies):
+```sql
+CREATE EVENT SESSION ToovixXE ON SERVER
+  ADD EVENT sqlserver.sql_statement_completed (
+    ACTION (sqlserver.server_principal_name, sqlserver.client_hostname, sqlserver.database_name)
+    WHERE ([sqlserver].[database_name]=N'YourDB'))
+  ADD TARGET package0.event_file (SET filename=N'C:\SQLAudit\ToovixXE.xel', max_file_size=50, max_rollover_files=5)
+  WITH (MAX_DISPATCH_LATENCY=5 SECONDS, STARTUP_STATE=ON);
+ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   -- START, not ON
+```
+Agent → `AUDIT_SOURCE=xevents` · `AUDIT_LOG=C:\SQLAudit\ToovixXE*.xel`
+
+> **Both sources need a DB login** (the agent reads telemetry over TDS, not from disk): set `DB_USER`/`DB_PASSWORD` with **CONTROL SERVER** (Audit) or **VIEW SERVER STATE** (XEvents). Run the collector on any Linux host that can reach `<db>:1433`, and set `TARGET_HOST` to the **SQL Server's** address — that's how DAM identifies the instance.
+
+**Azure SQL / Managed Instance (PaaS)** can't host any collector — use **Agentless** instead (database-level Auditing → Event Hub, consumed by the DAM connector; verified ~2-min end-to-end):
+```bash
+az sql db audit-policy update -g <RG> -s <SERVER> -n <DB> \
+  --state Enabled --event-hub-target-state Enabled \
+  --event-hub <HUB> --event-hub-authorization-rule-id <SEND_RULE_ID> \
+  --actions BATCH_COMPLETED_GROUP SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP
+```
+**Must be *database*-level** — server-level auditing with a DB-scoped diagnostic setting captures nothing.
+
+**Classification works for SQL Server either way** — it uses a read-only login over TDS, not the audit trail.
 
 > **Verify (MySQL/PG):** `sudo tail -f <AUDIT_LOG>` and run a query elsewhere — lines should appear. AgentLite tails the live file and handles rotation/truncation automatically; ensure `logrotate` + disk headroom on busy DBs.
 

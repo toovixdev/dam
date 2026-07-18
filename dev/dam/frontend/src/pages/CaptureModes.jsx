@@ -6,7 +6,7 @@ const AGENTS = [
   { name: 'Network agent', tag: 'installed · passive', color: 'var(--primary)', desc: 'Sniffs the database’s network traffic and decodes the MySQL, PostgreSQL & SQL Server (TDS) wire protocols (libpcap-style). No path change, ~0 overhead. Sees every networked connection — including ones that bypass a proxy. Cleartext only — TLS-encrypted connections are opaque, and SQL Server clients encrypt by default (use the inline proxy or host/eBPF for those). Blind to local/IPC; cannot block.' },
   { name: 'Host agent (eBPF)', tag: 'installed · passive', color: 'var(--info)', desc: 'Runs on the DB host kernel. Sees every connection reaching the DB process — including local sockets / shared memory / IPC nothing else can. Deepest visibility; limited local enforcement.' },
   { name: 'Inline proxy', tag: 'installed · inline', color: 'var(--amber)', desc: 'A gateway in the data path — clients connect through it. The only mode that can block / quarantine, and the only one that sees the real end-user behind a pooled connection. Only sees traffic routed through it.' },
-  { name: 'AgentLite (VM audit forwarder)', tag: 'lightweight · self-managed', color: 'var(--green)', desc: 'For self-managed DBs on a VM / on-prem: a lightweight forwarder on the host tails the database’s own native audit trail (MySQL/Percona audit, pgaudit, SQL Server Audit, Oracle Unified Audit/FGA, Mongo profiler) and ships it out — no wire tap, no path change, no SQL touched. Transport-independent, so it captures even TLS-encrypted sessions. After-the-fact — cannot block.' },
+  { name: 'AgentLite (VM audit forwarder)', tag: 'lightweight · self-managed', color: 'var(--green)', desc: 'For self-managed DBs on a VM / on-prem: a lightweight forwarder reads the database’s own native telemetry and ships it out — no wire tap, no path change, no SQL touched. Two shapes: a LOG TAILER on the DB host (MySQL general log, PostgreSQL statement log), or a REMOTE POLLER over the DB protocol for SQL Server — which runs on any Linux host with network reach, so nothing is installed on a Windows DB box. SQL Server offers two sources: Audit (clean object-level scoping) or Extended Events (adds ROW COUNTS). Transport-independent, so it captures TLS-encrypted sessions. After-the-fact — cannot block.' },
   { name: 'Agentless (PaaS cloud stream)', tag: 'no install', color: 'var(--green)', desc: 'For managed / PaaS DBs (RDS / Aurora, Cloud SQL, Azure SQL, Atlas, OCI Autonomous): the cloud emits its native audit to a stream (Pub/Sub / Kinesis / Event Hub) and the DAM consumes it. Zero software on the host, nothing in the path — the only option for PaaS. Transport-independent; after-the-fact — cannot block.' },
 ];
 
@@ -21,11 +21,11 @@ const COMBO_ROWS = [
   ['Networked SQL visibility', [['✓', 'g'], ['✓', 'g'], ['Routed only', 'a'], ['✓', 'g'], ['✓', 'g']]],
   ['Local / IPC visibility', [['✗', 'm'], ['✓', 'g'], ['✗', 'm'], ['✓', 'g'], ['✓', 'g']]],
   ['Sees TLS-encrypted traffic', [['✗', 'm'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✓', 'g']]],
-  ['Result size / row counts', [['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['✗', 'm'], ['✗', 'm']]],
+  ['Result size / row counts', [['✓', 'g'], ['✓', 'g'], ['✓', 'g'], ['SQL Server (XEvents)', 'a'], ['✗', 'm']]],
   ['Real end-user attribution', [['✗', 'm'], ['Partial', 'a'], ['✓', 'g'], ['Partial', 'a'], ['Partial', 'a']]],
   ['Block / quarantine', [['✗', 'm'], ['Local only', 'a'], ['✓', 'g'], ['✗', 'm'], ['✗', 'm']]],
   ['Reroutes clients?', [['no', 'm'], ['no', 'm'], ['YES', 'a'], ['no', 'm'], ['no', 'm']]],
-  ['Install on DB host?', [['no', 'm'], ['YES', 'a'], ['no', 'm'], ['on host', 'a'], ['no', 'm']]],
+  ['Install on DB host?', [['no', 'm'], ['YES', 'a'], ['no', 'm'], ['MySQL/PG only', 'a'], ['no', 'm']]],
   ['Containers to deploy', [['1', 'n'], ['1', 'n'], ['1', 'n'], ['1', 'n'], ['0', 'n']]],
 ];
 

@@ -202,6 +202,8 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const [pubsub, setPubsub] = useState(true);
   const [auditTopic, setAuditTopic] = useState('toovix-dam-audit');
   const [gcpProject, setGcpProject] = useState('');
+  // SQL Server telemetry source: Audit (object-scoped, clean) vs Extended Events (adds row counts).
+  const [mssqlSource, setMssqlSource] = useState('sql_server_audit');
   const [instructions, setInstructions] = useState(null);
 
   const instance = instances.find((i) => i.id === instId);
@@ -254,6 +256,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
       target: instance?.instance || instance?.name, engine: instance?.engine,
       classify: useClassify, dbUser: dbUser.trim(), dbPass: dbPass.trim(), dbName: dbName.trim(),
       pubsub, auditTopic: auditTopic.trim() || 'toovix-dam-audit', gcpProject: gcpProject.trim(),
+      mssqlSource,
     });
   };
   const done = () => { onDeployed(); onClose(); };
@@ -339,6 +342,23 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
               </div>
             </div>
           )}
+          {has('agentless') && instEngine === 'mssql' && (
+            <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>SQL Server telemetry source</div>
+              <div className="muted" style={{ fontSize: 11.5, marginBottom: 8, lineHeight: 1.5 }}>
+                SQL Server’s telemetry is binary, so the agent <b>polls it over TDS</b> — it runs on any Linux host that can reach <code>{`${instEngine === 'mssql' ? '<db>' : ''}`}:1433</code>, <b>not</b> on the Windows box. Needs <code>DB_USER</code>/<code>DB_PASSWORD</code>.
+              </div>
+              {[
+                { v: 'sql_server_audit', t: 'SQL Server Audit', d: 'Object-level scoping (audit only your tables) — cleanest trail. No row counts.' },
+                { v: 'xevents', t: 'Extended Events', d: 'Carries ROW COUNTS (unlocks bulk-read / large-result policies). Statement-scoped; the agent filters sys.* noise.' },
+              ].map((o) => (
+                <label key={o.v} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontSize: 12.5, lineHeight: 1.5, marginTop: 4 }}>
+                  <input type="radio" name="mssqlsrc" checked={mssqlSource === o.v} onChange={() => { setMssqlSource(o.v); setInstructions(null); }} style={{ marginTop: 3 }} />
+                  <span><b>{o.t}</b> <span className="muted">— {o.d}</span></span>
+                </label>
+              ))}
+            </div>
+          )}
           {has('agentless') && (
             <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
               <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer', fontSize: 12.5, lineHeight: 1.5 }}>
@@ -421,7 +441,7 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
                 {MODES.find((x) => x.id === m)?.name}
                 {instructions.classify && m === instructions.modes[0] && <span className="pill info" style={{ marginLeft: 6 }}>+ classification</span>}
               </div>
-              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image, { classify: instructions.classify && m === instructions.modes[0], dbUser: instructions.dbUser, dbPass: instructions.dbPass, dbName: instructions.dbName, pubsub: instructions.pubsub, auditTopic: instructions.auditTopic, gcpProject: instructions.gcpProject })}</pre>
+              <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{buildInstall(instructions.platform, m, instructions.target, instructions.token, instructions.cp, instructions.engine, instructions.image, { classify: instructions.classify && m === instructions.modes[0], dbUser: instructions.dbUser, dbPass: instructions.dbPass, dbName: instructions.dbName, pubsub: instructions.pubsub, auditTopic: instructions.auditTopic, gcpProject: instructions.gcpProject, mssqlSource: instructions.mssqlSource })}</pre>
             </div>
           ))}
           {instructions.classify && instructions.modes.length > 1 && (
@@ -452,11 +472,16 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   const eng = ({ postgres: 'postgresql' }[engine] || engine) || 'mysql';
   const agentless = m === 'agentless';
   const defPort = { postgresql: '5432', mssql: '1433', oracle: '1521', mongodb: '27017' }[eng] || '3306';
-  // The agent's audit-forward parser reads the MySQL/MariaDB GENERAL query log (not the
-  // audit_log plugin). Only MySQL/MariaDB are implemented today; other engines enroll + idle.
-  const auditSrc = { oracle: 'unified_audit_trail', mssql: 'sql_server_audit', postgresql: 'pgaudit', mysql: 'general_log', mariadb: 'general_log', mongodb: 'profiler' }[eng] || 'native_audit';
-  // AgentLite tails this native audit source on the host (file where possible).
-  const auditLog = { mysql: '/var/log/mysql/general.log', mariadb: '/var/log/mysql/general.log', postgresql: '/var/log/postgresql/pgaudit.log', mssql: '/var/opt/mssql/audit/', oracle: '<UNIFIED_AUDIT_TRAIL>', mongodb: '/var/log/mongodb/audit.json' }[eng] || '<native-audit-log-path>';
+  // SQL Server has two telemetry sources: Audit (object-scoped, clean) or Extended Events
+  // (statement-scoped, but carries ROW COUNTS). Both are polled over TDS, not tailed from disk.
+  const xe = eng === 'mssql' && opts.mssqlSource === 'xevents';
+  const auditSrc = eng === 'mssql'
+    ? (xe ? 'xevents' : 'sql_server_audit')
+    : ({ oracle: 'unified_audit_trail', postgresql: 'pgaudit', mysql: 'general_log', mariadb: 'general_log', mongodb: 'profiler' }[eng] || 'native_audit');
+  // AgentLite reads this native source — a file on the host for MySQL/PG, a TDS-polled target for SQL Server.
+  const auditLog = eng === 'mssql'
+    ? (xe ? 'C:\\SQLAudit\\ToovixXE*.xel' : 'C:\\SQLAudit\\*.sqlaudit')
+    : ({ mysql: '/var/log/mysql/general.log', mariadb: '/var/log/mysql/general.log', postgresql: '/var/log/postgresql/pgaudit.log', oracle: '<UNIFIED_AUDIT_TRAIL>', mongodb: '/var/log/mongodb/audit.json' }[eng] || '<native-audit-log-path>');
   // AgentLite audit-forward is MySQL/MariaDB-only in the agent today — warn for anything else.
   const warn = (agentless && !['mysql', 'mariadb'].includes(eng))
     ? `# ⚠ AgentLite audit-forward currently supports MySQL/MariaDB only — ${eng} is NOT implemented\n#   yet: the agent enrolls and idles (no capture). For PostgreSQL use network or host mode.\n\n`
@@ -481,12 +506,18 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     env.push(`LISTEN_PORT=${dbPort + 1}`, `UPSTREAM=${host || target}:${dbPort}`);
   }
   if (agentless) {
-    // AgentLite: a lightweight forwarder ON the DB host that tails the DB's native audit log
-    // and ships it out — no wire tap, no DB connection to capture (it reads the audit file).
+    // AgentLite: a lightweight forwarder that reads the DB's native telemetry — no wire tap, no
+    // path change. MySQL/PG tail a local file (so it runs ON the DB host); SQL Server POLLS the
+    // audit / XEvents target over TDS, so it can run on any Linux host that reaches <db>:1433.
     env.push(
       `AUDIT_SOURCE=${auditSrc}`,
       `AUDIT_LOG=${auditLog}`,
     );
+    // SQL Server reads its telemetry over TDS, so a login is required even without classification:
+    // CONTROL SERVER for the audit file, VIEW SERVER STATE for Extended Events.
+    if (eng === 'mssql') {
+      env.push(`DB_USER=${opts.dbUser || '<sql-login>'}`, `DB_PASSWORD=${opts.dbPass || '<password>'}`);
+    }
     // Publish to the Pub/Sub audit bus (auth via the host VM's service account / metadata token)
     // instead of POSTing the control plane. Needs the VM SA to hold roles/pubsub.publisher.
     if (opts.pubsub) {

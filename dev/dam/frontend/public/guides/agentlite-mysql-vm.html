@@ -132,18 +132,37 @@ sudo -u postgres psql -c "SELECT pg_reload_conf();"</code></pre>
   <aside class="warn"><b>The <code>log_line_prefix</code> matters.</b> AgentLite matches lines shaped <code>&lt;time&gt; [pid] user@db LOG:&nbsp; statement: …</code> — if your prefix differs, statements won't be parsed. This uses PostgreSQL's <b>built-in</b> logging; the pgaudit extension is <b>not</b> required.</aside>
   <p>The file is the cluster's main log, e.g. <code>/var/log/postgresql/postgresql-16-main.log</code> (match your PG major version). Agent settings → <code>DB_ENGINE=postgresql</code> · <code>AUDIT_SOURCE=pgaudit</code> · <code>AUDIT_LOG=/var/log/postgresql/postgresql-&lt;ver&gt;-main.log</code> · <code>TARGET_PORT=5432</code></p>
 
-  <h3>🪟 SQL Server — use <em>Agentless</em>, not AgentLite</h3>
-  <p>AgentLite <b>doesn't support SQL Server</b>: SQL Server Audit writes a <b>binary</b> <code>.sqlaudit</code> trail (read via <code>sys.fn_get_audit_file</code>), not a text log a forwarder can tail. Instead:</p>
-  <ul>
-    <li><b>Azure SQL / SQL Managed Instance (PaaS):</b> use <b>Agentless</b> — enable <b>database-level Auditing → Event Hub</b>, and the DAM connector consumes it (verified ~2-min end-to-end):
-      <pre><code>az sql db audit-policy update -g &lt;RG&gt; -s &lt;SERVER&gt; -n &lt;DB&gt; \
-  --state Enabled --event-hub-target-state Enabled \
-  --event-hub &lt;HUB&gt; --event-hub-authorization-rule-id &lt;SEND_RULE_ID&gt; \
-  --actions BATCH_COMPLETED_GROUP SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP</code></pre>
-      <b>Must be <em>database</em>-level</b> — server-level auditing with a DB-scoped diagnostic setting captures nothing.</li>
-    <li><b>SQL Server on a VM (self-managed):</b> AgentLite audit-forward for SQL Server is <b>on the roadmap</b> (needs a <code>sys.fn_get_audit_file</code> / Windows Event-Log collector). For now use network / inline-proxy capture.</li>
-  </ul>
-  <p><b>Classification works for SQL Server regardless</b> — it uses a read-only login over TDS, not the audit log.</p>
+  <h3>🪟 SQL Server — AgentLite runs <em>remotely</em> (nothing on Windows)</h3>
+  <p>SQL Server's telemetry is <b>binary</b>, not a text log — so instead of tailing a file, AgentLite <b>polls it over TDS</b>. That's a bonus: the collector is a <b>Linux</b> container that only needs network reach to port <b>1433</b>, so <b>nothing is installed on the Windows DB host</b>. Pick one of two sources:</p>
+  <table>
+    <thead><tr><th>Source</th><th><code>AUDIT_SOURCE</code></th><th>Scoping</th><th>Row counts</th></tr></thead>
+    <tbody>
+      <tr><td><b>SQL Server Audit</b></td><td><code>sql_server_audit</code></td><td><b>object-level</b> — audit only your tables (very clean)</td><td>❌</td></tr>
+      <tr><td><b>Extended Events</b></td><td><code>xevents</code></td><td>statement-level (agent filters <code>sys.*</code> noise)</td><td>✅ <b>yes</b></td></tr>
+    </tbody>
+  </table>
+
+  <p><b>Option 1 — SQL Server Audit</b> (clean scoping, no row counts). Scope it to your tables with a <em>database</em> audit spec on the schema — a DATABASE-wide spec also captures <code>sys.*</code> reads:</p>
+  <pre><code>CREATE SERVER AUDIT ToovixAudit TO FILE (FILEPATH='C:\SQLAudit\', MAXSIZE=50 MB, MAX_ROLLOVER_FILES=5) WITH (ON_FAILURE=CONTINUE);
+ALTER SERVER AUDIT ToovixAudit WITH (STATE=ON);
+<span class="cmt">-- in your database: audit the dbo schema only (excludes sys / INFORMATION_SCHEMA)</span>
+CREATE DATABASE AUDIT SPECIFICATION ToovixDbAudit FOR SERVER AUDIT ToovixAudit
+  ADD (SELECT, INSERT, UPDATE, DELETE ON SCHEMA::dbo BY public) WITH (STATE=ON);</code></pre>
+  <p>Agent → <code>AUDIT_SOURCE=sql_server_audit</code> · <code>AUDIT_LOG=C:\SQLAudit\*.sqlaudit</code></p>
+
+  <p><b>Option 2 — Extended Events</b> (adds <b>row counts</b>, which unlock the bulk-read / large-result policies):</p>
+  <pre><code>CREATE EVENT SESSION ToovixXE ON SERVER
+  ADD EVENT sqlserver.sql_statement_completed (
+    ACTION (sqlserver.server_principal_name, sqlserver.client_hostname, sqlserver.database_name)
+    WHERE ([sqlserver].[database_name]=N'YourDB'))
+  ADD TARGET package0.event_file (SET filename=N'C:\SQLAudit\ToovixXE.xel', max_file_size=50, max_rollover_files=5)
+  WITH (MAX_DISPATCH_LATENCY=5 SECONDS, STARTUP_STATE=ON);
+ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- START, not ON</span></code></pre>
+  <p>Agent → <code>AUDIT_SOURCE=xevents</code> · <code>AUDIT_LOG=C:\SQLAudit\ToovixXE*.xel</code></p>
+
+  <aside><b>Both sources need a DB login</b> (the agent reads telemetry over TDS, not from disk): set <code>DB_USER</code>/<code>DB_PASSWORD</code> with <b>CONTROL SERVER</b> (Audit) or <b>VIEW SERVER STATE</b> (XEvents). Run the collector on any Linux host that can reach <code>&lt;db&gt;:1433</code> — set <code>TARGET_HOST</code> to the <b>SQL Server's</b> address, which is how DAM identifies the instance.</aside>
+  <p><b>Azure SQL / Managed Instance (PaaS)</b> can't host any collector — use <b>Agentless</b> instead (database-level Auditing → Event Hub, consumed by the DAM connector; verified ~2-min end-to-end). <b>Must be <em>database</em>-level</b> — server-level auditing with a DB-scoped diagnostic setting captures nothing.</p>
+  <p><b>Classification works for SQL Server either way</b> — it uses a read-only login over TDS, not the audit trail.</p>
 
   <aside><b>Verify (MySQL/PG):</b> <code>sudo tail -f &lt;AUDIT_LOG&gt;</code> and run a query elsewhere — lines should appear. AgentLite tails the live file and handles rotation/truncation automatically; ensure <code>logrotate</code> + disk headroom on busy DBs.</aside>
 
