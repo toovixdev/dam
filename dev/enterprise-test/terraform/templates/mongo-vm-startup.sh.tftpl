@@ -98,13 +98,16 @@ systemctl enable --now docker
 
 %{ if deploy_agents ~}
 # ── (Optional) auto-run the TooVix MongoDB agent — only when deploy_agents = true.
-#    MongoDB path is audit_pull (tails system.profile), not packet capture. ──
+#    MongoDB reads the profiler COLLECTION over the wire (audit-forward), not packet capture.
+#    MODE is the literal the agent parses ("audit-forward"); it reports itself as agent_type
+#    audit_pull. TARGET_HOST must be the VM's real IP, not 127.0.0.1 — it is the identity the
+#    control plane registers the instance under, and loopback creates a duplicate instance. ──
 docker rm -f toovix-agent 2>/dev/null || true
 docker run -d --name toovix-agent --restart unless-stopped \
   --network host \
-  -e MODE=audit_pull -e DB_ENGINE=mongodb -e TARGET_HOST=127.0.0.1 -e TARGET_PORT=27017 \
+  -e MODE=audit-forward -e DB_ENGINE=mongodb -e TARGET_HOST='${mongo_host}' -e TARGET_PORT=27017 \
   -e TARGET_DB='${db_name}' -e DB_NAME='${db_name}' \
-  -e MONGO_USER=dam_svc -e MONGO_PASSWORD='${dam_svc_password}' \
+  -e DB_USER=dam_svc -e DB_PASSWORD='${dam_svc_password}' -e MONGO_AUTH_SOURCE=admin \
   -e AGENT_ENROLL_TOKEN='${enroll_token}' -e CONTROL_PLANE='${control_plane_url}' \
   -e CLICKHOUSE_URL='${clickhouse_url}' -e CLICKHOUSE_USER='${clickhouse_user}' -e CLICKHOUSE_PASSWORD='${clickhouse_password}' \
   '${agent_image}'

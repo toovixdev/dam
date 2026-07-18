@@ -91,6 +91,7 @@ resource "google_compute_instance" "mongo_vm" {
   metadata_startup_script = templatefile("${path.module}/templates/mongo-vm-startup.sh.tftpl", {
     deploy_agents       = var.deploy_agents
     db_name             = var.mongo_vm.db_name
+    mongo_host          = cidrhost(var.mongo_vm.subnet_cidr, 2) # .2 — the address GCP assigns this VM
     mongo_version       = var.mongo_vm.mongo_version
     seed_b64            = fileexists("${path.module}/seed/${var.mongo_vm.db_name}.js") ? base64encode(file("${path.module}/seed/${var.mongo_vm.db_name}.js")) : ""
     mongo_root_password = random_password.mongo_vm_root.result
@@ -115,6 +116,14 @@ resource "google_compute_instance" "mongo_vm" {
     scopes = ["cloud-platform"]
   }
   allow_stopping_for_update = true
+
+  # metadata_startup_script forces replacement in the google provider, so editing the template
+  # would DESTROY this VM — and the database on it — on the next apply. The script only ever
+  # runs at first boot, so drift on it is meaningless to a running instance. Changes here reach
+  # an existing VM only by recreating it deliberately or re-running the steps by hand.
+  lifecycle {
+    ignore_changes = [metadata_startup_script]
+  }
 
   depends_on = [google_compute_router_nat.main]
 }
