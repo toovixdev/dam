@@ -92,11 +92,11 @@ func tailSqlServerAudit(cfg Config) {
 
 	// Start from the newest existing record so we don't replay history on (re)start.
 	wm := time.Now().UTC()
-	_ = db.QueryRow(`SELECT ISNULL(MAX(event_time), SYSUTCDATETIME()) FROM sys.fn_get_audit_file(@path, DEFAULT, DEFAULT)`,
+	_ = db.QueryRow(tagAgentQuery(`SELECT ISNULL(MAX(event_time), SYSUTCDATETIME()) FROM sys.fn_get_audit_file(@path, DEFAULT, DEFAULT)`),
 		sql.Named("path", cfg.AuditLog)).Scan(&wm)
 
 	for {
-		rows, err := db.Query(q, sql.Named("path", cfg.AuditLog), sql.Named("wm", wm))
+		rows, err := db.Query(tagAgentQuery(q), sql.Named("path", cfg.AuditLog), sql.Named("wm", wm))
 		if err != nil {
 			log.Printf("audit-forward(mssql): read %s: %v — is SQL Server Audit ON, the path correct, and does DB_USER have CONTROL SERVER? retrying", cfg.AuditLog, err)
 			time.Sleep(time.Duration(pollSec) * time.Second)
@@ -159,7 +159,7 @@ func tailSqlServerXEvents(cfg Config) {
 	first := true
 
 	for {
-		rows, err := db.Query(q, sql.Named("path", cfg.AuditLog))
+		rows, err := db.Query(tagAgentQuery(q), sql.Named("path", cfg.AuditLog))
 		if err != nil {
 			log.Printf("audit-forward(mssql/xevents): read %s: %v — is the XE session started (STATE=START), the path correct, and does DB_USER have VIEW SERVER STATE? retrying", cfg.AuditLog, err)
 			time.Sleep(time.Duration(pollSec) * time.Second)
