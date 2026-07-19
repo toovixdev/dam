@@ -4917,7 +4917,11 @@ app.post('/api/agents/events', async (req, res) => {
     event_class: EVENT_CLASSES.has(e.event_class) ? e.event_class : 'statement',
     sql_text: e.sql_text || '',
     anomaly_score: Number(e.anomaly_score) || 0,
-    tags: Array.isArray(e.tags) ? e.tags : [],
+    // Tag here when the sender didn't. Agents classify their own events (detectTags +
+    // classifyTags), but the AGENTLESS normalizers don't — so without this every PaaS event
+    // arrives untagged and the pii/pci policies, which are the main detection mechanism,
+    // can never fire on a managed database. Sender-supplied tags always win.
+    tags: (Array.isArray(e.tags) && e.tags.length) ? e.tags : detectTagsSql(e.sql_text || ''),
     agent_type: e.agent_type || 'network',
     source_host: e.source_host || req.body.host || '',
   }));
