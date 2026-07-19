@@ -161,15 +161,44 @@ func tailSqlServerXEvents(cfg Config) {
 	    ) AS principal,
 	    x.value('(event/action[@name="client_hostname"]/value)[1]','nvarchar(256)') AS client_host,
 	    x.value('(event/data[@name="statement"]/value)[1]','nvarchar(max)') AS statement
-	  FROM sys.fn_xe_file_target_read_file(@path, NULL, NULL, NULL)
+	  FROM sys.fn_xe_file_target_read_file(@path, NULL, @initFile, @initOffset)
 	  CROSS APPLY (SELECT TRY_CAST(event_data AS XML)) AS t(x)
 	  ORDER BY file_offset`
 
 	seen := map[string]bool{}
 	first := true
+	// Resume point. Passing initial_file_name + initial_offset makes the function skip every
+	// event up to and including that offset, so each poll reads only what is NEW.
+	//
+	// Without this the collector re-read and re-XML-parsed the WHOLE file every poll, so the
+	// cost grew with the file and eventually exceeded the connection timeout — at which point
+	// capture stopped permanently, because the file only ever gets bigger. Measured on Azure:
+	// ~1,100 events already took 8s for a bare COUNT(*), and the real query (five XML
+	// extractions per row) timed out at 20s. A bulk insert is all it takes to tip it over.
+	var lastOffset sql.NullInt64
+
+	// Seed the resume point with a CHEAP query — MAX(file_offset) with no XML parsing — rather
+	// than by reading the whole file once. On an accumulated target the full parse is exactly
+	// what times out, and if the seeding pass times out the offset is never established, so
+	// every later poll re-reads everything and the collector never recovers. Starting at the
+	// current end also gives the intended "don't replay history on (re)start" behaviour.
+	if err := db.QueryRow(tagAgentQuery(
+		`SELECT MAX(file_offset) FROM sys.fn_xe_file_target_read_file(@path, NULL, NULL, NULL)`),
+		sql.Named("path", cfg.AuditLog)).Scan(&lastOffset); err != nil {
+		log.Printf("audit-forward(mssql/xevents): could not seed the read offset (%v) — starting from the beginning of %s", err, cfg.AuditLog)
+	} else if lastOffset.Valid {
+		log.Printf("audit-forward(mssql/xevents): resuming after file_offset %d (history not replayed)", lastOffset.Int64)
+		first = false // nothing before this point should be forwarded, so no seeding pass needed
+	}
 
 	for {
-		rows, err := db.Query(tagAgentQuery(q), sql.Named("path", cfg.AuditLog))
+		initFile := sql.Named("initFile", nil)
+		initOffset := sql.Named("initOffset", nil)
+		if lastOffset.Valid {
+			initFile = sql.Named("initFile", cfg.AuditLog)
+			initOffset = sql.Named("initOffset", lastOffset.Int64)
+		}
+		rows, err := db.Query(tagAgentQuery(q), sql.Named("path", cfg.AuditLog), initFile, initOffset)
 		if err != nil {
 			log.Printf("audit-forward(mssql/xevents): read %s: %v — is the XE session started (STATE=START), the path correct, and does DB_USER have VIEW SERVER STATE? retrying", cfg.AuditLog, err)
 			time.Sleep(time.Duration(pollSec) * time.Second)
@@ -188,6 +217,11 @@ func tailSqlServerXEvents(cfg Config) {
 			if s == "" {
 				continue
 			}
+			// Advance the resume point. Offsets are BLOCK-level, so many events share one and
+			// resuming from it re-delivers that block's events — the seen-set below absorbs that.
+			if offset.Valid && (!lastOffset.Valid || offset.Int64 > lastOffset.Int64) {
+				lastOffset = offset
+			}
 			key := fmt.Sprintf("%d|%s|%s", offset.Int64, ts.String, s)
 			cur[key] = true
 			if first || seen[key] { // seed on the first pass; skip anything already forwarded
@@ -199,7 +233,13 @@ func tailSqlServerXEvents(cfg Config) {
 			forwardEvent(cfg, orDefault(principal.String, "unknown"), clientHost.String, s, int(rowCount.Int64), false)
 		}
 		rows.Close()
-		seen, first = cur, false
+		// Keep the previous seen-set when a poll returned nothing. Now that reads are
+		// incremental an idle poll yields no rows, and blanking the set would let the next
+		// re-delivery of a boundary block be forwarded a second time.
+		if len(cur) > 0 {
+			seen = cur
+		}
+		first = false
 		time.Sleep(time.Duration(pollSec) * time.Second)
 	}
 }

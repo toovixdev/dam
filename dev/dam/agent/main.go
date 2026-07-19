@@ -1006,8 +1006,12 @@ func mssqlDSN(cfg Config, dbname string) string {
 			encrypt = "disable" // cleartext on the wire, so the sniffer can see the scan too
 		}
 	}
-	return fmt.Sprintf("sqlserver://%s:%s@%s:%s?database=%s&encrypt=%s&TrustServerCertificate=true&dial+timeout=8&connection+timeout=20",
-		url.QueryEscape(cfg.DBUser), url.QueryEscape(cfg.DBPass), cfg.TargetHost, cfg.TargetPort, url.QueryEscape(dbname), encrypt)
+	// 60s, not 20: reading an XEvents target that has accumulated events is slow (measured ~8s
+	// for a bare COUNT over ~1,100 events on Azure, and the seeding query scales with the file).
+	// Too tight a timeout here doesn't degrade capture, it stops it permanently.
+	connTimeout := env("MSSQL_CONN_TIMEOUT_SEC", "60")
+	return fmt.Sprintf("sqlserver://%s:%s@%s:%s?database=%s&encrypt=%s&TrustServerCertificate=true&dial+timeout=8&connection+timeout=%s",
+		url.QueryEscape(cfg.DBUser), url.QueryEscape(cfg.DBPass), cfg.TargetHost, cfg.TargetPort, url.QueryEscape(dbname), encrypt, connTimeout)
 }
 
 // resolveMSSQLDatabases turns DB_NAME into the SQL Server databases to scan:
