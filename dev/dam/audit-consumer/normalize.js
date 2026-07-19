@@ -190,6 +190,22 @@ function cloudSqlLogEntry(entry, token) {
   return { source: 'cloudsql-sink', token, host, engine: 'mysql', agent_type: 'audit_pull', events: [ev] };
 }
 
+// Azure SQL audit records name the action they represent (`action_name`), which is more
+// reliable than the statement's first word — especially under object-level auditing, where the
+// same statement text appears under several actions. Falls back to the text for records whose
+// action isn't a DML/DDL one we recognise (e.g. BATCH COMPLETED under group auditing).
+const AZ_ACTION_OP = {
+  SELECT: 'SELECT', INSERT: 'INSERT', UPDATE: 'UPDATE', DELETE: 'DELETE',
+  EXECUTE: 'EXECUTE', 'SCHEMA OBJECT CHANGE': 'DDL',
+  'SCHEMA OBJECT ACCESS': 'SELECT', RECEIVE: 'SELECT', REFERENCES: 'SELECT',
+};
+function azureActionOp(actionName, sql) {
+  const a = String(actionName || '').trim().toUpperCase();
+  if (AZ_ACTION_OP[a]) return AZ_ACTION_OP[a];
+  if (a.includes('OBJECT CHANGE') || a.includes('SCHEMA CHANGE')) return 'DDL';
+  return verb(sql);
+}
+
 // ── Azure: SQL Auditing → Event Hub. A diagnostic message body is { records: [ {...}, ... ] };
 // each SQLSecurityAuditEvents record carries the statement + principal under .properties.
 function azureSqlAudit(body, token) {
@@ -214,8 +230,16 @@ function azureSqlAudit(body, token) {
       database_name: db,
       principal: p.server_principal_name || p.database_principal_name || 'unknown',
       client_ip: p.client_ip || '',
-      operation: synth ? synth.operation : verb(sql),
+      // Prefer the record's OWN action over parsing the statement text. With object-level
+      // auditing SQL Server emits one record per audited action, and a write emits two: an
+      // `UPDATE … WHERE` audits the SELECT that finds the rows AND the UPDATE that changes
+      // them — both carrying the SAME statement text. Deriving the operation from the text
+      // labelled both "UPDATE", which reads as a duplicated event rather than the read and
+      // the write it actually was.
+      operation: synth ? synth.operation : azureActionOp(p.action_name, sql),
       event_class: synth ? synth.event_class : 'statement',
+      schema_name: p.schema_name || '',
+      table_name: p.object_name || '',
       sql_text: synth ? synth.sql_text : String(sql).slice(0, 500),
       row_count: parseInt(p.affected_rows || p.row_count || 0, 10) || 0,
       tags: [],
