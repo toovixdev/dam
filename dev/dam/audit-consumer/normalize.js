@@ -61,10 +61,112 @@ function agentlite(json) {
   return (json && json.token && Array.isArray(json.events)) ? json : null;
 }
 
+// Cloud SQL does NOT emit its DB audit as text. Both engines publish a STRUCTURED proto in
+// protoPayload.request — verified against live db-paas2 / db-paas-pg:
+//   MySQL      → google.cloud.sql.audit.v1.MysqlAuditEntry  { query, cmd, user, ip, objects[] }
+//   PostgreSQL → google.cloud.sql.audit.v1.PgAuditEntry     { statement, command, auditClass,
+//                                                             database, user, object }
+// The text path below only ever matched a general-log style line, so with the real payloads it
+// found nothing and every Cloud SQL record was skipped — the agentless path ingested zero.
+
+// Cloud SQL runs constant internal traffic (replication heartbeat, health probes, metadata
+// polls) under its own maintenance users. With an audit rule of '*' that is ~99% of the
+// stream, so it must be dropped here or it floods the trail.
+const CLOUDSQL_SYS_DB = new Set(['mysql', 'performance_schema', 'information_schema', 'sys']);
+function cloudSqlNoise(user, db, sql) {
+  const p = String(user || '').toLowerCase();
+  if (p.startsWith('cloudsql') || p.startsWith('mysql.')) return true;
+  const u = String(sql || '').trim().toLowerCase();
+  if (u.startsWith('select @@') || /^select\s+1\s*;?$/.test(u) || u.includes('mysql.heartbeat')) return true;
+  if (p === 'root' && (CLOUDSQL_SYS_DB.has(String(db || '').toLowerCase()) || !db)) return true;
+  return false;
+}
+
+function mysqlCmdOp(cmd) {
+  const c = String(cmd || '').toLowerCase();
+  const M = {
+    select: 'SELECT', insert: 'INSERT', insert_select: 'INSERT', replace: 'INSERT',
+    update: 'UPDATE', update_multi: 'UPDATE', delete: 'DELETE', delete_multi: 'DELETE',
+    truncate: 'DDL', grant: 'GRANT', revoke: 'GRANT', revoke_all: 'GRANT',
+    connect: 'LOGIN', disconnect: 'LOGOUT',
+  };
+  if (M[c]) return M[c];
+  if (/^(create|drop|alter|rename)/.test(c)) return 'DDL';
+  return 'OTHER';
+}
+
+function pgAuditOp(command, cls) {
+  const c = String(command || '').toUpperCase().trim();
+  if (c.startsWith('SELECT')) return 'SELECT';
+  if (c.startsWith('INSERT')) return 'INSERT';
+  if (c.startsWith('UPDATE')) return 'UPDATE';
+  if (c.startsWith('DELETE')) return 'DELETE';
+  if (c.startsWith('GRANT') || c.startsWith('REVOKE')) return 'GRANT';
+  if (/^(CREATE|ALTER|DROP|TRUNCATE|RENAME)/.test(c)) return 'DDL';
+  return ({ READ: 'SELECT', WRITE: 'UPDATE', DDL: 'DDL', ROLE: 'GRANT' })[String(cls || '').toUpperCase()] || 'OTHER';
+}
+
+// Structured Cloud SQL audit protos → the internal envelope. Returns null when the entry is
+// not one of these, so the caller can fall through to the text path.
+function cloudSqlAuditProto(entry, token, host) {
+  const req = entry?.protoPayload?.request;
+  const type = String(req?.['@type'] || '');
+  if (!req || !type.includes('AuditEntry')) return null;
+
+  let engine, user, db, sql, operation, table;
+  if (type.includes('MysqlAuditEntry')) {
+    engine = 'mysql';
+    user = req.user || req.privUser || 'unknown';
+    const obj = (Array.isArray(req.objects) && req.objects[0]) || {};
+    db = obj.db || '';
+    table = obj.name || '';
+    sql = req.query || '';
+    operation = mysqlCmdOp(req.cmd);
+  } else if (type.includes('PgAuditEntry')) {
+    engine = 'postgresql';
+    user = req.user || 'unknown';
+    db = req.database || '';
+    // Long statements are SPLIT across entries; keep only the first so one statement is one
+    // event rather than N duplicates.
+    if (Number(req.chunkCount || 1) > 1 && Number(req.chunkIndex || 1) !== 1) return null;
+    const objectName = String(req.object || '');
+    table = objectName.includes('.') ? objectName.split('.').slice(1).join('.') : objectName;
+    sql = req.statement || '';
+    operation = pgAuditOp(req.command, req.auditClass);
+  } else {
+    return null;
+  }
+
+  if (!String(sql).trim()) return null;
+  if (cloudSqlNoise(user, db, sql)) return null;
+
+  return {
+    source: 'cloudsql-sink', token, host, engine, agent_type: 'audit_pull',
+    events: [{
+      database_name: db || host,
+      principal: user,
+      // MySQL carries the client address; the PgAuditEntry has no such field.
+      client_ip: req.ip || '',
+      operation,
+      event_class: 'statement',
+      table_name: table || '',
+      sql_text: String(sql).slice(0, 500),
+      row_count: 0,
+      tags: [],
+      agent_type: 'audit_pull',
+      source_host: host,
+      timestamp: ts(entry.timestamp || req.date),
+    }],
+  };
+}
+
 function cloudSqlLogEntry(entry, token) {
   if (!token) return null; // no tenant mapping for the PaaS path
   const dbId = entry?.resource?.labels?.database_id || ''; // "project:instance"
   const host = dbId.split(':').pop() || 'cloudsql';
+  // Structured proto first — that is what Cloud SQL actually publishes today.
+  const proto = cloudSqlAuditProto(entry, token, host);
+  if (proto) return proto;
   const text = entry.textPayload || entry.jsonPayload?.message || entry.protoPayload?.message || '';
   const m = String(text).match(SQL_VERB);
   const sql = m ? m[0].trim() : '';
@@ -126,4 +228,4 @@ function azureSqlAudit(body, token) {
   return { source: 'azuresql-eventhub', token, host, engine: 'mssql', agent_type: 'audit_pull', events };
 }
 
-module.exports = { agentlite, cloudSqlLogEntry, azureSqlAudit };
+module.exports = { agentlite, cloudSqlLogEntry, azureSqlAudit, cloudSqlAuditProto };
