@@ -896,8 +896,10 @@ async function runAuthMigration() {
     // Data-plane integrity: signed Merkle checkpoints over event windows (stored
     // here in the control plane, separate from ClickHouse, so deleting events
     // can't delete the proof they existed).
+    // One hash chain per tenant: seq restarts at 1 for each, so uniqueness is (tenant_id, seq).
     await client.query(`CREATE TABLE IF NOT EXISTS audit_checkpoints (
       id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     UUID,
       seq           INTEGER,
       window_start  TIMESTAMPTZ,
       window_end    TIMESTAMPTZ,
@@ -909,6 +911,12 @@ async function runAuthMigration() {
       archive_key   VARCHAR(200),
       created_at    TIMESTAMPTZ DEFAULT now()
     )`);
+    await client.query(`ALTER TABLE audit_checkpoints ADD COLUMN IF NOT EXISTS tenant_id UUID`);
+    // Pre-existing rows belong to the single global chain that ran against dam_analytics before
+    // data-plane isolation. They are attributed to the oldest tenant (the only one still on the
+    // shared plane) so /verify can still recompute them instead of orphaning them.
+    await client.query(`UPDATE audit_checkpoints SET tenant_id = (SELECT id FROM tenants ORDER BY created_at LIMIT 1) WHERE tenant_id IS NULL`);
+    await client.query(`CREATE UNIQUE INDEX IF NOT EXISTS audit_checkpoints_tenant_seq ON audit_checkpoints (tenant_id, seq)`);
 
     // DSAR discovery results: where a data subject's personal data was found.
     await client.query(`CREATE TABLE IF NOT EXISTS dsar_data_hits (
