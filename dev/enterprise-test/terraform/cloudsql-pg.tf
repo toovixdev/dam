@@ -131,11 +131,14 @@ resource "google_secret_manager_secret_version" "paas_pg" {
 resource "google_logging_project_sink" "cloudsql_pg_audit" {
   name        = "toovix-cloudsql-pg-audit-sink"
   destination = "pubsub.googleapis.com/${google_pubsub_topic.audit.id}"
-  filter      = <<-EOT
+  # VERIFIED against the live instance: Cloud SQL for PostgreSQL does NOT write pgAudit as
+  # text into postgres.log. It emits a structured PgAuditEntry proto into the DATA ACCESS
+  # audit log, under methodName "cloudsql.instances.query". Filtering on postgres.log +
+  # textPayload:"AUDIT:" (the shape self-managed Postgres produces) matches nothing here.
+  filter = <<-EOT
     resource.type="cloudsql_database"
     resource.labels.database_id="${var.project_id}:${google_sql_database_instance.paas_pg.name}"
-    logName:"postgres.log"
-    textPayload:"AUDIT:"
+    protoPayload.methodName="cloudsql.instances.query"
   EOT
 
   unique_writer_identity = true

@@ -6718,10 +6718,68 @@ function isSystemNoise(principal, schema, sql) {
 // Dispatch on shape rather than on connector config, so one subscription can serve a mixed
 // estate and an entry is never parsed by the wrong reader.
 function logEntryToEvent(entry) {
+  const reqType = String(((entry || {}).protoPayload || {}).request?.['@type'] || '');
+  // Cloud SQL for PostgreSQL does NOT ship pgAudit as text. It emits a STRUCTURED
+  // PgAuditEntry proto into the data_access audit log — verified against a live instance.
+  if (reqType.includes('PgAuditEntry')) return logEntryToEventCloudSqlPG(entry);
+  // Text-format pgAudit ("… LOG:  AUDIT: SESSION,…") — what self-managed Postgres and the
+  // other clouds' log exports produce.
   if (entry && typeof entry.textPayload === 'string' && entry.textPayload.includes('AUDIT:')) {
-    return logEntryToEventPG(entry);
+    return logEntryToEventPGText(entry);
   }
   return logEntryToEventMySQL(entry);
+}
+
+// ── Cloud SQL for PostgreSQL: the structured PgAuditEntry ─────────────────────────────
+// protoPayload.request looks like:
+//   { "@type": "…google.cloud.sql.audit.v1.PgAuditEntry", auditClass: "WRITE",
+//     auditType: "SESSION", command: "INSERT", database: "payments", user: "admin",
+//     object: "", objectType: "", statement: "INSERT INTO ledger …",
+//     chunkCount: 1, chunkIndex: 1, … }
+// No CSV parsing, and no log_line_prefix to depend on — the fields arrive typed.
+function logEntryToEventCloudSqlPG(entry) {
+  const req = entry.protoPayload.request || {};
+  const statement = String(req.statement || '').trim();
+  if (!statement) return null;
+  const principal = req.user || 'unknown';
+  if (isSystemNoisePG(principal, statement)) return null;
+
+  // Long statements are SPLIT across several log entries (chunkIndex of chunkCount). Emit
+  // only the first chunk: one statement should be one event, and sql_text is capped at 500
+  // chars anyway, so the later chunks would add duplicate events carrying no new signal.
+  if (Number(req.chunkCount || 1) > 1 && Number(req.chunkIndex || 1) !== 1) return null;
+
+  // `object` is "schema.table" when populated. SESSION-class auditing frequently leaves it
+  // empty (OBJECT-class auditing via pgaudit.role is what fills it in), so table attribution
+  // is best-effort here.
+  const objectName = String(req.object || '');
+  const dot = objectName.indexOf('.');
+  const schema = dot > 0 ? objectName.slice(0, dot) : '';
+  const table = dot > 0 ? objectName.slice(dot + 1) : objectName;
+
+  const instId = (entry.resource && entry.resource.labels && entry.resource.labels.database_id) || '';
+  const instName = instId.split(':').pop();
+
+  return {
+    database_name: req.database || instName || '',
+    timestamp: new Date(entry.timestamp || Date.now()).toISOString().slice(0, 19).replace('T', ' '),
+    principal,
+    // The PgAuditEntry carries no client address, and Cloud SQL doesn't populate
+    // requestMetadata.callerIp for these — so client_ip is genuinely unavailable on this
+    // path. Fall back to it only if a future payload starts supplying one.
+    client_ip: (entry.protoPayload.requestMetadata && entry.protoPayload.requestMetadata.callerIp) || '',
+    operation: pgAuditToOp(req.command, req.auditClass),
+    schema_name: schema,
+    table_name: table,
+    columns_accessed: [],
+    // pgAudit carries no row count — same limitation as sql_server_audit.
+    row_count: 0,
+    sql_text: statement.slice(0, 500),
+    anomaly_score: 0,
+    tags: detectTagsSql(statement),
+    agent_type: 'agentless',
+    source_host: instName || instId,
+  };
 }
 
 function logEntryToEventMySQL(entry) {
@@ -6749,9 +6807,10 @@ function logEntryToEventMySQL(entry) {
     source_host: instName || instId,
   };
 }
-// ── Cloud SQL for PostgreSQL: pgAudit ─────────────────────────────────────────────────
-// Managed Postgres has no host to run an agent on, so capture comes from the pgAudit
-// extension, which writes lines into the Postgres log that reach Cloud Logging as text:
+// ── TEXT-format pgAudit ───────────────────────────────────────────────────────────────
+// NOT what Cloud SQL emits (that's the structured PgAuditEntry above) — this is the shape
+// self-managed Postgres writes, and what RDS/Azure log exports carry, where pgAudit lines
+// land in the Postgres log as text:
 //
 //   2026-07-19 08:00:00.000 UTC [123] dam_svc@payments 10.30.0.5 LOG:  AUDIT: \
 //     SESSION,1,1,READ,SELECT,TABLE,public.users,"SELECT * FROM users WHERE x=1",<not logged>
@@ -6811,7 +6870,7 @@ function isSystemNoisePG(principal, sql) {
   return false;
 }
 
-function logEntryToEventPG(entry) {
+function logEntryToEventPGText(entry) {
   const line = String(entry.textPayload || '');
   const at = line.indexOf('AUDIT:');
   if (at < 0) return null;
