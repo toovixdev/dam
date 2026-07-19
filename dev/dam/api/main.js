@@ -4903,6 +4903,10 @@ app.post('/api/agents/events', async (req, res) => {
     table_name: e.table_name || '',
     columns_accessed: Array.isArray(e.columns_accessed) ? e.columns_accessed : [],
     row_count: Number(e.row_count) || 0,
+    // What KIND of activity this is. Everything historically ingested was a statement, so that
+    // stays the default; cloud audit streams also emit 'auth' (logins) and 'audit_config'
+    // (the audit configuration itself being changed — a tamper signal).
+    event_class: EVENT_CLASSES.has(e.event_class) ? e.event_class : 'statement',
     sql_text: e.sql_text || '',
     anomaly_score: Number(e.anomaly_score) || 0,
     tags: Array.isArray(e.tags) ? e.tags : [],
@@ -4911,8 +4915,40 @@ app.post('/api/agents/events', async (req, res) => {
   }));
   try { await chInsertEvents(tenantId, evs); }
   catch (e) { console.error('[events] ingest failed:', e.message); return res.status(502).json({ error: 'ingest failed' }); }
+  // Someone changing the audit configuration is the one event that can hide every other
+  // event, so it alerts directly here rather than waiting on a user-defined policy.
+  for (const e of evs) {
+    if (e.event_class === 'audit_config') {
+      try { await raiseAuditTamperAlert(tenantId, e); }
+      catch (err) { console.error('[events] audit-tamper alert failed:', err.message); }
+    }
+  }
   res.json({ ingested: evs.length });
 });
+
+// Audit configuration changed on a monitored database — surfaced as a critical alert.
+async function raiseAuditTamperAlert(tenantId, e) {
+  const summary = `Audit configuration changed on ${e.database_name || 'database'}`;
+  // One alert per principal/database while an earlier one is still open, so a flapping audit
+  // session can't bury the console in duplicates.
+  const dupe = await pgPool.query(
+    `SELECT id FROM alerts WHERE tenant_id = $1 AND summary = $2 AND principal = $3
+       AND status = 'open' AND created_at > now() - interval '1 hour' LIMIT 1`,
+    [tenantId, summary, e.principal || 'unknown']
+  );
+  if (dupe.rows.length) return;
+  const db = await pgPool.query(
+    'SELECT id FROM databases WHERE tenant_id = $1 AND name = $2 LIMIT 1',
+    [tenantId, e.database_name || '']
+  );
+  const ins = await pgPool.query(
+    `INSERT INTO alerts (tenant_id, database_id, severity, principal, summary, raw_sql, anomaly_score, status)
+     VALUES ($1,$2,'critical',$3,$4,$5,95,'open') RETURNING id, created_at`,
+    [tenantId, db.rows[0]?.id || null, e.principal || 'unknown', summary, e.sql_text || null]
+  );
+  try { broadcast({ type: 'alert', alert: { severity: 'critical', principal: e.principal, summary } }); } catch (err) { /* WS optional */ }
+  dispatchAlert({ tenantId, severity: 'critical', principal: e.principal || 'unknown', summary, database: e.database_name, raw_sql: e.sql_text, ts: ins.rows[0].created_at });
+}
 
 app.post('/api/agents/alert', async (req, res) => {
   const { token, host, port, principal, summary, severity, raw_sql } = req.body;
@@ -8960,10 +8996,14 @@ async function chInsertEvent(ev) {
 
 // Batch insert of agent-captured events into the tenant's events DB (used by the
 // outbound event-ingest endpoint so a remote agent never needs to reach ClickHouse).
+// Recognised event classes. Anything else is coerced to 'statement' on ingest so a bad or
+// unknown value can never split the data set into silently-invisible rows.
+const EVENT_CLASSES = new Set(['statement', 'auth', 'audit_config']);
+
 async function chInsertEvents(tenantId, evs) {
   if (!evs.length) return;
   const db = await eventsDbFor(tenantId);
-  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, sql_text, anomaly_score, tags, agent_type, source_host) FORMAT JSONEachRow`;
+  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, event_class, sql_text, anomaly_score, tags, agent_type, source_host) FORMAT JSONEachRow`;
   const body = evs.map((e) => JSON.stringify({ ...e, tenant_id: tenantId })).join('\n');
   await fetch(`${CH_URL}/?${CH_AUTH}&query=${encodeURIComponent(q)}`, { method: 'POST', body });
 }
@@ -8987,6 +9027,28 @@ async function eventsDbFor(tenantId) {
   return db;
 }
 async function chExecRaw(sql) { await fetch(`${CH_URL}/?${CH_AUTH}`, { method: 'POST', body: sql }); }
+
+// Adds event_class to an existing events table. ClickHouse ADD COLUMN IF NOT EXISTS is a
+// metadata-only operation — it does not rewrite parts — and the DEFAULT means every row
+// already stored reads back as 'statement', which is what all of them are.
+async function chAddEventClassColumn(db) {
+  await chExecRaw(`ALTER TABLE ${db}.events ADD COLUMN IF NOT EXISTS event_class LowCardinality(String) DEFAULT 'statement'`);
+}
+
+// Backfill the column across the shared plane and every per-tenant plane at boot, so an
+// upgraded deployment doesn't fail ingest on databases provisioned by an older build.
+async function migrateEventClassAllPlanes() {
+  const planes = new Set(['dam_analytics']);
+  try {
+    const rows = (await pgPool.query('SELECT DISTINCT data_plane FROM tenants WHERE data_plane IS NOT NULL')).rows;
+    for (const r of rows) if (r.data_plane) planes.add(r.data_plane);
+  } catch (e) { /* Postgres not ready — the shared plane is still migrated below */ }
+  let ok = 0;
+  for (const db of planes) {
+    try { await chAddEventClassColumn(db); ok++; } catch (e) { console.error(`[Events] event_class migration failed for ${db}: ${e.message}`); }
+  }
+  console.log(`[Events] event_class column ensured on ${ok}/${planes.size} data plane(s)`);
+}
 // Provision a dedicated events DB for a paid tenant (idempotent); records it on the tenant.
 async function ensureTenantEventsDb(tenantId) {
   const db = chDbName(tenantId);
@@ -8996,9 +9058,11 @@ async function ensureTenantEventsDb(tenantId) {
     timestamp DateTime64(3) DEFAULT now64(), principal String, client_ip String,
     operation LowCardinality(String), schema_name String, table_name String,
     columns_accessed Array(String), row_count UInt64 DEFAULT 0, sql_hash String,
+    event_class LowCardinality(String) DEFAULT 'statement',
     sql_text String, duration_ms UInt32 DEFAULT 0, anomaly_score UInt8 DEFAULT 0,
     tags Array(String), agent_type LowCardinality(String), source_host String
   ) ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, database_name, timestamp)`);
+  await chAddEventClassColumn(db);
   await pgPool.query('UPDATE tenants SET data_plane = $1 WHERE id = $2', [db, tenantId]);
   _tenantDbCache.set(tenantId, db);
   console.log(`[DataPlane] Provisioned dedicated events DB ${db} for tenant ${tenantId}`);
@@ -9369,7 +9433,9 @@ app.get('/api/audit/checkpoints/verify', async (req, res) => {
 // Database-activity audit: every captured query (data plane, ClickHouse events).
 // Filterable + paginated so the full history is searchable, not just the live tail.
 const chEsc = (s) => String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-const VALID_OPS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'DDL', 'LOGIN', 'LOGOUT', 'GRANT', 'OTHER'];
+// LOGIN_FAILED and AUDIT_CHANGE arrive from cloud audit streams (see the consumer's
+// normalizers); without them here those operations can be stored but never filtered for.
+const VALID_OPS = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'DDL', 'LOGIN', 'LOGIN_FAILED', 'LOGOUT', 'AUDIT_CHANGE', 'GRANT', 'OTHER'];
 app.get('/api/audit/activity', authRequired, async (req, res) => {
   try {
     const limit = Math.min(Math.max(parseInt(req.query.limit) || 100, 1), 1000);
@@ -9386,7 +9452,7 @@ app.get('/api/audit/activity', authRequired, async (req, res) => {
     const total = parseInt(await chQuery(`SELECT count() FROM ${evDb}.events ${whereSql}`, 'TabSeparated')) || 0;
     const rows = await chQuery(
       `SELECT timestamp, principal, database_name, operation, schema_name, table_name,
-              sql_text, row_count, anomaly_score, client_ip, agent_type, source_host
+              sql_text, row_count, anomaly_score, client_ip, agent_type, source_host, event_class
        FROM ${evDb}.events ${whereSql}
        ORDER BY timestamp DESC
        LIMIT ${limit} OFFSET ${offset}`
@@ -9896,6 +9962,7 @@ server.listen(PORT, '0.0.0.0', async () => {
     await loadPlatformSmtp();
     await loadPlatformSettings();
     await ensureBrandingBucket();
+    await migrateEventClassAllPlanes();
   } catch (err) {
     console.error('[Auth] Migration failed:', err.message);
   }
