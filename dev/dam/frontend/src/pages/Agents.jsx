@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
@@ -165,7 +165,7 @@ export default function Agents() {
       </div>
 
       <Modal open={deployOpen} onClose={closeDeploy} title="Deploy monitoring" width={680}>
-        <DeployMonitoring instances={instances} initialInstanceId={initialInstance} initialModes={initialModes} onClose={closeDeploy} onDeployed={handleRefresh} />
+        <DeployMonitoring instances={instances} agents={rows} initialInstanceId={initialInstance} initialModes={initialModes} onClose={closeDeploy} onDeployed={handleRefresh} />
       </Modal>
     </Layout>
   );
@@ -176,7 +176,11 @@ const MODES = [
   // On self-managed VMs this is AgentLite (a lightweight audit forwarder on the host); on PaaS the
   // equivalent is Agentless (a cloud audit stream, set up from Discovery — no install).
   { id: 'agentless', name: 'AgentLite (Audit Forwarder)', type: 'audit_forward', desc: 'A lightweight forwarder on the DB host that tails the database’s native audit trail and ships it out · no wire tap, no path change · works with TLS. ⚠ needs DB auditing enabled; after-the-fact (cannot block).', tag: 'recommended' },
-  { id: 'host', name: 'Host agent (eBPF)', type: 'host_ebpf', desc: 'Sees local/IPC + encrypted traffic (below TLS) · transparent, no reroute. ⚠ Linux-only (no Windows); privileged container; hardest to deploy.', tag: 'passive' },
+  // NOTE: host mode hooks SSL_read/SSL_write on libssl (see agent/hostcap.bpf.c), so it sees
+  // TLS sessions and ONLY those — a cleartext session never calls SSL_read. It is therefore the
+  // exact complement of the network agent, not a superset of it. (It does not cover local/IPC
+  // either: unix-socket sessions are usually not TLS. AgentLite is what covers those.)
+  { id: 'host', name: 'Host agent (eBPF)', type: 'host_ebpf', desc: 'Sees encrypted traffic (below TLS) that passive capture cannot · transparent, no reroute. ⚠ Linux-only (no Windows); privileged container; hardest to deploy; blind to cleartext — pair with the network agent.', tag: 'passive' },
   { id: 'proxy', name: 'Inline proxy', type: 'inline_proxy', desc: 'The only mode that can block · terminates TLS · sees the real end-user. ⚠ reroutes clients through it (connection-path change).', tag: 'inline' },
   { id: 'network', name: 'Network agent', type: 'network', desc: 'Passive · ~0 overhead · out-of-band, tamper-resistant. ⚠ least practical: cleartext only — blind to TLS and to local/IPC.', tag: 'passive' },
 ];
@@ -189,7 +193,17 @@ const PRESETS = [
 const VALID_MODES = ['network', 'host', 'proxy'];
 function sameSet(a, b) { return a.length === b.length && a.every((x) => b.includes(x)); }
 
-function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onClose, onDeployed }) {
+// The wire modes read the CONNECTION; AgentLite reads the database's own audit trail, which
+// records every statement whatever the transport. So AgentLite wholly subsumes them: running it
+// alongside network/host/proxy ingests each query two or three times — inflated counts, inflated
+// bulk-read totals, duplicate alerts. They are mutually exclusive, not additive.
+const WIRE_MODES = ['network', 'host', 'proxy'];
+const isWireMode = (m) => WIRE_MODES.includes(m);
+
+// agent_type (what an enrolled agent reports) → the mode id offered on this screen.
+const TYPE_TO_MODE = { network: 'network', host_ebpf: 'host', inline_proxy: 'proxy', audit_pull: 'agentless' };
+
+function DeployMonitoring({ instances, agents = [], initialInstanceId, initialModes = [], onClose, onDeployed }) {
   const seeded = initialModes.filter((m) => VALID_MODES.includes(m));
   const [instId, setInstId] = useState(initialInstanceId || instances[0]?.id || '');
   const [modes, setModes] = useState(seeded.length ? seeded : ['network', 'host']);
@@ -212,7 +226,26 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const canClassify = instEngine === 'mysql' || instEngine === 'postgresql' || instEngine === 'mssql'; // in this build
   const classifyNeedsDbName = instEngine === 'postgresql' || instEngine === 'mssql'; // PG/SQL Server information_schema is per-database
   const has = (m) => modes.includes(m);
-  const toggle = (m) => setModes((p) => (p.includes(m) ? p.filter((x) => x !== m) : [...p, m]));
+  // Selecting AgentLite clears the wire modes and vice-versa — see WIRE_MODES above for why.
+  const toggle = (m) =>
+    setModes((p) => {
+      if (p.includes(m)) return p.filter((x) => x !== m);
+      if (m === 'agentless') return ['agentless'];
+      return [...p.filter((x) => x !== 'agentless'), m];
+    });
+
+  // Modes already covered by an enrolled agent on this instance. Deployed modes are not
+  // pre-selected: the default action is to ADD coverage, not silently redeploy what is running.
+  const deployedModes = useMemo(() => {
+    const set = new Set();
+    for (const a of agents) {
+      if (a.instance_id && a.instance_id === instId) {
+        const mode = TYPE_TO_MODE[a.agent_type];
+        if (mode) set.add(mode);
+      }
+    }
+    return set;
+  }, [agents, instId]);
   const activePreset = PRESETS.find((p) => sameSet(p.modes, modes));
 
   // Which modes are offered depends on the engine: MySQL / PostgreSQL get the full stack;
@@ -221,9 +254,14 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
   const isFullStack = FULL_STACK.includes(instEngine);
   const engineLabel = { mssql: 'SQL Server', oracle: 'Oracle', mongodb: 'MongoDB', postgres: 'PostgreSQL', postgresql: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB' }[instEngine] || instEngine;
   const availableModes = isFullStack ? MODES : MODES.filter((mo) => mo.id === 'agentless');
-  // Keep the selection valid for the engine when the instance changes.
+  // Keep the selection valid for the engine when the instance changes, and default to the
+  // coverage this instance is still MISSING — offering to redeploy what already runs is noise.
   useEffect(() => {
-    setModes((prev) => (isFullStack ? (prev.length && !prev.includes('agentless') ? prev : ['network', 'host']) : ['agentless']));
+    setModes(() => {
+      if (!isFullStack) return deployedModes.has('agentless') ? [] : ['agentless'];
+      const wanted = ['network', 'host'].filter((m) => !deployedModes.has(m));
+      return wanted.length ? wanted : [];
+    });
     setInstructions(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instId]);
@@ -300,15 +338,44 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
           <b style={{ color: 'var(--amber)' }}>Managed / PaaS instance.</b> Host, Network and Inline Proxy can&apos;t be installed on a server you don&apos;t control. Use <b>Agentless</b> capture instead — a cloud audit stream (Pub/Sub · Kinesis · Event Hub), set up from the Discovery wizard. No install.
         </div>
       ) : (
-        availableModes.map((m) => (
-          <div key={m.id} onClick={() => toggle(m.id)} className={`approach-card ${has(m.id) ? 'on' : ''}`} style={{ padding: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
-            <input type="checkbox" checked={has(m.id)} readOnly style={{ pointerEvents: 'none' }} />
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 700 }}>{m.name} <span className={`pill ${m.tag === 'inline' ? 'info' : ''}`} style={{ marginLeft: 4 }}>{m.tag}</span></div>
-              <div className="muted" style={{ fontSize: 12 }}>{m.desc}</div>
+        availableModes.map((m) => {
+          const isDeployed = deployedModes.has(m.id);
+          // AgentLite and the wire modes can't coexist; show the conflicting tiles as blocked
+          // rather than silently swapping the selection out from under the user.
+          const blocked = m.id === 'agentless'
+            ? modes.some(isWireMode)
+            : isWireMode(m.id) && has('agentless');
+          return (
+            <div key={m.id} onClick={() => { if (!blocked) toggle(m.id); }}
+              className={`approach-card ${has(m.id) ? 'on' : ''}`}
+              style={{ padding: 12, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12, cursor: blocked ? 'not-allowed' : 'pointer', opacity: blocked ? 0.45 : 1 }}>
+              <input type="checkbox" checked={has(m.id)} disabled={blocked} readOnly style={{ pointerEvents: 'none' }} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13.5, fontWeight: 700 }}>
+                  {m.name} <span className={`pill ${m.tag === 'inline' ? 'info' : ''}`} style={{ marginLeft: 4 }}>{m.tag}</span>
+                  {isDeployed && (
+                    <span className="pill" style={{ marginLeft: 6, background: 'var(--green-soft, rgba(22,163,74,.12))', color: 'var(--green)' }}>
+                      ✓ {has(m.id) ? 'redeploy' : 'deployed'}
+                    </span>
+                  )}
+                </div>
+                <div className="muted" style={{ fontSize: 12 }}>{m.desc}</div>
+                {isDeployed && !has(m.id) && (
+                  <div style={{ fontSize: 11.5, color: 'var(--green)', marginTop: 3 }}>
+                    Already covered on this instance — select only to redeploy (version upgrade, config change, or replacing a dead agent).
+                  </div>
+                )}
+                {blocked && (
+                  <div style={{ fontSize: 11.5, color: 'var(--amber)', marginTop: 3 }}>
+                    {m.id === 'agentless'
+                      ? 'Unavailable while a wire mode is selected — AgentLite already records every statement, so running both double-counts.'
+                      : 'Unavailable while AgentLite is selected — it already records every statement, so running both double-counts.'}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        ))
+          );
+        })
       )}
 
       {!isPaas && (
@@ -327,6 +394,16 @@ function DeployMonitoring({ instances, initialInstanceId, initialModes = [], onC
           {has('proxy') && (
             <div style={{ background: 'var(--info-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
               Inline proxy changes the connection path — clients/apps must connect through the proxy (it forwards to the DB). It&apos;s the only mode that can block. Passive agents alongside it catch traffic that bypasses the proxy.
+            </div>
+          )}
+          {has('proxy') && has('network') && (
+            <div style={{ background: 'var(--amber-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--amber)' }}>Attribution caveat.</b> This pairing is deliberate — the network agent is your <b>bypass detector</b>, catching clients that skip the proxy and connect straight to the database. But for traffic that <em>does</em> go through the proxy, if the proxy&nbsp;→&nbsp;DB hop is cleartext the network agent sees that leg too, producing a second event whose client IP is <b>the proxy</b>, not the real end user. Keep the proxy&nbsp;→&nbsp;DB hop TLS to avoid it.
+            </div>
+          )}
+          {has('network') && has('host') && (
+            <div style={{ background: 'rgba(22,163,74,.10)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
+              <b style={{ color: 'var(--green)' }}>Complementary, not overlapping.</b> The network agent decodes <b>cleartext</b> sessions (TLS is opaque to it); the host agent hooks below TLS and sees <b>only</b> encrypted ones. Neither sees what the other does, so nothing is double-counted — together they cover every networked session regardless of client TLS settings.
             </div>
           )}
           {has('agentless') && (

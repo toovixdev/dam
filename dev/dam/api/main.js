@@ -4269,6 +4269,7 @@ app.delete('/api/instances/:id', authRequired, async (req, res) => {
 app.get('/api/agents', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
     `SELECT a.id, a.agent_type, a.host, a.version, a.status, a.last_heartbeat, a.created_at,
+            a.instance_id,
             i.name AS instance_name, i.host AS instance_host, i.port AS instance_port
      FROM agents a LEFT JOIN db_instances i ON a.instance_id = i.id
      WHERE a.tenant_id = $1
