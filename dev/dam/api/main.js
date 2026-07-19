@@ -6712,7 +6712,19 @@ function isSystemNoise(principal, schema, sql) {
   if (p === 'root' && (SYS_SCHEMAS.has(String(schema || '').toLowerCase()) || !schema)) return true;
   return false;
 }
+// The audit bus carries BOTH engines' PaaS telemetry, in two different shapes:
+//   • Cloud SQL MySQL  → a STRUCTURED audit proto in protoPayload.request
+//   • Cloud SQL Postgres → pgAudit TEXT lines in textPayload ("… LOG:  AUDIT: SESSION,…")
+// Dispatch on shape rather than on connector config, so one subscription can serve a mixed
+// estate and an entry is never parsed by the wrong reader.
 function logEntryToEvent(entry) {
+  if (entry && typeof entry.textPayload === 'string' && entry.textPayload.includes('AUDIT:')) {
+    return logEntryToEventPG(entry);
+  }
+  return logEntryToEventMySQL(entry);
+}
+
+function logEntryToEventMySQL(entry) {
   const req = (entry.protoPayload && entry.protoPayload.request) || {};
   if (!req.query) return null; // only statement records
   const obj = (Array.isArray(req.objects) && req.objects[0]) || {};
@@ -6737,6 +6749,113 @@ function logEntryToEvent(entry) {
     source_host: instName || instId,
   };
 }
+// ── Cloud SQL for PostgreSQL: pgAudit ─────────────────────────────────────────────────
+// Managed Postgres has no host to run an agent on, so capture comes from the pgAudit
+// extension, which writes lines into the Postgres log that reach Cloud Logging as text:
+//
+//   2026-07-19 08:00:00.000 UTC [123] dam_svc@payments 10.30.0.5 LOG:  AUDIT: \
+//     SESSION,1,1,READ,SELECT,TABLE,public.users,"SELECT * FROM users WHERE x=1",<not logged>
+//
+// Everything after "AUDIT: " is CSV, and the statement field routinely contains commas and
+// doubled quotes ("" for a literal quote) — so it needs a real CSV scan. A split(',') would
+// truncate every statement at its first comma, which is most of the interesting ones.
+function splitPgAuditCsv(s) {
+  const out = [];
+  let cur = '', inQ = false;
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inQ) {
+      if (c === '"') {
+        if (s[i + 1] === '"') { cur += '"'; i++; } // doubled quote → literal
+        else inQ = false;
+      } else cur += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+// pgAudit gives both a CLASS (READ/WRITE/DDL/ROLE) and a precise COMMAND. Prefer the
+// command; fall back to the class when the command is one pgAudit doesn't name.
+function pgAuditToOp(command, cls) {
+  const c = String(command || '').toUpperCase().trim();
+  if (c.startsWith('SELECT')) return 'SELECT';
+  if (c.startsWith('INSERT')) return 'INSERT';
+  if (c.startsWith('UPDATE')) return 'UPDATE';
+  if (c.startsWith('DELETE')) return 'DELETE';
+  if (c.startsWith('GRANT') || c.startsWith('REVOKE')) return 'GRANT';
+  if (c.startsWith('CREATE') || c.startsWith('ALTER') || c.startsWith('DROP') ||
+      c.startsWith('TRUNCATE') || c.startsWith('RENAME')) return 'DDL';
+  switch (String(cls || '').toUpperCase()) {
+    case 'READ': return 'SELECT';
+    case 'WRITE': return 'UPDATE';
+    case 'DDL': return 'DDL';
+    case 'ROLE': return 'GRANT';
+    default: return 'OTHER';
+  }
+}
+
+// The Postgres log_line_prefix we set on the instance is "%m [%p] %q%u@%d %h ", giving
+// "<ts> [pid] user@db clienthost LOG:". The prefix is operator-configurable, so treat every
+// field as optional — a changed prefix must degrade attribution, never drop the event.
+const PG_PREFIX_RE = /^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)[^\[]*\[\d+\]\s*(?:(\S+)@(\S+)\s+)?(\S+)?\s*(?:LOG|AUDIT)/;
+
+// Cloud SQL runs its own maintenance connections; that is not customer activity.
+function isSystemNoisePG(principal, sql) {
+  const p = String(principal || '').toLowerCase();
+  if (p.startsWith('cloudsql')) return true; // cloudsqladmin / cloudsqlagent / cloudsqlreplica
+  const u = String(sql || '').trim().toLowerCase();
+  if (/^select\s+1\s*;?$/.test(u) || u.startsWith('select pg_')) return true;
+  return false;
+}
+
+function logEntryToEventPG(entry) {
+  const line = String(entry.textPayload || '');
+  const at = line.indexOf('AUDIT:');
+  if (at < 0) return null;
+
+  const f = splitPgAuditCsv(line.slice(at + 6).trim());
+  // AUDIT_TYPE,STATEMENT_ID,SUBSTATEMENT_ID,CLASS,COMMAND,OBJECT_TYPE,OBJECT_NAME,STATEMENT,PARAMETER
+  const cls = f[3], command = f[4], objectName = f[6] || '', statement = f[7] || '';
+  if (!statement.trim()) return null; // nothing to audit without the statement text
+
+  const m = PG_PREFIX_RE.exec(line) || [];
+  const principal = m[2] || 'unknown';
+  const dbFromPrefix = m[3] || '';
+  const clientIp = (m[4] && m[4] !== 'LOG' ? m[4] : '') || '';
+  if (isSystemNoisePG(principal, statement)) return null;
+
+  // pgAudit reports the object as schema.table; DDL/utility statements may report neither.
+  const dot = objectName.indexOf('.');
+  const schema = dot > 0 ? objectName.slice(0, dot) : '';
+  const table = dot > 0 ? objectName.slice(dot + 1) : objectName;
+
+  const instId = (entry.resource && entry.resource.labels && entry.resource.labels.database_id) || '';
+  const instName = instId.split(':').pop();
+  const ts = entry.timestamp || (m[1] ? m[1].replace(' ', 'T') + 'Z' : new Date().toISOString());
+
+  return {
+    database_name: dbFromPrefix || instName || '',
+    timestamp: new Date(ts).toISOString().slice(0, 19).replace('T', ' '),
+    principal,
+    client_ip: clientIp,
+    operation: pgAuditToOp(command, cls),
+    schema_name: schema,
+    table_name: table,
+    columns_accessed: [],
+    // pgAudit carries no row count — the same limitation as SQL Server Audit. Bulk-read
+    // policies driven by row_count will not fire on managed Postgres.
+    row_count: 0,
+    sql_text: String(statement).slice(0, 500),
+    anomaly_score: 0,
+    tags: detectTagsSql(statement),
+    agent_type: 'agentless',
+    source_host: instName || instId,
+  };
+}
+
 // Light PII/PCI tagging from SQL text (mirrors the agent's detectTags) so agentless
 // events feed the same tag-based policies.
 function detectTagsSql(sql) {

@@ -109,6 +109,31 @@ variable "cloudsql" {
   default = {}
 }
 
+# ── The Cloud SQL (PaaS) PostgreSQL database — agentless capture via pgAudit ──
+variable "cloudsql_pg" {
+  type = object({
+    name       = optional(string, "db-paas-pg")
+    tier       = optional(string, "db-g1-small")
+    db_version = optional(string, "POSTGRES_16")
+    db_name    = optional(string, "payments")
+    # What pgAudit records. Deliberately not "all" — ALL includes MISC (every SET/SHOW),
+    # which floods the audit trail without adding signal.
+    pgaudit_log = optional(string, "read,write,ddl,role")
+  })
+  default = {}
+}
+
+# Separate from enable_cloudsql_audit ON PURPOSE: that variable also drives the MySQL
+# instance's audit flag, and toggling a flag RESTARTS a Cloud SQL instance. Keeping the
+# Postgres gate independent means standing up the pgAudit path can't bounce the working
+# MySQL instance. Defaults on — the whole point of this instance is the agentless path,
+# and flags set at CREATE time cost no restart.
+variable "enable_pgaudit" {
+  type        = bool
+  default     = true
+  description = "Enable pgAudit on the Cloud SQL PostgreSQL instance (feeds the Pub/Sub sink for the agentless path)."
+}
+
 variable "enable_cloudsql_audit" {
   type        = bool
   default     = false
