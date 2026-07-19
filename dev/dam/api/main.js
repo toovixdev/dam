@@ -6753,18 +6753,7 @@ function isSystemNoise(principal, schema, sql) {
 //   • Cloud SQL Postgres → pgAudit TEXT lines in textPayload ("… LOG:  AUDIT: SESSION,…")
 // Dispatch on shape rather than on connector config, so one subscription can serve a mixed
 // estate and an entry is never parsed by the wrong reader.
-function logEntryToEvent(entry) {
-  const reqType = String(((entry || {}).protoPayload || {}).request?.['@type'] || '');
-  // Cloud SQL for PostgreSQL does NOT ship pgAudit as text. It emits a STRUCTURED
-  // PgAuditEntry proto into the data_access audit log — verified against a live instance.
-  if (reqType.includes('PgAuditEntry')) return logEntryToEventCloudSqlPG(entry);
-  // Text-format pgAudit ("… LOG:  AUDIT: SESSION,…") — what self-managed Postgres and the
-  // other clouds' log exports produce.
-  if (entry && typeof entry.textPayload === 'string' && entry.textPayload.includes('AUDIT:')) {
-    return logEntryToEventPGText(entry);
-  }
-  return logEntryToEventMySQL(entry);
-}
+const logEntryToEvent = logEntryToEventMySQL;
 
 // ── Cloud SQL for PostgreSQL: the structured PgAuditEntry ─────────────────────────────
 // protoPayload.request looks like:
@@ -6773,50 +6762,6 @@ function logEntryToEvent(entry) {
 //     object: "", objectType: "", statement: "INSERT INTO ledger …",
 //     chunkCount: 1, chunkIndex: 1, … }
 // No CSV parsing, and no log_line_prefix to depend on — the fields arrive typed.
-function logEntryToEventCloudSqlPG(entry) {
-  const req = entry.protoPayload.request || {};
-  const statement = String(req.statement || '').trim();
-  if (!statement) return null;
-  const principal = req.user || 'unknown';
-  if (isSystemNoisePG(principal, statement)) return null;
-
-  // Long statements are SPLIT across several log entries (chunkIndex of chunkCount). Emit
-  // only the first chunk: one statement should be one event, and sql_text is capped at 500
-  // chars anyway, so the later chunks would add duplicate events carrying no new signal.
-  if (Number(req.chunkCount || 1) > 1 && Number(req.chunkIndex || 1) !== 1) return null;
-
-  // `object` is "schema.table" when populated. SESSION-class auditing frequently leaves it
-  // empty (OBJECT-class auditing via pgaudit.role is what fills it in), so table attribution
-  // is best-effort here.
-  const objectName = String(req.object || '');
-  const dot = objectName.indexOf('.');
-  const schema = dot > 0 ? objectName.slice(0, dot) : '';
-  const table = dot > 0 ? objectName.slice(dot + 1) : objectName;
-
-  const instId = (entry.resource && entry.resource.labels && entry.resource.labels.database_id) || '';
-  const instName = instId.split(':').pop();
-
-  return {
-    database_name: req.database || instName || '',
-    timestamp: new Date(entry.timestamp || Date.now()).toISOString().slice(0, 19).replace('T', ' '),
-    principal,
-    // The PgAuditEntry carries no client address, and Cloud SQL doesn't populate
-    // requestMetadata.callerIp for these — so client_ip is genuinely unavailable on this
-    // path. Fall back to it only if a future payload starts supplying one.
-    client_ip: (entry.protoPayload.requestMetadata && entry.protoPayload.requestMetadata.callerIp) || '',
-    operation: pgAuditToOp(req.command, req.auditClass),
-    schema_name: schema,
-    table_name: table,
-    columns_accessed: [],
-    // pgAudit carries no row count — same limitation as sql_server_audit.
-    row_count: 0,
-    sql_text: statement.slice(0, 500),
-    anomaly_score: 0,
-    tags: detectTagsSql(statement),
-    agent_type: 'agentless',
-    source_host: instName || instId,
-  };
-}
 
 function logEntryToEventMySQL(entry) {
   const req = (entry.protoPayload && entry.protoPayload.request) || {};
@@ -6854,102 +6799,16 @@ function logEntryToEventMySQL(entry) {
 // Everything after "AUDIT: " is CSV, and the statement field routinely contains commas and
 // doubled quotes ("" for a literal quote) — so it needs a real CSV scan. A split(',') would
 // truncate every statement at its first comma, which is most of the interesting ones.
-function splitPgAuditCsv(s) {
-  const out = [];
-  let cur = '', inQ = false;
-  for (let i = 0; i < s.length; i++) {
-    const c = s[i];
-    if (inQ) {
-      if (c === '"') {
-        if (s[i + 1] === '"') { cur += '"'; i++; } // doubled quote → literal
-        else inQ = false;
-      } else cur += c;
-    } else if (c === '"') inQ = true;
-    else if (c === ',') { out.push(cur); cur = ''; }
-    else cur += c;
-  }
-  out.push(cur);
-  return out;
-}
 
 // pgAudit gives both a CLASS (READ/WRITE/DDL/ROLE) and a precise COMMAND. Prefer the
 // command; fall back to the class when the command is one pgAudit doesn't name.
-function pgAuditToOp(command, cls) {
-  const c = String(command || '').toUpperCase().trim();
-  if (c.startsWith('SELECT')) return 'SELECT';
-  if (c.startsWith('INSERT')) return 'INSERT';
-  if (c.startsWith('UPDATE')) return 'UPDATE';
-  if (c.startsWith('DELETE')) return 'DELETE';
-  if (c.startsWith('GRANT') || c.startsWith('REVOKE')) return 'GRANT';
-  if (c.startsWith('CREATE') || c.startsWith('ALTER') || c.startsWith('DROP') ||
-      c.startsWith('TRUNCATE') || c.startsWith('RENAME')) return 'DDL';
-  switch (String(cls || '').toUpperCase()) {
-    case 'READ': return 'SELECT';
-    case 'WRITE': return 'UPDATE';
-    case 'DDL': return 'DDL';
-    case 'ROLE': return 'GRANT';
-    default: return 'OTHER';
-  }
-}
 
 // The Postgres log_line_prefix we set on the instance is "%m [%p] %q%u@%d %h ", giving
 // "<ts> [pid] user@db clienthost LOG:". The prefix is operator-configurable, so treat every
 // field as optional — a changed prefix must degrade attribution, never drop the event.
-const PG_PREFIX_RE = /^(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?)[^\[]*\[\d+\]\s*(?:(\S+)@(\S+)\s+)?(\S+)?\s*(?:LOG|AUDIT)/;
 
 // Cloud SQL runs its own maintenance connections; that is not customer activity.
-function isSystemNoisePG(principal, sql) {
-  const p = String(principal || '').toLowerCase();
-  if (p.startsWith('cloudsql')) return true; // cloudsqladmin / cloudsqlagent / cloudsqlreplica
-  const u = String(sql || '').trim().toLowerCase();
-  if (/^select\s+1\s*;?$/.test(u) || u.startsWith('select pg_')) return true;
-  return false;
-}
 
-function logEntryToEventPGText(entry) {
-  const line = String(entry.textPayload || '');
-  const at = line.indexOf('AUDIT:');
-  if (at < 0) return null;
-
-  const f = splitPgAuditCsv(line.slice(at + 6).trim());
-  // AUDIT_TYPE,STATEMENT_ID,SUBSTATEMENT_ID,CLASS,COMMAND,OBJECT_TYPE,OBJECT_NAME,STATEMENT,PARAMETER
-  const cls = f[3], command = f[4], objectName = f[6] || '', statement = f[7] || '';
-  if (!statement.trim()) return null; // nothing to audit without the statement text
-
-  const m = PG_PREFIX_RE.exec(line) || [];
-  const principal = m[2] || 'unknown';
-  const dbFromPrefix = m[3] || '';
-  const clientIp = (m[4] && m[4] !== 'LOG' ? m[4] : '') || '';
-  if (isSystemNoisePG(principal, statement)) return null;
-
-  // pgAudit reports the object as schema.table; DDL/utility statements may report neither.
-  const dot = objectName.indexOf('.');
-  const schema = dot > 0 ? objectName.slice(0, dot) : '';
-  const table = dot > 0 ? objectName.slice(dot + 1) : objectName;
-
-  const instId = (entry.resource && entry.resource.labels && entry.resource.labels.database_id) || '';
-  const instName = instId.split(':').pop();
-  const ts = entry.timestamp || (m[1] ? m[1].replace(' ', 'T') + 'Z' : new Date().toISOString());
-
-  return {
-    database_name: dbFromPrefix || instName || '',
-    timestamp: new Date(ts).toISOString().slice(0, 19).replace('T', ' '),
-    principal,
-    client_ip: clientIp,
-    operation: pgAuditToOp(command, cls),
-    schema_name: schema,
-    table_name: table,
-    columns_accessed: [],
-    // pgAudit carries no row count — the same limitation as SQL Server Audit. Bulk-read
-    // policies driven by row_count will not fire on managed Postgres.
-    row_count: 0,
-    sql_text: String(statement).slice(0, 500),
-    anomaly_score: 0,
-    tags: detectTagsSql(statement),
-    agent_type: 'agentless',
-    source_host: instName || instId,
-  };
-}
 
 // Light PII/PCI tagging from SQL text (mirrors the agent's detectTags) so agentless
 // events feed the same tag-based policies.
@@ -7012,8 +6871,15 @@ async function runPubSubIngest() {
     }
   } catch (e) { /* non-fatal */ } finally { _pubsubBusy = false; }
 }
-setInterval(runPubSubIngest, 10000);
-setTimeout(runPubSubIngest, 12000);
+// OFF by default: dam-audit-consumer owns the Pub/Sub subscription. Both services pulling the
+// SAME subscription splits the stream between them (Pub/Sub delivers each message once), which
+// is how the agentless path came to ingest almost nothing. Set API_PUBSUB_INGEST=true only if
+// the dedicated consumer is not deployed.
+if (process.env.API_PUBSUB_INGEST === 'true') {
+  console.log('[pubsub] API-side ingest ENABLED — ensure dam-audit-consumer is NOT also running');
+  setInterval(runPubSubIngest, 10000);
+  setTimeout(runPubSubIngest, 12000);
+}
 
 // ── DDL Change Log (schema/privilege-change attestation) ──────────────────────
 // Best-effort extraction of the target object from a DDL statement.
@@ -9355,9 +9221,16 @@ async function initArchive() {
 }
 
 // Deterministic digest of a window's events (count + SHA-256 over sorted event hashes).
-async function windowDigest(fromTs, toTs) {
+// ── Tamper-evident checkpoints ───────────────────────────────────────────────
+// One hash chain PER TENANT, because each tenant's events may live in its own ClickHouse
+// database (see eventsDbFor). This used to read dam_analytics unconditionally; when paid
+// tenants were moved to dedicated planes that table went empty, windowDigest returned
+// count=0, and runCheckpoint silently returned before logging anything. The chain stopped
+// advancing for months while /verify still reported "ok" — it was re-verifying the frozen
+// pre-migration checkpoints against a table nothing writes to any more.
+async function windowDigest(evDb, tenantId, fromTs, toTs) {
   const sql = `SELECT count() AS cnt, lower(hex(SHA256(arrayStringConcat(arraySort(groupArray(concat(toString(event_id),'|',toString(timestamp),'|',principal,'|',operation,'|',toString(row_count)))), '\n')))) AS root
-    FROM dam_analytics.events WHERE timestamp >= parseDateTimeBestEffort('${chEsc(fromTs)}') AND timestamp < parseDateTimeBestEffort('${chEsc(toTs)}')`;
+    FROM ${evDb}.events WHERE tenant_id = '${chEsc(tenantId)}' AND timestamp >= parseDateTimeBestEffort('${chEsc(fromTs)}') AND timestamp < parseDateTimeBestEffort('${chEsc(toTs)}')`;
   const r = await chSafe(sql);
   const row = Array.isArray(r) && r[0] ? r[0] : { cnt: 0, root: '' };
   return { count: parseInt(row.cnt) || 0, root: row.root || '' };
@@ -9365,58 +9238,85 @@ async function windowDigest(fromTs, toTs) {
 function checkpointChainHash(prev, cp) {
   return crypto.createHash('sha256').update([prev, cp.seq, cp.window_start, cp.window_end, cp.event_count, cp.merkle_root].join('|')).digest('hex');
 }
-async function archiveWindow(seq, fromTs, toTs) {
+async function archiveWindow(evDb, tenantId, seq, fromTs, toTs) {
   if (!archive) return null;
   try {
-    const rows = await chSafe(`SELECT event_id, timestamp, principal, database_name, operation, schema_name, table_name, row_count, sql_text FROM dam_analytics.events WHERE timestamp >= parseDateTimeBestEffort('${chEsc(fromTs)}') AND timestamp < parseDateTimeBestEffort('${chEsc(toTs)}') ORDER BY timestamp`);
+    const rows = await chSafe(`SELECT event_id, timestamp, principal, database_name, operation, schema_name, table_name, row_count, sql_text FROM ${evDb}.events WHERE tenant_id = '${chEsc(tenantId)}' AND timestamp >= parseDateTimeBestEffort('${chEsc(fromTs)}') AND timestamp < parseDateTimeBestEffort('${chEsc(toTs)}') ORDER BY timestamp`);
     const ndjson = rows.map((r) => JSON.stringify(r)).join('\n');
-    const key = `events/checkpoint-${String(seq).padStart(6, '0')}.ndjson`;
+    // Keyed by tenant — a shared key would collide now that each tenant has its own seq.
+    const key = `events/${tenantId}/checkpoint-${String(seq).padStart(6, '0')}.ndjson`;
     return await archive.put(key, ndjson, 'application/x-ndjson');
   } catch (e) { console.log('[Archive] put failed:', e.message); return null; }
 }
+
+// Advance one tenant's chain. Returns the new seq, or null when there was nothing to seal.
+async function runCheckpointForTenant(tenantId) {
+  const evDb = await eventsDbFor(tenantId);
+  const last = (await pgPool.query(
+    'SELECT seq, window_end, chain_hash FROM audit_checkpoints WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1', [tenantId]
+  )).rows[0];
+  const toTs = new Date(Date.now() - 30000).toISOString(); // 30s settle margin
+  let fromTs;
+  if (last) fromTs = new Date(last.window_end).toISOString();
+  else {
+    const min = await chSafe(`SELECT min(timestamp) FROM ${evDb}.events WHERE tenant_id = '${chEsc(tenantId)}'`, 'TabSeparated');
+    if (!min || min.startsWith('0000') || min.startsWith('1970')) return null;
+    fromTs = new Date(min.replace(' ', 'T') + 'Z').toISOString();
+  }
+  if (new Date(fromTs) >= new Date(toTs)) return null;
+  const { count, root } = await windowDigest(evDb, tenantId, fromTs, toTs);
+  if (count === 0) return null;
+  const seq = last ? last.seq + 1 : 1;
+  const prev = last && last.chain_hash ? last.chain_hash : '0'.repeat(64);
+  const cp = { seq, window_start: fromTs, window_end: toTs, event_count: count, merkle_root: root };
+  const chainHash = checkpointChainHash(prev, cp);
+  const signature = crypto.createHmac('sha256', AUDIT_SIGNING_KEY).update(chainHash).digest('hex');
+  const archiveKey = await archiveWindow(evDb, tenantId, seq, fromTs, toTs);
+  await pgPool.query(
+    `INSERT INTO audit_checkpoints (tenant_id, seq, window_start, window_end, event_count, merkle_root, prev_hash, chain_hash, signature, archive_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [tenantId, seq, fromTs, toTs, count, root, prev, chainHash, signature, archiveKey]
+  );
+  console.log(`[Checkpoint] ${tenantId} #${seq} · ${count} events · root=${root.slice(0, 10)} · archived=${archiveKey ? 'yes' : 'no'}`);
+  return seq;
+}
+
 async function runCheckpoint() {
+  let sealed = 0, tenants = 0;
   try {
-    const last = (await pgPool.query('SELECT seq, window_end, chain_hash FROM audit_checkpoints ORDER BY seq DESC LIMIT 1')).rows[0];
-    const toTs = new Date(Date.now() - 30000).toISOString(); // 30s settle margin
-    let fromTs;
-    if (last) fromTs = new Date(last.window_end).toISOString();
-    else {
-      const min = await chSafe('SELECT min(timestamp) FROM dam_analytics.events', 'TabSeparated');
-      if (!min || min.startsWith('0000')) return;
-      fromTs = new Date(min.replace(' ', 'T') + 'Z').toISOString();
+    const rows = (await pgPool.query('SELECT id FROM tenants')).rows;
+    tenants = rows.length;
+    for (const t of rows) {
+      try { if (await runCheckpointForTenant(t.id)) sealed++; }
+      catch (e) { console.log(`[Checkpoint] tenant ${t.id} failed: ${e.message}`); }
     }
-    if (new Date(fromTs) >= new Date(toTs)) return;
-    const { count, root } = await windowDigest(fromTs, toTs);
-    if (count === 0) return;
-    const seq = last ? last.seq + 1 : 1;
-    const prev = last && last.chain_hash ? last.chain_hash : '0'.repeat(64);
-    const cp = { seq, window_start: fromTs, window_end: toTs, event_count: count, merkle_root: root };
-    const chainHash = checkpointChainHash(prev, cp);
-    const signature = crypto.createHmac('sha256', AUDIT_SIGNING_KEY).update(chainHash).digest('hex');
-    const archiveKey = await archiveWindow(seq, fromTs, toTs);
-    await pgPool.query(
-      `INSERT INTO audit_checkpoints (seq, window_start, window_end, event_count, merkle_root, prev_hash, chain_hash, signature, archive_key)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [seq, fromTs, toTs, count, root, prev, chainHash, signature, archiveKey]
-    );
-    console.log(`[Checkpoint] #${seq} · ${count} events · root=${root.slice(0, 10)} · archived=${archiveKey ? 'yes' : 'no'}`);
-  } catch (e) { console.log('[Checkpoint] failed:', e.message); }
+  } catch (e) { console.log('[Checkpoint] failed:', e.message); return; }
+  // Always report the outcome. The previous silent `return` on an empty window is exactly why
+  // this going dead went unnoticed — a security control that stops must say so.
+  console.log(`[Checkpoint] cycle complete · ${sealed}/${tenants} tenant(s) sealed a window`);
 }
 setInterval(runCheckpoint, 180000);
 setTimeout(() => { initArchive().then(runCheckpoint); }, 25000);
 
-app.get('/api/audit/checkpoints', async (req, res) => {
-  const { rows } = await pgPool.query('SELECT seq, window_start, window_end, event_count, merkle_root, chain_hash, signature, archive_key, created_at FROM audit_checkpoints ORDER BY seq DESC LIMIT 50');
+// Both endpoints are tenant-scoped: chains are per-tenant, so an unscoped read would expose
+// another tenant's audit metadata.
+app.get('/api/audit/checkpoints', authRequired, async (req, res) => {
+  const { rows } = await pgPool.query(
+    'SELECT seq, window_start, window_end, event_count, merkle_root, chain_hash, signature, archive_key, created_at FROM audit_checkpoints WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 50',
+    [req.user.tenantId]
+  );
   res.json(rows.map((r) => ({ ...r, archived: !!r.archive_key })));
 });
 // Recompute every checkpoint against ClickHouse — detects deleted/altered events.
-app.get('/api/audit/checkpoints/verify', async (req, res) => {
-  const cps = (await pgPool.query('SELECT * FROM audit_checkpoints ORDER BY seq ASC')).rows;
+app.get('/api/audit/checkpoints/verify', authRequired, async (req, res) => {
+  const tenantId = req.user.tenantId;
+  const evDb = await eventsDbFor(tenantId);
+  const cps = (await pgPool.query('SELECT * FROM audit_checkpoints WHERE tenant_id = $1 ORDER BY seq ASC', [tenantId])).rows;
   let prev = '0'.repeat(64);
   const broken = [];
   for (const cp of cps) {
     const ws = new Date(cp.window_start).toISOString(), we = new Date(cp.window_end).toISOString();
-    const { count, root } = await windowDigest(ws, we);
+    const { count, root } = await windowDigest(evDb, tenantId, ws, we);
     const chainHash = checkpointChainHash(prev, { seq: cp.seq, window_start: ws, window_end: we, event_count: cp.event_count, merkle_root: cp.merkle_root });
     const sig = crypto.createHmac('sha256', AUDIT_SIGNING_KEY).update(cp.chain_hash).digest('hex');
     let reason = null;
