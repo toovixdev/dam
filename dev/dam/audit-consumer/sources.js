@@ -42,22 +42,31 @@ const eventhub = {
   enabled: (env) => !!env.EVENTHUB_CONNECTION_STRING,
   async start(ctx) {
     const { EventHubConsumerClient, earliestEventPosition, latestEventPosition } = require('@azure/event-hubs');
+    const { FileCheckpointStore } = require('./checkpoint-store');
     const hub = process.env.EVENTHUB_NAME || 'toovix-dam-audit';
     const group = process.env.EVENTHUB_CONSUMER_GROUP || '$Default';
     const token = process.env.AZURESQL_ENROLL_TOKEN || '';
-    // No BlobCheckpointStore yet → start at 'latest' by default (avoid re-reading history on
-    // restart). Set EVENTHUB_START=earliest to drain the buffered backlog for a test.
+    // startPosition applies ONLY to partitions with no stored checkpoint — i.e. the first run.
+    // Afterwards the store resumes exactly where the last processed event left off, so a restart
+    // no longer replays (and re-ingests) the retention window.
     const startPosition = process.env.EVENTHUB_START === 'earliest' ? earliestEventPosition : latestEventPosition;
-    const client = new EventHubConsumerClient(group, process.env.EVENTHUB_CONNECTION_STRING, hub);
+    const store = new FileCheckpointStore(process.env.EVENTHUB_CHECKPOINT_FILE || '/var/lib/toovix/eventhub-checkpoints.json');
+    const client = new EventHubConsumerClient(group, process.env.EVENTHUB_CONNECTION_STRING, hub, store);
     const sub = client.subscribe({
-      processEvents: async (events) => {
+      processEvents: async (events, context) => {
+        if (!events.length) return;
         for (const e of events) {
-          await ctx.handle(N.azureSqlAudit(e.body, token)); // at-least-once; durable checkpointing is a follow-up
+          await ctx.handle(N.azureSqlAudit(e.body, token));
         }
+        // Checkpoint once per batch, after the batch is handled. Delivery stays at-least-once —
+        // a crash between handling and checkpointing replays that batch — but the window is one
+        // batch rather than the entire hub.
+        try { await context.updateCheckpoint(events[events.length - 1]); }
+        catch (e) { ctx.log(`azure-eventhub: checkpoint failed: ${e.message}`); }
       },
       processError: async (err) => { ctx.log(`azure-eventhub error: ${err.message}`); },
     }, { startPosition, maxBatchSize: parseInt(process.env.MAX_INFLIGHT || '50', 10) });
-    ctx.log(`azure-eventhub: subscribed hub=${hub} group=${group} start=${process.env.EVENTHUB_START || 'latest'}`);
+    ctx.log(`azure-eventhub: subscribed hub=${hub} group=${group} start=${process.env.EVENTHUB_START || 'latest'} (checkpointed)`);
     return async () => { await sub.close().catch(() => {}); await client.close().catch(() => {}); };
   },
 };

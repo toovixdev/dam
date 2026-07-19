@@ -24,6 +24,7 @@ volumes:
   caddy-data:            # Caddy TLS certs + ACME account (persist across restarts)
   caddy-config:
   registry-data:         # self-hosted Docker registry (agent image distribution)
+  dam-consumer-state:    # Event Hub checkpoints (offsets survive consumer restarts)
 
 services:
 
@@ -532,8 +533,13 @@ services:
       EVENTHUB_NAME: ${EVENTHUB_NAME:-toovix-dam-audit}
       EVENTHUB_CONSUMER_GROUP: ${EVENTHUB_CONSUMER_GROUP:-toovix-dam}
       EVENTHUB_START: ${EVENTHUB_START:-latest}
+      # Applies only to partitions with no checkpoint (first run). Afterwards the consumer
+      # resumes from the stored offset, so restarts no longer replay and re-ingest the hub.
+      EVENTHUB_CHECKPOINT_FILE: /var/lib/toovix/eventhub-checkpoints.json
       AZURESQL_ENROLL_TOKEN: ${AZURESQL_ENROLL_TOKEN:-}
       CONTROL_PLANE: http://dam-api:3000
+    volumes:
+      - dam-consumer-state:/var/lib/toovix
     depends_on:
       - dam-api
     networks:
