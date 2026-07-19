@@ -129,6 +129,13 @@ func tailSqlServerAudit(cfg Config) {
 //
 // DB setup: an event session on sqlserver.sql_statement_completed / rpc_completed with the
 // server_principal_name + client_hostname actions, filtered to the target DB, to an event_file.
+//
+// AZURE SQL works through this same collector, with three differences (verified on appdb):
+//   - the event_file target must be a BLOB URL, and AUDIT_LOG must be the EXACT generated blob
+//     name — a '*' wildcard works for local paths but HANGS against blob storage;
+//   - the session is created ON DATABASE, and the principal action is `username`
+//     (`server_principal_name` does not exist there) — hence the COALESCE below;
+//   - DB_USER needs VIEW DATABASE STATE rather than VIEW SERVER STATE.
 func tailSqlServerXEvents(cfg Config) {
 	if cfg.DBUser == "" {
 		log.Fatalf("audit-forward(mssql/xevents): DB_USER/DB_PASSWORD required (reads the XE target over TDS)")
@@ -148,7 +155,10 @@ func tailSqlServerXEvents(cfg Config) {
 	// history. The XE file rolls over (max_file_size/max_rollover_files), which bounds the read.
 	const q = `SELECT file_offset, CONVERT(varchar(23), timestamp_utc, 126) AS ts,
 	    x.value('(event/data[@name="row_count"]/value)[1]','bigint') AS rows_out,
-	    x.value('(event/action[@name="server_principal_name"]/value)[1]','nvarchar(128)') AS principal,
+	    COALESCE(
+	      x.value('(event/action[@name="server_principal_name"]/value)[1]','nvarchar(128)'),
+	      x.value('(event/action[@name="username"]/value)[1]','nvarchar(128)')
+	    ) AS principal,
 	    x.value('(event/action[@name="client_hostname"]/value)[1]','nvarchar(256)') AS client_host,
 	    x.value('(event/data[@name="statement"]/value)[1]','nvarchar(max)') AS statement
 	  FROM sys.fn_xe_file_target_read_file(@path, NULL, NULL, NULL)

@@ -995,8 +995,19 @@ func scanTargets(cfg Config) ([]scanTarget, error) {
 // mssqlDSN builds a go-mssqldb URL for one database. encrypt=disable keeps the scan
 // cleartext (also lets the sniffer see it); TrustServerCertificate covers self-signed.
 func mssqlDSN(cfg Config, dbname string) string {
-	return fmt.Sprintf("sqlserver://%s:%s@%s:%s?database=%s&encrypt=disable&TrustServerCertificate=true&dial+timeout=8&connection+timeout=20",
-		url.QueryEscape(cfg.DBUser), url.QueryEscape(cfg.DBPass), cfg.TargetHost, cfg.TargetPort, url.QueryEscape(dbname))
+	// Azure SQL MANDATES TLS and rejects encrypt=disable outright, so a managed instance can't be
+	// reached with the self-managed default. Detected by hostname so Azure works with no extra
+	// config and on-prem behaviour is unchanged; MSSQL_ENCRYPT overrides either way.
+	encrypt := env("MSSQL_ENCRYPT", "")
+	if encrypt == "" {
+		if strings.HasSuffix(strings.ToLower(cfg.TargetHost), ".database.windows.net") {
+			encrypt = "true"
+		} else {
+			encrypt = "disable" // cleartext on the wire, so the sniffer can see the scan too
+		}
+	}
+	return fmt.Sprintf("sqlserver://%s:%s@%s:%s?database=%s&encrypt=%s&TrustServerCertificate=true&dial+timeout=8&connection+timeout=20",
+		url.QueryEscape(cfg.DBUser), url.QueryEscape(cfg.DBPass), cfg.TargetHost, cfg.TargetPort, url.QueryEscape(dbname), encrypt)
 }
 
 // resolveMSSQLDatabases turns DB_NAME into the SQL Server databases to scan:
