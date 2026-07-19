@@ -21,8 +21,11 @@ resource "google_sql_database_instance" "paas" {
     dynamic "database_flags" {
       for_each = var.enable_cloudsql_audit ? [1] : []
       content {
-        name  = "cloudsql_mysql_audit"
-        value = "on"
+        name = "cloudsql_mysql_audit"
+        # Case matters. The API rejects lowercase "on" with
+        #   "Failed to set cloudsql_mysql_audit: on was not an expected string"
+        # — allowed values are ON | OFF | FORCE | FORCE_PLUS_PERMANENT.
+        value = "ON"
       }
     }
 
