@@ -4923,6 +4923,19 @@ app.post('/api/agents/events', async (req, res) => {
   }));
   try { await chInsertEvents(tenantId, evs); }
   catch (e) { console.error('[events] ingest failed:', e.message); return res.status(502).json({ error: 'ingest failed' }); }
+  // Keep the cloud connector's heartbeat fresh when events arrive from an AGENTLESS source.
+  // A managed DB has no agent row, so the console decides it is monitored from
+  // cloud_connectors.last_ingest_at being within 15 minutes. That column used to be written by
+  // the API's own Pub/Sub loop; now that dam-audit-consumer owns the subscription, nothing
+  // would touch it and every PaaS database would drift to "unmonitored" while ingesting fine.
+  if (req.body.source === 'cloudsql-sink' || req.body.source === 'azuresql-eventhub') {
+    const provider = req.body.source === 'cloudsql-sink' ? 'gcp' : 'azure';
+    pgPool.query(
+      `UPDATE cloud_connectors SET ingest_status = 'ok', last_ingest_at = now(),
+              last_result = $3 WHERE tenant_id = $1 AND provider = $2`,
+      [tenantId, provider, `ingested ${evs.length} event(s)`]
+    ).catch((e) => console.error('[events] connector heartbeat failed:', e.message));
+  }
   // Someone changing the audit configuration is the one event that can hide every other
   // event, so it alerts directly here rather than waiting on a user-defined policy.
   for (const e of evs) {
