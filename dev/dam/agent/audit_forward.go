@@ -21,16 +21,26 @@ import (
 )
 
 func runAuditForward(cfg Config) {
-	// MongoDB has no audit log to tail (Community has no auditing at all) — its source is the
-	// profiler COLLECTION, read over the wire. So AUDIT_LOG is required for every engine but
-	// mongo, where the lock is keyed to the target instead.
+	// AUDIT_LOG is the path to tail for most engines, but two don't take one: MongoDB reads the
+	// profiler COLLECTION over the wire, and SQL Server XEvents with MSSQL_XE_SESSION DISCOVERS
+	// its .xel from the live session (so it can follow blob rollover). Both key their lock on the
+	// target instead of on a path.
 	isMongo := cfg.Engine == "mongodb" || cfg.Engine == "mongo"
-	if cfg.AuditLog == "" && !isMongo {
-		log.Fatalf("audit-forward: AUDIT_LOG (path to the native audit log) is required")
+	isOracle := cfg.Engine == "oracle"
+	xeSession := env("MSSQL_XE_SESSION", "")
+	xeDiscover := (cfg.Engine == "mssql" || cfg.Engine == "sqlserver") &&
+		strings.Contains(strings.ToLower(cfg.AuditSource), "xevent") && xeSession != ""
+	if cfg.AuditLog == "" && !isMongo && !isOracle && !xeDiscover {
+		log.Fatalf("audit-forward: AUDIT_LOG (path to the native audit log) is required (or set MSSQL_XE_SESSION for SQL Server XEvents auto-discovery)")
 	}
 	lockKey := cfg.AuditLog
 	if isMongo {
 		lockKey = fmt.Sprintf("mongodb-%s-%s-%s", cfg.TargetHost, cfg.TargetPort, mongoDatabase(cfg))
+	} else if isOracle {
+		// Oracle reads UNIFIED_AUDIT_TRAIL over SQL*Net, no path to tail — key the lock on target.
+		lockKey = fmt.Sprintf("oracle-%s-%s-%s", cfg.TargetHost, cfg.TargetPort, orDefault(cfg.DBName, "svc"))
+	} else if xeDiscover {
+		lockKey = fmt.Sprintf("mssql-xe-%s-%s-%s", cfg.TargetHost, cfg.TargetPort, xeSession)
 	}
 	// Single-instance guard: only ONE audit-forward agent per host+log may run. Two forwarders
 	// tailing the same log double every event — which happens when leftover systemd template
@@ -55,8 +65,10 @@ func runAuditForward(cfg Config) {
 		}
 	case "mongodb", "mongo":
 		tailMongoProfiler(cfg) // system.profile over the wire (see mongo_forward.go)
+	case "oracle":
+		tailOracleAudit(cfg) // UNIFIED_AUDIT_TRAIL over SQL*Net (see oracle_forward.go)
 	default:
-		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql/mssql/mongodb) — enrolled + idle", cfg.Engine)
+		log.Printf("audit-forward: engine %q not supported yet (mysql/mariadb/postgresql/mssql/mongodb/oracle) — enrolled + idle", cfg.Engine)
 		select {}
 	}
 }
@@ -131,11 +143,44 @@ func tailSqlServerAudit(cfg Config) {
 // server_principal_name + client_hostname actions, filtered to the target DB, to an event_file.
 //
 // AZURE SQL works through this same collector, with three differences (verified on appdb):
-//   - the event_file target must be a BLOB URL, and AUDIT_LOG must be the EXACT generated blob
-//     name — a '*' wildcard works for local paths but HANGS against blob storage;
+//   - the event_file target is a BLOB URL with a GENERATED name that CHANGES on rollover, and a
+//     '*' wildcard hangs against blob storage — so set MSSQL_XE_SESSION and let the collector
+//     discover the current file from the live session (it then follows rollover automatically),
+//     rather than pinning AUDIT_LOG to one blob name;
 //   - the session is created ON DATABASE, and the principal action is `username`
 //     (`server_principal_name` does not exist there) — hence the COALESCE below;
 //   - DB_USER needs VIEW DATABASE STATE rather than VIEW SERVER STATE.
+// discoverXEFilePath asks the LIVE event session which .xel file it is currently writing to,
+// reading the filename straight out of the target's XML in the DMV. This is what makes rollover
+// survivable: when a file fills and SQL Server rolls to a new one, the collector can follow it
+// instead of being stuck on a now-static path it was handed at startup.
+//
+// The DMV is scope-specific: Azure SQL sessions are DATABASE-scoped (sys.dm_xe_database_*),
+// self-managed sessions are SERVER-scoped (sys.dm_xe_*). We try the database-scoped view first
+// (it also works when pointed at a contained DB) and fall back to the server-scoped one.
+func discoverXEFilePath(db *sql.DB, sessionName string) (string, error) {
+	const dbScoped = `SELECT CAST(t.target_data AS XML).value('(EventFileTarget/File/@name)[1]','nvarchar(400)')
+	  FROM sys.dm_xe_database_session_targets t
+	  JOIN sys.dm_xe_database_sessions s ON s.address = t.event_session_address
+	  WHERE s.name = @name AND t.target_name = 'event_file'`
+	const srvScoped = `SELECT CAST(t.target_data AS XML).value('(EventFileTarget/File/@name)[1]','nvarchar(400)')
+	  FROM sys.dm_xe_session_targets t
+	  JOIN sys.dm_xe_sessions s ON s.address = t.event_session_address
+	  WHERE s.name = @name AND t.target_name = 'event_file'`
+	var path sql.NullString
+	err := db.QueryRow(tagAgentQuery(dbScoped), sql.Named("name", sessionName)).Scan(&path)
+	if err != nil || !path.Valid || path.String == "" {
+		err = db.QueryRow(tagAgentQuery(srvScoped), sql.Named("name", sessionName)).Scan(&path)
+	}
+	if err != nil {
+		return "", err
+	}
+	if !path.Valid || path.String == "" {
+		return "", fmt.Errorf("event session %q not found or has no event_file target (is it started?)", sessionName)
+	}
+	return path.String, nil
+}
+
 func tailSqlServerXEvents(cfg Config) {
 	if cfg.DBUser == "" {
 		log.Fatalf("audit-forward(mssql/xevents): DB_USER/DB_PASSWORD required (reads the XE target over TDS)")
@@ -177,6 +222,31 @@ func tailSqlServerXEvents(cfg Config) {
 	// extractions per row) timed out at 20s. A bulk insert is all it takes to tip it over.
 	var lastOffset sql.NullInt64
 
+	// Path resolution. With MSSQL_XE_SESSION set, the collector DISCOVERS the current .xel from
+	// the live session and re-checks it every poll, so it follows rollover automatically — the
+	// robust choice for Azure SQL, where the blob name is generated and a '*' wildcard hangs.
+	// Without it, AUDIT_LOG is used literally (on-prem can pass a wildcard, which
+	// fn_xe_file_target_read_file expands across rollover files natively).
+	sessionName := env("MSSQL_XE_SESSION", "")
+	curPath := cfg.AuditLog
+	resolvePath := func() string {
+		if sessionName == "" {
+			return cfg.AuditLog
+		}
+		p, err := discoverXEFilePath(db, sessionName)
+		if err != nil {
+			log.Printf("audit-forward(mssql/xevents): discover current file for session %q: %v — keeping %s", sessionName, err, orDefault(curPath, "(none)"))
+			return curPath
+		}
+		return p
+	}
+	if sessionName != "" {
+		if p := resolvePath(); p != "" {
+			curPath = p
+			log.Printf("audit-forward(mssql/xevents): session %q currently writing %s", sessionName, curPath)
+		}
+	}
+
 	// Seed the resume point with a CHEAP query — MAX(file_offset) with no XML parsing — rather
 	// than by reading the whole file once. On an accumulated target the full parse is exactly
 	// what times out, and if the seeding pass times out the offset is never established, so
@@ -184,23 +254,35 @@ func tailSqlServerXEvents(cfg Config) {
 	// current end also gives the intended "don't replay history on (re)start" behaviour.
 	if err := db.QueryRow(tagAgentQuery(
 		`SELECT MAX(file_offset) FROM sys.fn_xe_file_target_read_file(@path, NULL, NULL, NULL)`),
-		sql.Named("path", cfg.AuditLog)).Scan(&lastOffset); err != nil {
-		log.Printf("audit-forward(mssql/xevents): could not seed the read offset (%v) — starting from the beginning of %s", err, cfg.AuditLog)
+		sql.Named("path", curPath)).Scan(&lastOffset); err != nil {
+		log.Printf("audit-forward(mssql/xevents): could not seed the read offset (%v) — starting from the beginning of %s", err, curPath)
 	} else if lastOffset.Valid {
 		log.Printf("audit-forward(mssql/xevents): resuming after file_offset %d (history not replayed)", lastOffset.Int64)
 		first = false // nothing before this point should be forwarded, so no seeding pass needed
 	}
 
 	for {
+		// Follow rollover: if the live session has moved to a new file, switch to it and read
+		// from its start. A rollover file's contents all postdate our last read of the old file
+		// (events fill one file, then the next — no overlap), so everything in it is new and
+		// should be forwarded; reset the offset and the dedupe set accordingly.
+		if sessionName != "" {
+			if p := resolvePath(); p != "" && p != curPath {
+				log.Printf("audit-forward(mssql/xevents): file rolled over %s → %s (following)", curPath, p)
+				curPath = p
+				lastOffset = sql.NullInt64{}
+				seen = map[string]bool{}
+			}
+		}
 		initFile := sql.Named("initFile", nil)
 		initOffset := sql.Named("initOffset", nil)
 		if lastOffset.Valid {
-			initFile = sql.Named("initFile", cfg.AuditLog)
+			initFile = sql.Named("initFile", curPath)
 			initOffset = sql.Named("initOffset", lastOffset.Int64)
 		}
-		rows, err := db.Query(tagAgentQuery(q), sql.Named("path", cfg.AuditLog), initFile, initOffset)
+		rows, err := db.Query(tagAgentQuery(q), sql.Named("path", curPath), initFile, initOffset)
 		if err != nil {
-			log.Printf("audit-forward(mssql/xevents): read %s: %v — is the XE session started (STATE=START), the path correct, and does DB_USER have VIEW SERVER STATE? retrying", cfg.AuditLog, err)
+			log.Printf("audit-forward(mssql/xevents): read %s: %v — is the XE session started (STATE=START), the path correct, and does DB_USER have VIEW SERVER STATE? retrying", curPath, err)
 			time.Sleep(time.Duration(pollSec) * time.Second)
 			continue
 		}
