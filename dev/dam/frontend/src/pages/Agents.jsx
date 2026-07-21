@@ -555,13 +555,18 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   const auditSrc = eng === 'mssql'
     ? (xe ? 'xevents' : 'sql_server_audit')
     : ({ oracle: 'unified_audit_trail', postgresql: 'pgaudit', mysql: 'general_log', mariadb: 'general_log', mongodb: 'profiler' }[eng] || 'native_audit');
-  // AgentLite reads this native source — a file on the host for MySQL/PG, a TDS-polled target for SQL Server.
+  // AgentLite reads this native source. MySQL/PG tail a local file; SQL Server / MongoDB /
+  // Oracle poll over the wire and take no AUDIT_LOG (Mongo/Oracle: none; Azure SQL XEvents:
+  // MSSQL_XE_SESSION instead — see below).
+  const fileEngines = ['mysql', 'mariadb', 'postgresql'];
   const auditLog = eng === 'mssql'
     ? (xe ? 'C:\\SQLAudit\\ToovixXE*.xel' : 'C:\\SQLAudit\\*.sqlaudit')
-    : ({ mysql: '/var/log/mysql/general.log', mariadb: '/var/log/mysql/general.log', postgresql: '/var/log/postgresql/pgaudit.log', oracle: '<UNIFIED_AUDIT_TRAIL>', mongodb: '/var/log/mongodb/audit.json' }[eng] || '<native-audit-log-path>');
-  // AgentLite audit-forward is MySQL/MariaDB-only in the agent today — warn for anything else.
-  const warn = (agentless && !['mysql', 'mariadb'].includes(eng))
-    ? `# ⚠ AgentLite audit-forward currently supports MySQL/MariaDB only — ${eng} is NOT implemented\n#   yet: the agent enrolls and idles (no capture). For PostgreSQL use network or host mode.\n\n`
+    : ({ mysql: '/var/log/mysql/general.log', mariadb: '/var/log/mysql/general.log', postgresql: '/var/log/postgresql/pgaudit.log' }[eng] || '');
+  // AgentLite audit-forward now supports mysql/mariadb/postgresql/mssql/mongodb/oracle. No warning
+  // for those; only genuinely unimplemented engines idle after enroll.
+  const supported = ['mysql', 'mariadb', 'postgresql', 'mssql', 'mongodb', 'oracle'];
+  const warn = (agentless && !supported.includes(eng))
+    ? `# ⚠ AgentLite audit-forward does not support ${eng} yet — the agent enrolls and idles (no capture).\n#   Use network, host, or inline-proxy capture mode for this engine.\n\n`
     : '';
   const env = [
     `MODE=${agentless ? 'audit-forward' : m}`,
@@ -584,16 +589,20 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   }
   if (agentless) {
     // AgentLite: a lightweight forwarder that reads the DB's native telemetry — no wire tap, no
-    // path change. MySQL/PG tail a local file (so it runs ON the DB host); SQL Server POLLS the
-    // audit / XEvents target over TDS, so it can run on any Linux host that reaches <db>:1433.
-    env.push(
-      `AUDIT_SOURCE=${auditSrc}`,
-      `AUDIT_LOG=${auditLog}`,
-    );
-    // SQL Server reads its telemetry over TDS, so a login is required even without classification:
-    // CONTROL SERVER for the audit file, VIEW SERVER STATE for Extended Events.
-    if (eng === 'mssql') {
-      env.push(`DB_USER=${opts.dbUser || '<sql-login>'}`, `DB_PASSWORD=${opts.dbPass || '<password>'}`);
+    // path change. MySQL/PG tail a local file (so it runs ON the DB host); SQL Server / MongoDB /
+    // Oracle POLL over the wire, so they can run on any Linux host that reaches the DB.
+    env.push(`AUDIT_SOURCE=${auditSrc}`);
+    // AUDIT_LOG only applies to the file/blob-path engines. MongoDB and Oracle have no path;
+    // Azure SQL XEvents uses MSSQL_XE_SESSION instead (auto-discovers the blob + follows rollover).
+    if (auditLog) env.push(`AUDIT_LOG=${auditLog}`);
+    else if (eng === 'mssql' && xe) env.push('MSSQL_XE_SESSION=ToovixXE  # Azure SQL: auto-discovers the .xel blob');
+    // The polling engines read telemetry over the wire, so a login is required even without
+    // classification: SQL Server (CONTROL SERVER / VIEW [DATABASE] STATE), MongoDB (read +
+    // clusterMonitor), Oracle (AUDIT_VIEWER + SELECT_CATALOG_ROLE).
+    if (eng === 'mssql' || eng === 'mongodb' || eng === 'oracle') {
+      env.push(`DB_USER=${opts.dbUser || '<db-login>'}`, `DB_PASSWORD=${opts.dbPass || '<password>'}`);
+      if (eng === 'mongodb') env.push(`DB_NAME=${opts.dbName || '<database>'}`);
+      if (eng === 'oracle') env.push(`ORACLE_SERVICE=${opts.oracleService || '<service_name>'}`);
     }
     // Publish to the Pub/Sub audit bus (auth via the host VM's service account / metadata token)
     // instead of POSTing the control plane. Needs the VM SA to hold roles/pubsub.publisher.

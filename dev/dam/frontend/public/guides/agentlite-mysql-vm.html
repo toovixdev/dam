@@ -65,11 +65,11 @@
   <header class="hero">
     <p class="eyebrow">TooVix DAM · AgentLite setup guide</p>
     <h1>Connect a self-managed database with AgentLite</h1>
-    <p style="color:var(--muted);margin:0 0 14px;max-width:64ch">Monitor a <b>MySQL</b>, <b>PostgreSQL</b>, or <b>MongoDB</b> database on a Linux VM — in <b>GCP, AWS, or Azure</b> — using the AgentLite (audit-forward) approach. The steps are identical across clouds; only the per-engine telemetry setup (§2) and outbound-egress (§7) differ. <b>SQL Server</b> and <b>MongoDB</b> take a different path — see §2.</p>
+    <p style="color:var(--muted);margin:0 0 14px;max-width:64ch">Monitor a <b>MySQL</b>, <b>PostgreSQL</b>, <b>SQL Server</b>, <b>MongoDB</b>, or <b>Oracle</b> database — on a VM or a managed service (Cloud SQL, RDS, Azure SQL, Atlas, Autonomous DB) — in <b>GCP, AWS, Azure, or OCI</b> — using the AgentLite (audit-forward) approach. The steps are identical across clouds; only the per-engine telemetry setup (§2) and outbound-egress (§7) differ.</p>
     <div class="meta">
       <span class="chip">⏱ <b>15–20 min</b></span>
-      <span class="chip">🔑 <b>sudo</b> on the DB VM + DB admin</span>
-      <span class="chip">🖥 Linux x86-64 · MySQL 5.7/8.x · MariaDB 10.x · PostgreSQL 12+ · SQL Server 2017+ · MongoDB 4.4+</span>
+      <span class="chip">🔑 DB admin · <b>sudo</b> only for MySQL/PG file-tailing</span>
+      <span class="chip">🖥 Linux x86-64 agent · MySQL · MariaDB · PostgreSQL 12+ · SQL Server 2017+ · MongoDB 4.4+ · Oracle 19c/23ai</span>
     </div>
   </header>
 
@@ -90,19 +90,33 @@
   </div>
 
   <h2 id="what">1. What AgentLite is (and what it isn't)</h2>
-  <p><b>AgentLite</b> is a lightweight forwarder that reads <b>telemetry the database already produces</b> and ships each statement to TooVix DAM. For <b>MySQL and PostgreSQL</b> it tails a log file <b>on the database host</b>. For <b>SQL Server and MongoDB</b> there is no text log to tail, so it <b>polls the database's own telemetry over the network</b> — those two need a DB login but can run on a <b>separate host</b> (see §2).</p>
+  <p><b>AgentLite</b> is a lightweight forwarder that reads <b>telemetry the database already produces</b> and ships each statement to TooVix DAM. How it reads that telemetry depends on the engine: <b>MySQL / PostgreSQL</b> tail a log file <b>on the database host</b>; <b>SQL Server / MongoDB / Oracle</b> have no text log, so the agent <b>polls the database's telemetry over the network</b> (a DB login, no file) and can run on <b>any</b> host that reaches the DB — which is how managed services (Azure SQL, RDS, Autonomous DB, Atlas) are covered.</p>
   <ul>
     <li><span class="ok">✅ No wire tap, no proxy, no path change</span> — it reads telemetry the database already produces.</li>
-    <li><span class="ok">✅ Transport-independent</span> — because it reads what the DB logs <em>after</em> decryption, it captures <b>TLS-encrypted</b> client sessions too.</li>
+    <li><span class="ok">✅ Transport-independent</span> — because it reads what the DB records <em>after</em> decryption, it captures <b>TLS-encrypted</b> client sessions too.</li>
     <li><span class="ok">✅ Works on private, no-public-IP databases</span> — the agent only makes <b>outbound</b> connections to DAM; DAM never connects into your network.</li>
     <li><span class="warn-i">⚠️ Detective only</span> — it observes and alerts <b>after the fact</b>; it <b>cannot block</b> a query. (Use Inline Proxy mode if you need prevention.)</li>
-    <li><span class="warn-i">⚠️ Records all SQL</span> — the general log captures every statement from every session in cleartext on the VM. Treat the log file as sensitive (see §10).</li>
+    <li><span class="warn-i">⚠️ Records real activity in cleartext</span> — the audit source contains every audited statement, including PII/PCI in query text. Treat it as sensitive (see §10).</li>
   </ul>
   <div class="flow">DB telemetry  →  AgentLite forwarder  →  TooVix DAM  →  Database Activity view
- (MySQL general log / PostgreSQL log /    (HTTPS, or an audit stream)
-  SQL Server audit / MongoDB profiler)</div>
-  <p><b>Requirements:</b> Linux VM <b>x86-64 (amd64)</b> (arm64/Graviton not yet supported) · <b>MySQL 5.7/8.x, MariaDB 10.x, PostgreSQL 12+, SQL Server 2017+, or MongoDB 4.4+</b> · <b>outbound HTTPS (443)</b> from the VM to your DAM control-plane URL (see §7).</p>
-  <aside class="warn"><b>SQL Server?</b> AgentLite audit-forward doesn't apply — SQL Server Audit is a <b>binary</b> <code>.sqlaudit</code> trail, not a text log a forwarder can tail. For <b>Azure SQL / managed SQL Server</b>, use the <b>Agentless</b> path (DB Auditing → Event Hub → DAM). See <a href="#log">§2 → SQL Server</a>.</aside>
+ (MySQL/PG log · SQL Server audit/XEvents ·   (HTTPS, or an audit stream)
+  MongoDB profiler · Oracle unified audit)</div>
+  <p><b>Requirements:</b> agent host <b>Linux x86-64 (amd64)</b> (arm64/Graviton not yet supported; the agent host is <b>not</b> the DB host for SQL Server / Oracle / MongoDB / managed services) · <b>MySQL 5.7/8.x, MariaDB 10.x, PostgreSQL 12+, SQL Server 2017+, MongoDB 4.4+, or Oracle 19c/23ai</b> · <b>outbound HTTPS (443)</b> from the agent host to your DAM control-plane URL (see §7).</p>
+
+  <h3>What each source can tell you — and the row-count matrix</h3>
+  <p>The audit source determines what DAM can detect. The capability that differs most is the <b>row count</b> — how <em>much</em> data a statement touched — which powers <b>mass-read / exfiltration</b> detection. Without it, <code>SELECT * FROM customers</code> returning one row and returning a million look identical.</p>
+  <table>
+    <thead><tr><th>Engine</th><th>AgentLite source</th><th>Row counts?</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>MySQL / MariaDB</td><td>general query log</td><td>❌</td><td>for row counts use the host (eBPF) or network agent mode</td></tr>
+      <tr><td>PostgreSQL</td><td>pgAudit / statement log</td><td>❌</td><td>as above</td></tr>
+      <tr><td>SQL Server</td><td><b>Extended Events</b></td><td>✅ <b>yes</b></td><td>prefer over Audit; works on Azure SQL too (§2)</td></tr>
+      <tr><td>SQL Server</td><td>SQL Server Audit</td><td>❌</td><td>cleaner object-level scoping, but no volume</td></tr>
+      <tr><td>MongoDB</td><td>database profiler</td><td>⚠️ partial</td><td>first cursor batch only unless <code>MONGO_INCLUDE_GETMORE=true</code></td></tr>
+      <tr><td>Oracle</td><td>unified audit trail</td><td>✅ <b>yes</b></td><td>recovered from <code>V$SQLSTATS</code> (exact for ad-hoc, estimated for app traffic)</td></tr>
+    </tbody>
+  </table>
+  <aside><b>You don't need volume on every database — only where the regulated data lives.</b> Where a source has no row count, use the <b>XEvents / unified-audit</b> option for that engine, or deploy an <b>agent capture mode</b> (network / host / inline-proxy) that reads the wire directly. Ask your DAM operator which fits.</aside>
 
   <hr />
 
@@ -162,7 +176,17 @@ ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- STA
   <p>Agent → <code>AUDIT_SOURCE=xevents</code> · <code>AUDIT_LOG=C:\SQLAudit\ToovixXE*.xel</code></p>
 
   <aside><b>Both sources need a DB login</b> (the agent reads telemetry over TDS, not from disk): set <code>DB_USER</code>/<code>DB_PASSWORD</code> with <b>CONTROL SERVER</b> (Audit) or <b>VIEW SERVER STATE</b> (XEvents). Run the collector on any Linux host that can reach <code>&lt;db&gt;:1433</code> — set <code>TARGET_HOST</code> to the <b>SQL Server's</b> address, which is how DAM identifies the instance.</aside>
-  <p><b>Azure SQL / Managed Instance (PaaS)</b> can't host any collector — use <b>Agentless</b> instead (database-level Auditing → Event Hub, consumed by the DAM connector; verified ~2-min end-to-end). <b>Must be <em>database</em>-level</b> — server-level auditing with a DB-scoped diagnostic setting captures nothing.</p>
+  <h4>Azure SQL Database (PaaS) — two ways, and one gives row counts</h4>
+  <p>You can't install anything on Azure SQL, but you have two routes, and they are <b>not</b> equivalent.</p>
+  <p><b>Option A — Extended Events to Blob (recommended: carries ROW COUNTS).</b> Azure SQL supports XEvents with a blob-storage target, and the <b>same <code>xevents</code> collector reads it over TDS</b>, running on any Linux host inside the VNet. This is the only Azure-SQL route with row counts. Session is created <code>ON DATABASE</code>; needs a storage account + container, a scoped credential (which needs <code>CREATE MASTER KEY</code> first), and SAS permissions <code>rwl</code>. The principal action is <code>sqlserver.username</code> — <code>server_principal_name</code> does <b>not</b> exist on Azure SQL:</p>
+  <pre><code>CREATE EVENT SESSION ToovixXE ON DATABASE
+  ADD EVENT sqlserver.sql_statement_completed (ACTION (sqlserver.username, sqlserver.client_hostname, sqlserver.database_name)),
+  ADD EVENT sqlserver.rpc_completed          (ACTION (sqlserver.username, sqlserver.client_hostname, sqlserver.database_name))
+  ADD TARGET package0.event_file (SET filename='https://&lt;acct&gt;.blob.core.windows.net/xevents/appdb.xel', max_file_size=500)
+  WITH (MAX_DISPATCH_LATENCY=5 SECONDS, STARTUP_STATE=ON);
+ALTER EVENT SESSION ToovixXE ON DATABASE STATE = START;</code></pre>
+  <p>Agent → <code>AUDIT_SOURCE=xevents</code> · <code>DB_USER</code> needs <b>VIEW DATABASE STATE</b> · set <b><code>MSSQL_XE_SESSION=ToovixXE</code></b> and <b>omit <code>AUDIT_LOG</code></b>. With the session name set the agent discovers the current <code>.xel</code> blob from the live session and <b>follows rollover automatically</b> — necessary because the blob name is generated and changes on rollover, and a <code>*</code> wildcard hangs against blob storage. The agent must run <b>inside the VNet</b> (Azure SQL public access is normally disabled behind a private endpoint).</p>
+  <p><b>Option B — SQL Auditing → Event Hub (agentless, no row counts).</b> Database-level Auditing routed to an Event Hub, consumed by the DAM connector — no agent at all. Simpler, but <b>no row counts</b>, and object-level actions vs. batch auditing trade per-statement detail against volume (you can't get both). <b>Must be <em>database</em>-level</b> — server-level auditing with a DB-scoped diagnostic setting captures nothing. Ask your DAM operator to enable the connector for your subscription.</p>
   <p><b>Classification works for SQL Server either way</b> — it uses a read-only login over TDS, not the audit trail.</p>
 
   <h3>🍃 MongoDB — database profiler</h3>
@@ -227,6 +251,20 @@ db.createUser({
   <aside><b>Verify (MySQL/PG):</b> <code>sudo tail -f &lt;AUDIT_LOG&gt;</code> and run a query elsewhere — lines should appear. AgentLite tails the live file and handles rotation/truncation automatically; ensure <code>logrotate</code> + disk headroom on busy DBs.<br />
   <b>Verify (MongoDB):</b> run a query, then <code>db.system.profile.find().sort({ts:-1}).limit(5)</code> — documents should appear.</aside>
 
+  <h3>🅾️ Oracle — unified audit trail</h3>
+  <p>Oracle's telemetry is <b>Unified Auditing</b>: every audited action lands in the view <code>UNIFIED_AUDIT_TRAIL</code>. Like SQL Server there's no text log to tail, so the collector <b>polls the view over SQL*Net</b> with a timestamp watermark. It runs on any host that can reach <code>1521</code> with a read-only login, so the <b>same path covers Oracle on a VM, on RDS, and on OCI Autonomous DB</b> equally.</p>
+  <p>Enable an audit policy for the actions you care about (23ai is pure-unified by default; on 19c ensure unified auditing is on):</p>
+  <pre><code>CREATE AUDIT POLICY toovix_dml ACTIONS SELECT, INSERT, UPDATE, DELETE;
+AUDIT POLICY toovix_dml BY &lt;appuser&gt;;   <span class="cmt">-- or omit BY to audit all users</span></code></pre>
+  <p>Create the read-only monitoring login:</p>
+  <pre><code>CREATE USER dam_svc IDENTIFIED BY "&lt;strong-password&gt;";
+GRANT CREATE SESSION TO dam_svc;
+GRANT AUDIT_VIEWER TO dam_svc;          <span class="cmt">-- reads UNIFIED_AUDIT_TRAIL</span>
+GRANT SELECT_CATALOG_ROLE TO dam_svc;   <span class="cmt">-- reads V$SQLSTATS (row counts) + ALL_TAB_COLUMNS (classify)</span></code></pre>
+  <p>Agent → <code>DB_ENGINE=oracle</code> · <code>AUDIT_SOURCE=unified_audit_trail</code> · <code>TARGET_PORT=1521</code> · <code>ORACLE_SERVICE=&lt;service_name&gt;</code> · <code>DB_USER=dam_svc</code> · <code>DB_PASSWORD=…</code>. <b>No <code>AUDIT_LOG</code></b> — the source is the database connection.</p>
+  <aside><b>Row counts (✅ with a caveat).</b> <code>UNIFIED_AUDIT_TRAIL</code> carries no rows-returned column, so the count is recovered by joining <code>V$SQLSTATS</code> on the statement. It's <b>exact</b> for ad-hoc statements (<code>SELECT * FROM customers → 25</code>) and an <b>estimate</b> (per-execution average) for parameterised app traffic, where <code>ROWS_PROCESSED</code> is cumulative. <code>V$SQLSTATS</code> (not <code>V$SQL</code>) is used deliberately — <code>V$SQL</code> cursors age out of the shared pool within seconds.</aside>
+  <aside><b>Verify (Oracle):</b> run a query, then as <code>dam_svc</code>: <code>SELECT sql_text FROM unified_audit_trail ORDER BY event_timestamp DESC FETCH FIRST 5 ROWS ONLY;</code></aside>
+
   <hr />
 
   <h2 id="user">3. Step 2 — (Optional) Create a read-only user for classification</h2>
@@ -242,7 +280,9 @@ GRANT CONNECT ON DATABASE &lt;db&gt; TO dam_svc;
 \c &lt;db&gt;
 GRANT USAGE ON SCHEMA public TO dam_svc;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;</code></pre>
-  <p><code>dam_svc</code> is <b>read-only</b> — it inspects schema/metadata but can never modify data. Pass it as <code>DB_USER</code>/<code>DB_PASSWORD</code> with <code>CLASSIFY=true</code> (PostgreSQL also needs <code>DB_NAME</code>).</p>
+  <p><b>SQL Server:</b> any read-only login works — classification reads <code>INFORMATION_SCHEMA.COLUMNS</code> over TDS, reusing the same <code>DB_USER</code>/<code>DB_PASSWORD</code> as capture.</p>
+  <p><b>Oracle:</b> the capture login already covers it — <code>SELECT_CATALOG_ROLE</code> lets <code>dam_svc</code> read <code>ALL_TAB_COLUMNS</code>. Just add <code>CLASSIFY=true</code>.</p>
+  <p><code>dam_svc</code> is <b>read-only</b> — it inspects schema/metadata but can never modify data. Pass it as <code>DB_USER</code>/<code>DB_PASSWORD</code> with <code>CLASSIFY=true</code> (PostgreSQL/Oracle also need <code>DB_NAME</code> / <code>ORACLE_SERVICE</code>).</p>
   <aside class="warn"><b>MongoDB: classification is not supported yet.</b> <code>CLASSIFY=true</code> is ignored for <code>DB_ENGINE=mongodb</code> — the scanner reads <code>information_schema</code>, which has no MongoDB equivalent (collections are schemaless, so classifying them means sampling documents). Capture still tags statements whose <b>text</b> contains sensitive field names (<code>email</code>, <code>aadhaar</code>, <code>ssn</code>, <code>card</code>…), but a read of a sensitive collection that doesn't name such a field — e.g. <code>db.kyc_documents.find({status:"verified"})</code> — will arrive <b>untagged</b>. If you rely on sensitive-collection policies, raise this with your DAM operator.</aside>
 
   <hr />
@@ -326,6 +366,26 @@ AgentLite audit-forward tailing mongodb-10.0.0.10-27017-&lt;db&gt; (source=profi
 audit-forward(mongodb): profiler already at level 2 (slowms=0)
 audit-forward(mongodb): polling &lt;db&gt;.system.profile every 10s (watermark …)
 [capture] SELECT  rows=2  app  db.users.find({"country":"UK"})</code></pre>
+
+  <h3>SQL Server (XEvents) and Oracle variants</h3>
+  <p>Same shape — no <code>AUDIT_LOG</code> file mount, connection supplied instead. Run on any Linux host that can reach the DB (for Azure SQL, inside the VNet):</p>
+  <pre><code><span class="cmt"># SQL Server / Azure SQL — Extended Events (row counts)</span>
+docker run -d --name toovix-agent-audit --restart unless-stopped \
+  -e MODE=audit-forward -e DB_ENGINE=mssql -e AUDIT_SOURCE=xevents \
+  -e TARGET_HOST=&lt;sqlserver-addr&gt; -e TARGET_PORT=1433 -e DB_NAME=&lt;db&gt; \
+  -e DB_USER=&lt;login&gt; -e DB_PASSWORD=&lt;password&gt; \
+  -e MSSQL_XE_SESSION=ToovixXE <span class="cmt"># Azure SQL: auto-discovers the blob + follows rollover</span> \
+  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} -e CONTROL_PLANE=${CONTROL_PLANE} \
+  &lt;your-dam-agent-image&gt;
+<span class="cmt"># On-prem SQL Server instead of MSSQL_XE_SESSION: -e AUDIT_LOG='C:\SQLAudit\ToovixXE*.xel'</span>
+
+<span class="cmt"># Oracle — unified audit trail (row counts)</span>
+docker run -d --name toovix-agent-audit --restart unless-stopped \
+  -e MODE=audit-forward -e DB_ENGINE=oracle -e AUDIT_SOURCE=unified_audit_trail \
+  -e TARGET_HOST=&lt;oracle-addr&gt; -e TARGET_PORT=1521 -e ORACLE_SERVICE=&lt;service_name&gt; \
+  -e DB_USER=dam_svc -e DB_PASSWORD=&lt;password&gt; \
+  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} -e CONTROL_PLANE=${CONTROL_PLANE} \
+  &lt;your-dam-agent-image&gt;</code></pre>
   <p><b>A healthy start looks like:</b></p>
   <pre><code>=== TooVix DAM Agent · mode=audit-forward engine=mysql target=…:3306 ===
 enrolled: agent=… instance=… tenant=…
@@ -428,6 +488,11 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
       <tr><td>MongoDB: agent starts but captures nothing</td><td>1) <code>db.getProfilingStatus()</code> → is <code>was: 2</code>? 2) Does <code>DB_NAME</code> match the database the queries actually run against? Operations on <b>other</b> databases, and on <code>admin</code>/<code>local</code>/<code>config</code>, are deliberately ignored. 3) Check <code>db.system.profile.countDocuments()</code> grows.</td></tr>
       <tr><td>MongoDB: big reads show <code>row_count</code> ≈ 101</td><td>Expected — that's the first cursor batch. Set <code>MONGO_INCLUDE_GETMORE=true</code> (§2).</td></tr>
       <tr><td>MongoDB: gaps in the trail under load</td><td><code>system.profile</code> is <b>capped</b> and wrapped before the agent polled. Lower <code>AUDIT_POLL_SEC</code> and/or enlarge the collection (§2).</td></tr>
+      <tr><td>SQL Server/Azure: <code>read … i/o timeout</code> then capture stops</td><td>The XEvents file grew large. The agent reads incrementally and follows rollover, but a very large existing <code>.xel</code> can exceed the connect timeout on the seeding read — raise <code>MSSQL_CONN_TIMEOUT_SEC</code> (default 60), or cap <code>max_file_size</code> on the event session.</td></tr>
+      <tr><td>Azure SQL: captures nothing after a while</td><td>The <code>.xel</code> blob rolled to a new name. Set <b><code>MSSQL_XE_SESSION</code></b> so the agent discovers the live file and follows rollover, instead of pinning <code>AUDIT_LOG</code> to one blob name.</td></tr>
+      <tr><td>SQL Server: <code>server_principal_name is not available</code></td><td>You're on <b>Azure SQL</b> — its principal action is <code>sqlserver.username</code>. Use the Azure session DDL in §2.</td></tr>
+      <tr><td>Oracle: <code>unified_audit_trail</code> empty</td><td>No audit policy enabled/assigned (<code>AUDIT POLICY … BY &lt;user&gt;</code>), or unified auditing off on 19c. Confirm <code>dam_svc</code> has <code>AUDIT_VIEWER</code>.</td></tr>
+      <tr><td>Oracle: statements captured but <code>row_count</code> is 0</td><td>The cursor's stats aren't in <code>V$SQLSTATS</code>, or <code>dam_svc</code> lacks <code>SELECT_CATALOG_ROLE</code>. Row counts are best-effort; capture works without them.</td></tr>
     </tbody>
   </table>
 
@@ -435,15 +500,15 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
 
   <h2 id="security">10. Security &amp; privacy notes</h2>
   <ul>
-    <li><b>The general query log contains every SQL statement</b> (from all apps and users) in cleartext on the VM. Restrict file permissions, enable rotation, and treat it as sensitive data.</li>
+    <li><b>The audit source contains every audited statement</b> (from all apps and users) in cleartext — a general-log file on disk (MySQL/PG), or query text in the audit view (SQL Server/Oracle/Mongo). Restrict access to it and treat it as sensitive data.</li>
     <li><b>AgentLite is detective, not preventive</b> — it alerts after the fact and cannot block. For real-time blocking, use <b>Inline Proxy</b> mode.</li>
     <li><b>The agent only makes outbound connections</b> to DAM (HTTPS, or your audit stream). No inbound ports are opened; DAM never connects into your database network.</li>
-    <li><b>Least privilege:</b> the optional <code>dam_svc</code> user is read-only (<code>SELECT, PROCESS</code>). Rotate its password per your policy.</li>
+    <li><b>Least privilege:</b> the <code>dam_svc</code> login is read-only per engine (MySQL <code>SELECT, PROCESS</code>; PG <code>pg_monitor</code>; SQL Server read + <code>VIEW DATABASE/SERVER STATE</code>; Oracle <code>AUDIT_VIEWER</code> + <code>SELECT_CATALOG_ROLE</code>). It can never modify data. Rotate its password per your policy.</li>
     <li><b>MongoDB:</b> <code>system.profile</code> contains <b>query filters and inserted documents</b>, so it holds real data values on the server — treat the profiler as sensitive, and note that enabling it is a <b>visible change to the database's behaviour</b> (write overhead), not a passive read. Keep <code>dam_svc</code> on the <code>toovixProfiler</code> custom role from §2: <b><code>dbAdmin</code> would let a monitoring account drop collections</b>, which is far more privilege than capture requires.</li>
   </ul>
 
   <footer>
-    Questions, or an engine not covered here (Oracle / others)? Contact your TooVix DAM operator. AgentLite audit-forward supports <b>MySQL/MariaDB, PostgreSQL, SQL Server, and MongoDB</b>; other engines use network, host, or inline-proxy capture.
+    Questions, or an engine not covered here? Contact your TooVix DAM operator. AgentLite audit-forward supports <b>MySQL/MariaDB, PostgreSQL, SQL Server (Audit + Extended Events), MongoDB, and Oracle</b>, across VMs and managed services (Cloud SQL, RDS, Azure SQL, Atlas, Autonomous DB). For real-time blocking, or row counts on an engine whose audit source lacks them, use network / host / inline-proxy capture instead.
   </footer>
 </div>
 </body>
