@@ -26,25 +26,42 @@ package main
 
 import (
 	"database/sql"
-	"fmt"
 	"log"
-	"net/url"
 	"strings"
 	"time"
-	// The "oracle" driver (github.com/sijms/go-ora/v2) is a pure-Go Oracle driver — no Instant
-	// Client, so it keeps the Alpine image slim. It is blank-imported in main.go alongside the
-	// other SQL drivers.
+
+	go_ora "github.com/sijms/go-ora/v2" // canonical URL builder — handles TLS/wallet encoding
 )
 
 // oracleDSN builds a go-ora connection URL. Oracle connects to a SERVICE NAME (the PDB), which
 // TARGET_DB carries; DB_NAME overrides it when the display name and the service differ.
+//
+// TLS: on-VM/on-prem Oracle uses plain TCP (1521). A managed endpoint — OCI Autonomous Database,
+// notably — uses TCPS (one-way TLS on 1522) and the connection fails without SSL. TLS is enabled
+// when ORACLE_SSL=true, or auto-detected for the OCI ADB endpoint (host *.oraclecloud.com or
+// port 1522). ORACLE_SSL_VERIFY defaults to false: ADB one-way TLS presents a server cert we
+// don't ship the CA for, so verification is skipped (the ACL on the ADB is the access control).
+// For the mutual-TLS/wallet path instead, set ORACLE_WALLET to the unzipped wallet directory.
 func oracleDSN(cfg Config) string {
 	svc := orDefault(cfg.DBName, orDefault(env("ORACLE_SERVICE", ""), "FREEPDB1"))
 	host := orDefault(cfg.TargetHost, "127.0.0.1")
-	port := orDefault(cfg.TargetPort, "1521")
-	// go-ora URL form: oracle://user:pass@host:port/service
-	return fmt.Sprintf("oracle://%s:%s@%s:%s/%s",
-		url.QueryEscape(cfg.DBUser), url.QueryEscape(cfg.DBPass), host, port, svc)
+	port := atoiDefault(orDefault(cfg.TargetPort, "1521"), 1521)
+
+	opts := map[string]string{}
+	ssl := env("ORACLE_SSL", "")
+	if ssl == "" && (strings.Contains(strings.ToLower(host), "oraclecloud.com") || port == 1522) {
+		ssl = "true" // auto-detect OCI ADB
+	}
+	if ssl == "true" || ssl == "enable" {
+		opts["ssl"] = "true"
+		if w := env("ORACLE_WALLET", ""); w != "" {
+			opts["wallet"] = w // mutual TLS
+		} else {
+			opts["ssl verify"] = env("ORACLE_SSL_VERIFY", "false") // one-way TLS, no wallet
+		}
+	}
+	// BuildUrl encodes the service name and option keys (incl. the space in "ssl verify") correctly.
+	return go_ora.BuildUrl(host, port, svc, cfg.DBUser, cfg.DBPass, opts)
 }
 
 // tailOracleAudit polls UNIFIED_AUDIT_TRAIL, enriches each row with a row count from
