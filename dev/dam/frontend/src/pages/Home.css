@@ -141,30 +141,3 @@
   .hp-page .hero h1{font-size:36px}
   .hp-page .stats{gap:24px}
 }
-
-/* ── Capture architecture section ─────────────────────────────── */
-.hp-page .model-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-bottom:32px}
-.hp-page .model{background:var(--surface);border:1px solid var(--line);border-top:3px solid var(--mc);border-radius:var(--radius-lg);padding:22px 22px 20px;transition:.15s}
-.hp-page .model:hover{box-shadow:var(--shadow)}
-.hp-page .model h3{font-size:16px;font-weight:750;margin:0 0 7px;color:var(--mc);letter-spacing:-.2px}
-.hp-page .model p{font-size:13px;color:var(--muted);margin:0;line-height:1.55}
-.hp-page .model .mtag{display:inline-block;margin-top:13px;font-size:10.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--mc);background:var(--mc-soft);border-radius:999px;padding:3px 11px}
-.hp-page .matrix-wrap{border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden}
-.hp-page .arch-matrix{width:100%;border-collapse:collapse;background:var(--surface);font-size:13.5px}
-.hp-page .arch-matrix th,.hp-page .arch-matrix td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--line-2)}
-.hp-page .arch-matrix thead th{background:var(--surface-2);font-size:11.5px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
-.hp-page .arch-matrix tbody tr:last-child td{border-bottom:0}
-.hp-page .arch-matrix .db{font-weight:700;white-space:nowrap}
-.hp-page .arch-matrix .db small{display:block;font-weight:400;font-size:11px;color:var(--subtle);margin-top:1px}
-.hp-page .sup{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--ink)}
-.hp-page .sup.na{color:var(--subtle)}
-.hp-page .sup .d{width:9px;height:9px;border-radius:50%;flex:none}
-.hp-page .arch-legend{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin-top:18px;font-size:12px;color:var(--muted)}
-.hp-page .arch-legend span{display:inline-flex;align-items:center;gap:7px}
-.hp-page .arch-legend .d{width:9px;height:9px;border-radius:50%}
-.hp-page .arch-note{text-align:center;color:var(--muted);font-size:12.5px;line-height:1.6;max-width:640px;margin:16px auto 0}
-@media(max-width:820px){
-  .hp-page .model-grid{grid-template-columns:1fr}
-  .hp-page .matrix-wrap{overflow-x:auto}
-  .hp-page .arch-matrix{min-width:600px}
-}

@@ -20,34 +20,6 @@ const CAPS = [
 
 const ENGINES = [['🔴', 'Oracle'], ['🔷', 'SQL Server'], ['🔵', 'IBM Db2'], ['🐘', 'PostgreSQL'], ['🐬', 'MySQL / MariaDB'], ['🍃', 'MongoDB']];
 
-// Deployment architecture — the three capture models, and how each engine maps to them.
-// Each cell is [status, label]: 'full' = supported, 'part' = limited/roadmap, 'na' = the
-// engine's design rules it out. Kept honest: eBPF needs OpenSSL, so Oracle (own crypto) and
-// MongoDB have no host-agent hook; SQL Server's wire is TLS-by-default so network is limited.
-const MODELS = [
-  ['AgentLite', 'var(--green)', 'var(--green-soft)', 'audit-forward · recommended',
-    <>A lightweight forwarder that reads the telemetry the database <b>already produces</b> — no wire tap, no path change. Because it reads <b>after</b> decryption, it captures TLS-encrypted <b>and local/IPC</b> sessions the network never sees.</>],
-  ['Agent', 'var(--amber)', 'var(--amber-soft)', 'network · host · proxy',
-    <>Taps the connection itself — <b>network</b> (passive, zero path change), <b>host eBPF</b> (below TLS), or an <b>inline proxy</b>, the only mode that can <b>block</b> a query in real time. Carries exact row counts.</>],
-  ['Agentless', 'var(--info)', 'var(--info-soft)', 'cloud stream · PaaS',
-    <>The managed database emits its native audit to a cloud <b>stream</b> — Pub/Sub, Event Hub, Kinesis — and DAM consumes it. Zero software on the host: the only option for RDS, Cloud SQL, Azure SQL and other PaaS you don&apos;t control.</>],
-];
-
-const ARCH = [
-  ['Oracle', 'proprietary · own crypto', ['full', 'UNIFIED_AUDIT_TRAIL'], ['na', 'no eBPF hook'], ['part', 'stream on roadmap']],
-  ['MySQL', 'open protocol', ['full', 'general log'], ['full', 'all four modes'], ['full', 'Cloud SQL · RDS']],
-  ['PostgreSQL', 'open protocol', ['full', 'pgaudit'], ['full', 'network + eBPF'], ['full', 'Cloud SQL · RDS']],
-  ['SQL Server', 'proprietary · TDS', ['full', 'Audit / XEvents'], ['part', 'network only'], ['full', 'Azure SQL']],
-  ['MongoDB', 'wire protocol', ['full', 'profiler'], ['na', 'no eBPF hook'], ['part', 'Cosmos · Atlas']],
-];
-
-const SUP_DOT = { full: 'var(--green)', part: 'var(--amber)', na: 'var(--subtle)' };
-const supCell = ([status, label]) => (
-  <span className={`sup${status === 'na' ? ' na' : ''}`}>
-    <span className="d" style={{ background: SUP_DOT[status] }} />{label}
-  </span>
-);
-
 const FRAMEWORKS = [
   ['💳', 'PCI-DSS 4.0', 'Cardholder data monitoring'], ['🌐', 'GDPR', 'EU data-subject rights'],
   ['🏥', 'HIPAA', 'Protected health information'], ['📊', 'SOX', 'Financial data integrity'],
@@ -203,7 +175,6 @@ export default function Home() {
         <div className="links">
           <a href="#capabilities">Capabilities</a>
           <a href="#engines">Engines</a>
-          <a href="#architecture">Architecture</a>
           <a href="#compliance">Compliance</a>
           <a href="#pricing">Pricing</a>
           <a href="/tutorial.html" target="_blank" rel="noopener noreferrer">Guide</a>
@@ -272,46 +243,6 @@ export default function Home() {
           ))}
         </div>
         <p style={{ textAlign: 'center', color: 'var(--muted)', fontSize: 13, marginTop: 18 }}>SAP HANA, SAP ASE (Sybase), Teradata, Snowflake, BigQuery, Redis — on roadmap</p>
-      </section>
-
-      {/* Deployment architecture */}
-      <section className="sec" id="architecture">
-        <div className="sec-head">
-          <h2>How TooVix captures your data</h2>
-          <p>Three capture models, one control plane. Which applies depends on the engine and where it runs — a self-managed VM exposes all three; a managed PaaS instance exposes only Agentless.</p>
-        </div>
-        <div className="model-grid">
-          {MODELS.map(([name, mc, mcSoft, tag, body]) => (
-            <div className="model" key={name} style={{ '--mc': mc, '--mc-soft': mcSoft }}>
-              <h3>{name}</h3>
-              <p>{body}</p>
-              <span className="mtag">{tag}</span>
-            </div>
-          ))}
-        </div>
-        <div className="matrix-wrap">
-          <table className="arch-matrix">
-            <thead>
-              <tr><th>Engine</th><th>AgentLite</th><th>Agent</th><th>Agentless · PaaS</th></tr>
-            </thead>
-            <tbody>
-              {ARCH.map(([db, note, lite, agent, less]) => (
-                <tr key={db}>
-                  <td className="db">{db}<small>{note}</small></td>
-                  <td>{supCell(lite)}</td>
-                  <td>{supCell(agent)}</td>
-                  <td>{supCell(less)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div className="arch-legend">
-          <span><span className="d" style={{ background: 'var(--green)' }} /> Supported</span>
-          <span><span className="d" style={{ background: 'var(--amber)' }} /> Limited / roadmap</span>
-          <span><span className="d" style={{ background: 'var(--subtle)' }} /> Not applicable by design</span>
-        </div>
-        <p className="arch-note">Every model feeds one ingest and one per-tenant event store — so data classification, threat detection, and the tamper-evident audit trail work identically however the activity was captured.</p>
       </section>
 
       {/* Compliance */}
