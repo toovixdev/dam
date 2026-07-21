@@ -1,0 +1,5 @@
+# The downloaded ADB wallet and any private keys must never be committed.
+# (Repo root already ignores *.tfvars, *.tfstate*, and .terraform/.)
+wallet-*.zip
+*.pem
+*.p12

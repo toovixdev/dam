@@ -1,0 +1,29 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is gitignored — never commit real OCIDs/keys.
+#
+# All five auth values come from the config snippet OCI shows after you add an API key:
+#   Console → profile (top-right) → User settings → API keys → Add API key.
+
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaa________________"
+user_ocid        = "ocid1.user.oc1..aaaa________________"
+fingerprint      = "12:34:56:78:90:ab:cd:ef:12:34:56:78:90:ab:cd:ef"
+private_key_path = "~/.oci/oci_api_key.pem"
+region           = "ap-mumbai-1"
+
+# Root compartment = your tenancy OCID, or a child compartment to isolate the test estate.
+compartment_ocid = "ocid1.compartment.oc1..aaaa________________"
+
+adb = {
+  db_name      = "TOOVIXADB"   # ≤14 chars, alphanumeric, no leading digit
+  workload     = "OLTP"        # OLTP (ATP) or DW (ADW)
+  db_version   = "23ai"
+  is_free_tier = true          # Always Free — 1 OCPU / 20 GB, never expires
+}
+
+# IP allow-list for the PUBLIC endpoint. Put your workstation's egress IP and the DAM
+# collector host's egress IP here. EMPTY blocks everything — you must add at least one.
+#   allowed_ips = ["203.0.113.10/32", "198.51.100.20/32"]
+allowed_ips = []
+
+# false → the DAM Oracle collector connects with plain TLS (no wallet). Safe only behind a
+# tight allowed_ips list. Set true for wallet-based mTLS (production posture).
+require_mtls = false
