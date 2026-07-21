@@ -5,7 +5,7 @@ const TYPE_COLORS = {
   Network: '#6366f1',
   'Host (eBPF)': '#0ea5e9',
   'Inline Proxy': '#ec4899',
-  'Audit Pull': '#10b981',
+  AgentLite: '#10b981',
   'Cloud Push': '#f59e0b',
   Collector: '#8b5cf6',
 };

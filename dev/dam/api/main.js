@@ -4051,7 +4051,9 @@ app.post('/api/admin/approvals/:id/decision', async (req, res) => {
 // ── Databases ─────────────────────────────────────────────
 const DEP_LABEL = { onprem: 'On-prem', iaas: 'IaaS', rds: 'RDS', azuresql: 'Azure DB', cloudsql: 'Cloud SQL', atlas: 'Atlas', oci: 'OCI', saas: 'SaaS' };
 const PAAS_DEPLOYMENTS = ['rds', 'azuresql', 'cloudsql', 'atlas', 'oci'];
-const CAPTURE_LABEL = { host_ebpf: 'Host (eBPF)', network: 'Network', inline_proxy: 'Inline Proxy', audit_pull: 'Audit Pull', cloud_push: 'Cloud Push', agentless: 'Agentless' };
+// audit_pull is the wire agent_type the AgentLite forwarder reports; display it as "AgentLite"
+// (the mode name users select and read about) rather than the internal "Audit Pull".
+const CAPTURE_LABEL = { host_ebpf: 'Host (eBPF)', network: 'Network', inline_proxy: 'Inline Proxy', audit_pull: 'AgentLite', cloud_push: 'Cloud Push', agentless: 'Agentless' };
 // Cloud-agnostic "is this database monitored?" (for SQL queries where databases is aliased `d`):
 // an enrolled agent on its instance, OR an active agentless cloud connector (Pub/Sub / Kinesis /
 // Event Hub) for the same tenant + cloud provider.

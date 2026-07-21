@@ -12,9 +12,14 @@ import useApiData from '../hooks/useApiData';
 import { apiFetch, apiDelete } from '../api/client';
 import { toast } from '../components/shared/Toast';
 
+// Display labels for an enrolled agent's agent_type. NB: audit_pull is the wire value the
+// AgentLite forwarder reports (see agentTypeByMode in the agent); it is SHOWN as "AgentLite"
+// because that's the capture mode users select and read about — "Audit Pull" was an internal
+// name that never appeared in the guide or the deploy picker, so agents rendered under a name
+// nobody recognised.
 const TYPE_LABEL = {
   network: 'Network', host_ebpf: 'Host (eBPF)', inline_proxy: 'Inline Proxy',
-  audit_pull: 'Audit Pull', cloud_push: 'Cloud Push', collector_poll: 'Collector',
+  audit_pull: 'AgentLite', cloud_push: 'Cloud Push', collector_poll: 'Collector',
 };
 
 // Per-type baseline ingest rate (events/s) used to derive demo telemetry until
