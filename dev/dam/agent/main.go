@@ -30,6 +30,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 	_ "github.com/microsoft/go-mssqldb"
+	_ "github.com/sijms/go-ora/v2"
 )
 
 type Config struct {
@@ -175,12 +176,12 @@ func main() {
 
 	// Classification runs alongside ANY capture mode (it just needs a DB read login).
 	classifiable := cfg.Engine == "mysql" || cfg.Engine == "postgresql" || cfg.Engine == "mssql" ||
-		isMongoEngine(cfg.Engine)
+		cfg.Engine == "oracle" || isMongoEngine(cfg.Engine)
 	if cfg.Classify && cfg.DBUser != "" && classifiable {
 		go classifyLoop(cfg)    // periodic (CLASSIFY_INTERVAL_MIN)
 		go scanTriggerLoop(cfg) // on-demand — the "Run Scan" button
 	} else if cfg.Classify {
-		log.Printf("classification enabled but skipped (need DB_USER and engine mysql|postgresql|mssql|mongodb; postgres/mssql/mongodb also need DB_NAME)")
+		log.Printf("classification enabled but skipped (need DB_USER and engine mysql|postgresql|mssql|oracle|mongodb; postgres/mssql/oracle/mongodb also need DB_NAME)")
 	}
 
 	switch cfg.Mode {
@@ -984,6 +985,21 @@ func scanTargets(cfg Config) ([]scanTarget, error) {
 			ts = append(ts, scanTarget{driver: "sqlserver", dsn: mssqlDSN(cfg, d), query: tagAgentQuery(q), dbLabel: d})
 		}
 		return ts, nil
+	}
+	if cfg.Engine == "oracle" {
+		// Oracle has no information_schema; the dictionary is *_TAB_COLUMNS. Use DBA_TAB_COLUMNS,
+		// not ALL_TAB_COLUMNS — ALL_ only shows tables the LOGIN itself can access, so a
+		// least-privilege collector would see none of the app schema's tables. SELECT_CATALOG_ROLE
+		// grants the DBA_ views, which show every schema. Scope to user schemas via DBA_USERS on
+		// ORACLE_MAINTAINED='N' (excludes SYS/SYSTEM/AUDSYS and the shipped accounts without a
+		// hardcoded list). Column order matches the (schema, table, column, type) the scanner reads;
+		// all schemas live in one PDB, so they report under the service name.
+		const q = `SELECT c.OWNER, c.TABLE_NAME, c.COLUMN_NAME, c.DATA_TYPE
+			FROM DBA_TAB_COLUMNS c JOIN DBA_USERS u ON u.USERNAME = c.OWNER
+			WHERE u.ORACLE_MAINTAINED = 'N'
+			ORDER BY c.OWNER, c.TABLE_NAME, c.COLUMN_ID`
+		svc := orDefault(cfg.DBName, orDefault(env("ORACLE_SERVICE", ""), "FREEPDB1"))
+		return []scanTarget{{driver: "oracle", dsn: oracleDSN(cfg), query: tagAgentQuery(q), dbLabel: svc}}, nil
 	}
 	const q = `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
 		WHERE table_schema NOT IN ('mysql','sys','information_schema','performance_schema')
