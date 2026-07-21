@@ -18,6 +18,14 @@
   a{color:var(--indigo-d);text-decoration:none}
   a:hover{text-decoration:underline}
   code{background:#eef2ff;color:#3730a3;padding:1px 6px;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.88em}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:14px 16px;overflow-x:auto;margin:14px 0;font-size:13px;line-height:1.6}
+  pre code{background:none;color:inherit;padding:0;font-size:13px}
+  pre .cmt{color:#7f8ea3}
+  /* model tag chips + capability dots for the deploy architecture */
+  .mtag{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:3px 10px;border-radius:20px;margin-bottom:8px}
+  .mtag.lite{background:#dcfce7;color:#166534} .mtag.agent{background:#fef3c7;color:#92400e} .mtag.less{background:#e0e7ff;color:#3730a3}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .eng-badge{display:inline-block;background:#f1f5f9;border:1px solid var(--line);border-radius:7px;padding:2px 8px;font-size:12.5px;font-weight:600;color:var(--ink);margin:0 4px 4px 0}
   h1,h2,h3,h4{color:var(--ink);line-height:1.25;font-weight:800}
   h2{font-size:1.7rem;margin:0 0 .5rem;scroll-margin-top:80px}
   h3{font-size:1.2rem;margin:1.8rem 0 .4rem}
@@ -184,6 +192,9 @@
     <a href="#quickstart">Quick-start walkthrough</a>
     <a href="#s-register">1 · Register a database</a>
     <a href="#s-deploy">2 · Deploy monitoring</a>
+    <a href="#deploy-lite" style="padding-left:20px;font-size:12.5px">— AgentLite (per engine)</a>
+    <a href="#deploy-agent" style="padding-left:20px;font-size:12.5px">— Agent (network·host·proxy)</a>
+    <a href="#deploy-less" style="padding-left:20px;font-size:12.5px">— Agentless (PaaS)</a>
     <a href="#s-classify">3 · Classify data</a>
     <a href="#s-policies">4 · Tune policies</a>
     <a href="#s-alerts">5 · Triage alerts</a>
@@ -523,14 +534,179 @@
     <section id="s-deploy">
       <span class="part-badge">Step 2</span>
       <h2>Deploy monitoring</h2>
-      <p>A registered database isn't watched until an <b>agent</b> is monitoring it.</p>
-      <ol class="steps">
-        <li>From <span class="nav-chip">Databases</span>, click <span class="ui g">Deploy monitoring</span> on the instance — or go to <span class="nav-chip">Agents &amp; Coverage</span> and click <span class="ui">Deploy monitoring</span>.</li>
-        <li>Follow the deploy steps for your environment. The agent begins capturing activity.</li>
-        <li>Check <span class="nav-chip">Agents &amp; Coverage</span> to confirm the agent is healthy (use <span class="ui g">Refresh</span> to reload). To remove one, click <span class="ui g">Remove</span>.</li>
-        <li>Review how activity is captured under <span class="nav-chip">Capture Modes</span>.</li>
-      </ol>
-      <div class="note">Once an agent is live, activity starts flowing into the pipeline you learned about in Part 2 — you'll see it show up on the <span class="nav-chip">Dashboard</span> and, if anything's risky, in <span class="nav-chip">Alerts</span>.</div>
+      <p>A registered database isn't watched until an <b>agent</b> is monitoring it. In the console you'd click <span class="nav-chip">Databases</span> → <span class="ui g">Deploy monitoring</span> (or <span class="nav-chip">Agents &amp; Coverage</span> → <span class="ui">Deploy monitoring</span>), pick a capture model, and paste the generated command onto your database host. The rest of this section is the <b>full reference</b> for what those commands do, per model and per engine.</p>
+
+      <h3>Pick a capture model</h3>
+      <p>TooVix captures activity three ways, all feeding the same pipeline from Part 2. Which one applies depends on the engine and where it runs — a <b>self-managed</b> database (VM / on-prem) can use all three; a <b>managed PaaS</b> database you don't control can only use Agentless.</p>
+      <div class="grid">
+        <div class="card">
+          <span class="mtag lite">AgentLite · recommended</span>
+          <p style="color:var(--body)"><b>Reads the telemetry the database already produces</b> — no wire tap, no path change. Reads <b>after</b> decryption, so it captures TLS and local/IPC sessions. Works on every engine. Detective only.</p>
+        </div>
+        <div class="card">
+          <span class="mtag agent">Agent</span>
+          <p style="color:var(--body)"><b>Taps the connection</b>: network (passive), host eBPF (below TLS), or an inline proxy — the only mode that can <b>block</b>. Exact row counts. MySQL / PostgreSQL.</p>
+        </div>
+        <div class="card">
+          <span class="mtag less">Agentless · PaaS</span>
+          <p style="color:var(--body)"><b>The cloud emits its native audit to a stream</b> (Pub/Sub · Event Hub · Kinesis); DAM consumes it. Nothing installed — the only option for managed databases.</p>
+        </div>
+      </div>
+
+      <h4>Which model works for each engine</h4>
+      <p style="color:var(--muted);font-size:13.5px;margin:0 0 6px"><span class="dot" style="background:#16a34a"></span>supported &nbsp; <span class="dot" style="background:#b45309"></span>limited / roadmap &nbsp; <span class="dot" style="background:#94a3b8"></span>not applicable by design</p>
+      <table>
+        <tr><th>Engine</th><th>AgentLite</th><th>Agent (network/host/proxy)</th><th>Agentless (PaaS)</th><th>Row counts</th></tr>
+        <tr><td><b>MySQL / MariaDB</b></td><td><span class="dot" style="background:#16a34a"></span>general log</td><td><span class="dot" style="background:#16a34a"></span>all four modes</td><td><span class="dot" style="background:#16a34a"></span>Cloud SQL · <span style="color:#b45309">RDS ⚠</span></td><td>✓ network/host/proxy</td></tr>
+        <tr><td><b>PostgreSQL</b></td><td><span class="dot" style="background:#16a34a"></span>pgaudit</td><td><span class="dot" style="background:#16a34a"></span>network + eBPF</td><td><span class="dot" style="background:#16a34a"></span>Cloud SQL PG</td><td>✓ network/host/proxy</td></tr>
+        <tr><td><b>SQL Server</b></td><td><span class="dot" style="background:#16a34a"></span>TDS poll — Audit / XEvents</td><td><span class="dot" style="background:#b45309"></span>network only · <b>no eBPF</b> (SChannel)</td><td><span class="dot" style="background:#16a34a"></span>Azure SQL → Event Hub</td><td>✓ <b>XEvents</b> only</td></tr>
+        <tr><td><b>Oracle</b></td><td><span class="dot" style="background:#16a34a"></span>SQL*Net — UNIFIED_AUDIT_TRAIL</td><td><span class="dot" style="background:#94a3b8"></span><b>no eBPF</b> (own crypto)</td><td><span class="dot" style="background:#b45309"></span>RDS / OCI stream — roadmap</td><td>✓ via <code>V$SQLSTATS</code></td></tr>
+        <tr><td><b>MongoDB</b></td><td><span class="dot" style="background:#16a34a"></span>profiler — system.profile</td><td><span class="dot" style="background:#94a3b8"></span><b>no eBPF</b>; wire low-value</td><td><span class="dot" style="background:#b45309"></span>Cosmos / Atlas — roadmap</td><td>⚠ best-effort</td></tr>
+      </table>
+      <div class="warn"><b>Why eBPF is MySQL / PostgreSQL only.</b> Host mode hooks <code>SSL_read</code>/<code>SSL_write</code> on <b>OpenSSL</b>. SQL Server (SChannel) and Oracle (libnnz) ship their own crypto — there's no symbol to hook, so eBPF is <b>not applicable</b>, not merely unbuilt. For those engines, AgentLite is the primary path.</div>
+      <div class="note">Whichever model you pick, events land in the <b>same ingest and the same per-tenant store</b> — so classification, detection, and the tamper-evident audit trail (Part 2) work identically however the activity was captured.</div>
+      <p>Common to every command below: <code>CONTROL_PLANE</code> (your DAM URL) and <code>AGENT_ENROLL_TOKEN</code> (<span class="nav-chip">Agents</span> → <span class="ui g">Deploy monitoring</span> → copy the <code>tvxenr_…</code> token). Set <code>TARGET_HOST</code> to the database's real address — it's how DAM identifies the instance; never <code>127.0.0.1</code>.</p>
+    </section>
+
+    <!-- ── AgentLite ── -->
+    <section id="deploy-lite">
+      <span class="part-badge">Step 2a · AgentLite</span>
+      <h2>AgentLite — per engine</h2>
+      <p>AgentLite reads the database's own telemetry and forwards each statement. Two shapes: a <b>log tailer</b> on the DB host (MySQL, PostgreSQL) and a <b>remote poller</b> over the DB protocol that runs anywhere and installs nothing on the DB host (SQL Server, Oracle, MongoDB).</p>
+
+      <h3>🐬 MySQL / MariaDB — general query log</h3>
+      <p>Write the general log to a fixed path, then run the agent tailing it:</p>
+      <pre><code><span class="cmt">-- as MySQL admin (runtime; persist in /etc/mysql/…/zz-toovix.cnf too)</span>
+SET GLOBAL log_output='FILE';
+SET GLOBAL general_log_file='/var/log/mysql/general.log';
+SET GLOBAL general_log='ON';</code></pre>
+      <pre><code>docker run -d --name toovix-agent --restart unless-stopped --user 0 \
+  -v /var/log/mysql/general.log:/var/log/mysql/general.log:ro \
+  -e MODE=audit-forward -e DB_ENGINE=mysql -e TARGET_PORT=3306 \
+  -e AUDIT_SOURCE=general_log -e AUDIT_LOG=/var/log/mysql/general.log \
+  -e TARGET_HOST=$DB_HOST \
+  -e AGENT_ENROLL_TOKEN=$TOKEN -e CONTROL_PLANE=$CP  &lt;dam-agent-image&gt;</code></pre>
+
+      <h3>🐘 PostgreSQL — statement logging</h3>
+      <p>Turn on statement logging with the exact prefix the parser expects, then reload (no restart):</p>
+      <pre><code>ALTER SYSTEM SET log_statement='all';
+ALTER SYSTEM SET log_line_prefix='%m [%p] %u@%d ';   <span class="cmt">-- prefix matters</span>
+SELECT pg_reload_conf();</code></pre>
+      <p>Run the agent as MySQL above but with <code>DB_ENGINE=postgresql</code>, <code>TARGET_PORT=5432</code>, <code>AUDIT_SOURCE=pgaudit</code>, and <code>AUDIT_LOG=/var/log/postgresql/postgresql-16-main.log</code> (match your PG version). Built-in logging — pgaudit extension not required.</p>
+
+      <h3>🪟 SQL Server — polled over TDS (nothing on Windows)</h3>
+      <p>Binary telemetry, so AgentLite <b>polls over TDS</b> — the collector is a Linux container reaching port 1433; nothing installs on Windows. Two sources: <b>SQL Server Audit</b> (clean object scoping, no row counts) or <b>Extended Events</b> (adds row counts). Extended Events:</p>
+      <pre><code>CREATE EVENT SESSION ToovixXE ON SERVER
+  ADD EVENT sqlserver.sql_statement_completed (
+    ACTION (sqlserver.server_principal_name, sqlserver.client_hostname)
+    WHERE ([sqlserver].[database_name]=N'YourDB'))
+  ADD TARGET package0.event_file (SET filename=N'C:\SQLAudit\ToovixXE.xel', max_file_size=50)
+  WITH (MAX_DISPATCH_LATENCY=5 SECONDS, STARTUP_STATE=ON);
+ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- START, not ON</span></code></pre>
+      <pre><code>docker run -d --name toovix-agent-mssql --restart unless-stopped \
+  -e MODE=audit-forward -e DB_ENGINE=mssql \
+  -e TARGET_HOST=10.20.2.4 -e TARGET_PORT=1433 -e DB_NAME=YourDB \
+  -e AUDIT_SOURCE=xevents -e AUDIT_LOG='C:\SQLAudit\ToovixXE*.xel' \
+  -e DB_USER=dam_svc -e DB_PASSWORD=&lt;pw&gt; \
+  -e AGENT_ENROLL_TOKEN=$TOKEN -e CONTROL_PLANE=$CP  &lt;dam-agent-image&gt;</code></pre>
+      <div class="note"><b>DB login needed</b> (reads over TDS, not disk): <b>CONTROL SERVER</b> for Audit or <b>VIEW SERVER STATE</b> for XEvents. <b>Azure SQL (PaaS)</b> can't host a collector — use <a href="#deploy-less">Agentless</a>.</div>
+
+      <h3>🔴 Oracle — Unified Auditing over SQL*Net</h3>
+      <p>Polls the <code>UNIFIED_AUDIT_TRAIL</code> view over SQL*Net — the collector runs on any Linux host reaching 1521, covering Oracle on a VM, on RDS, and on OCI. Enable a policy and create the read-only login:</p>
+      <pre><code>CREATE AUDIT POLICY toovix_dml ACTIONS SELECT, INSERT, UPDATE, DELETE;
+AUDIT POLICY toovix_dml BY appuser;   <span class="cmt">-- scope to the app schema owner</span>
+
+CREATE USER dam_svc IDENTIFIED BY "&lt;pw&gt;";
+GRANT CREATE SESSION, AUDIT_VIEWER, SELECT_CATALOG_ROLE TO dam_svc;</code></pre>
+      <pre><code>docker run -d --name toovix-agent-oracle --restart unless-stopped \
+  -e MODE=audit-forward -e DB_ENGINE=oracle \
+  -e TARGET_HOST=10.0.13.149 -e TARGET_PORT=1521 -e DB_NAME=FREEPDB1 \
+  -e DB_USER=dam_svc -e DB_PASSWORD=&lt;pw&gt; \
+  -e AGENT_ENROLL_TOKEN=$TOKEN -e CONTROL_PLANE=$CP  &lt;dam-agent-image&gt;</code></pre>
+      <div class="note"><b>Row counts</b> come from a join to <code>V$SQLSTATS</code> — exact for ad-hoc queries, a per-execution average for parameterised app traffic. <code>AUDIT_VIEWER</code> reads the trail; <code>SELECT_CATALOG_ROLE</code> covers <code>V$SQLSTATS</code> and classification. <b>RDS Oracle</b> works through this same path.</div>
+
+      <h3>🍃 MongoDB — database profiler</h3>
+      <p>Community MongoDB has no audit log, so AgentLite polls the built-in profiler collection <code>system.profile</code> over the wire — runs anywhere, covers Atlas and any remote <code>mongod</code>. Enable profiling and create a least-privilege login (a custom role with only <code>enableProfiler</code> — <b>don't grant <code>dbAdmin</code></b>, which bundles <code>dropCollection</code>):</p>
+      <pre><code>use &lt;db&gt;
+db.setProfilingLevel(2, { slowms: 0 })   <span class="cmt">// every op; persist in mongod.conf</span></code></pre>
+      <pre><code>docker run -d --name toovix-agent-mongo --restart unless-stopped \
+  -e MODE=audit-forward -e DB_ENGINE=mongodb -e AUDIT_SOURCE=profiler \
+  -e TARGET_HOST=10.50.0.2 -e TARGET_PORT=27017 -e DB_NAME=&lt;db&gt; \
+  -e DB_USER=dam_svc -e DB_PASSWORD=&lt;pw&gt; -e MONGO_AUTH_SOURCE=admin \
+  -e AGENT_ENROLL_TOKEN=$TOKEN -e CONTROL_PLANE=$CP  &lt;dam-agent-image&gt;</code></pre>
+      <div class="warn"><b>Profiler limits:</b> <code>system.profile</code> is capped (best-effort, not guaranteed under heavy load); <code>row_count</code> under-reports large reads unless <code>MONGO_INCLUDE_GETMORE=true</code>. Classification samples documents (no fixed schema to read).</div>
+      <div class="tip"><b>Classification</b> (which columns hold PII/PCI) runs alongside any AgentLite capture — add <code>CLASSIFY=true</code>, <code>DB_USER</code>/<code>DB_PASSWORD</code>, and <code>DB_NAME</code> (all engines except MySQL need the last). Reads <code>information_schema</code> (MySQL/PG/SQL Server), <code>DBA_TAB_COLUMNS</code> (Oracle), or samples documents (MongoDB).</div>
+    </section>
+
+    <!-- ── Agent ── -->
+    <section id="deploy-agent">
+      <span class="part-badge">Step 2b · Agent</span>
+      <h2>Agent — network · host eBPF · inline proxy</h2>
+      <p>The Agent taps the connection instead of the audit — for <b>MySQL and PostgreSQL</b>. It's how you get exact row counts on every event and, with the proxy, <b>real-time blocking</b>. All three run from the same image, selected by <code>MODE</code>.</p>
+      <div class="warn"><b>MySQL / PostgreSQL only.</b> Host eBPF hooks OpenSSL — SQL Server (SChannel) and Oracle (libnnz) can't be hooked, and Mongo wire-decode is low-value. For those, use <a href="#deploy-lite">AgentLite</a>.</div>
+
+      <h4>Network — passive wire capture</h4>
+      <p>On the DB host, shares its network namespace. Zero path change, ~0 overhead. Cleartext only (TLS is opaque):</p>
+      <pre><code>docker run -d --name toovix-agent-network --restart unless-stopped \
+  --network host --cap-add NET_ADMIN --cap-add NET_RAW \
+  -e MODE=network -e DB_ENGINE=mysql -e TARGET_PORT=3306 -e TARGET_HOST=$DB_HOST \
+  -e AGENT_ENROLL_TOKEN=$TOKEN -e CONTROL_PLANE=$CP  &lt;dam-agent-image&gt;</code></pre>
+
+      <h4>Host (eBPF) — below TLS</h4>
+      <p>Also on the DB host, but attaches eBPF uprobes to the database's libssl — reads TLS-encrypted sessions the network agent can't. Kernel 5.8+:</p>
+      <pre><code>docker run -d --name toovix-agent-host --restart unless-stopped \
+  --network host --pid host --privileged \
+  -e MODE=host -e DB_ENGINE=postgresql -e TARGET_PORT=5432 -e TARGET_HOST=$DB_HOST \
+  -e AGENT_ENROLL_TOKEN=$TOKEN -e CONTROL_PLANE=$CP  &lt;dam-agent-image&gt;</code></pre>
+      <div class="tip"><b>Deploy network + host together.</b> They're complementary, not redundant: network reads cleartext (TLS is opaque to it), host reads encrypted (cleartext never calls <code>SSL_read</code>). Neither double-counts the other — this is the recommended "full visibility" posture for self-managed MySQL/PG.</div>
+
+      <h4>Inline proxy — the only mode that can block</h4>
+      <p>Listens on its own port, forwards to the real DB, and can <b>drop or kill</b> a session per policy. Clients connect to the proxy instead of the DB — the one mode with a path change:</p>
+      <pre><code>docker run -d --name toovix-agent-proxy --restart unless-stopped -p 3307:3307 \
+  -e MODE=proxy -e DB_ENGINE=mysql -e LISTEN_PORT=3307 -e UPSTREAM=&lt;db&gt;:3306 \
+  -e TARGET_HOST=$DB_HOST \
+  -e AGENT_ENROLL_TOKEN=$TOKEN -e CONTROL_PLANE=$CP  &lt;dam-agent-image&gt;
+<span class="cmt"># apps now connect to the proxy on :3307 instead of the DB on :3306</span></code></pre>
+      <div class="warn"><b>Pair the proxy with a network agent</b> so clients that bypass it are still seen. If the proxy→DB hop is cleartext, the network agent records that leg too with the <b>proxy</b> as the client IP — keep that hop on TLS.</div>
+    </section>
+
+    <!-- ── Agentless ── -->
+    <section id="deploy-less">
+      <span class="part-badge">Step 2c · Agentless</span>
+      <h2>Agentless — managed / PaaS</h2>
+      <p>For a <b>managed database you don't control</b> — RDS, Cloud SQL, Azure SQL, Cosmos — no agent can be installed. Instead the cloud emits the database's native audit to a managed <b>stream</b>, and the DAM connector consumes it. Setup is entirely cloud-side plus one connector in DAM.</p>
+      <div class="pipe">
+        <div class="node">Managed DB<small>RDS · Cloud SQL · Azure SQL</small></div><span class="arr">→</span>
+        <div class="node">Native audit</div><span class="arr">→</span>
+        <div class="node">Cloud stream<small>Pub/Sub · Event Hub · Kinesis</small></div><span class="arr">→</span>
+        <div class="node">DAM connector</div>
+      </div>
+
+      <h3>🟦 Azure SQL → Event Hub <span style="color:var(--muted);font-weight:400;font-size:14px">(verified ~2-min end-to-end)</span></h3>
+      <p>Enable <b>database-level</b> auditing to an Event Hub — it must be database-level; server-level with a DB-scoped diagnostic setting captures nothing. Then add an Azure Event Hub connector in DAM with the hub's listen connection string.</p>
+      <pre><code>az sql db audit-policy update -g &lt;RG&gt; -s &lt;server&gt; -n &lt;db&gt; \
+  --state Enabled --event-hub-target-state Enabled \
+  --event-hub &lt;hub&gt; --event-hub-authorization-rule-id &lt;send-rule-id&gt; \
+  --actions BATCH_COMPLETED_GROUP SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP</code></pre>
+
+      <h3>🟨 GCP Cloud SQL (MySQL / PostgreSQL) → Pub/Sub <span style="color:var(--muted);font-weight:400;font-size:14px">(verified)</span></h3>
+      <p>Enable the audit flags, route the logs to a Pub/Sub topic via a Cloud Logging sink, and let the DAM connector pull the subscription. Cloud SQL emits a structured audit proto (not text), which the connector normalizes.</p>
+      <pre><code><span class="cmt"># PostgreSQL example — pgaudit</span>
+gcloud sql instances patch &lt;instance&gt; \
+  --database-flags=cloudsql.enable_pgaudit=on,pgaudit.log=read,write,ddl,role
+gcloud pubsub topics create toovix-dam-audit
+gcloud logging sinks create toovix-cloudsql-audit-sink \
+  pubsub.googleapis.com/projects/&lt;proj&gt;/topics/toovix-dam-audit \
+  --log-filter='resource.type="cloudsql_database" AND resource.labels.database_id="&lt;proj&gt;:&lt;instance&gt;"'
+<span class="cmt"># grant the sink's writer identity roles/pubsub.publisher, then create a subscription</span></code></pre>
+
+      <h3>🟧 AWS RDS / Aurora → Kinesis <span style="color:#b45309;font-weight:600;font-size:14px">(roadmap)</span></h3>
+      <p>RDS publishes a Database Activity Stream (or exports audit logs to CloudWatch) which a subscription filter forwards to Kinesis. The Kinesis adapter is on the roadmap; for MySQL/PostgreSQL on RDS today, an <a href="#deploy-lite">AgentLite</a> collector on a small EC2 box in the VPC is the interim path. <b>RDS Oracle</b> is reachable by the AgentLite Oracle collector via the master user.</p>
+
+      <h3>🍃 MongoDB — Cosmos / Atlas <span style="color:#b45309;font-weight:600;font-size:14px">(roadmap)</span></h3>
+      <p>Azure <b>Cosmos DB for MongoDB</b> emits <code>MongoRequests</code> diagnostics to an Event Hub (transport exists; a normalizer is pending). <b>MongoDB Atlas</b> has no native push stream — its audit is a pull-based log export to S3. For managed MongoDB today, the <a href="#deploy-lite">AgentLite profiler poller</a> can target a remote <code>mongod</code> including Atlas.</p>
+
+      <div class="note">Once activity flows — by any model — you'll see it on the <span class="nav-chip">Dashboard</span> and, if risky, in <span class="nav-chip">Alerts</span>. Confirm the agent/connector is healthy under <span class="nav-chip">Agents &amp; Coverage</span>.</div>
     </section>
 
     <section id="s-classify">

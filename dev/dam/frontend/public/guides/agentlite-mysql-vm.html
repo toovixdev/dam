@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Database Deployment Guide — AgentLite · Agent · Agentless — TooVix DAM</title>
+<title>Connect a MySQL-on-VM database with AgentLite — TooVix DAM</title>
 <style>
   :root{
     --bg:#f5f7fa; --surface:#ffffff; --surface-2:#eef2f7; --ink:#1a2432; --ink-soft:#42506380;
@@ -63,72 +63,51 @@
 <div class="wrap">
   <a class="back" href="/agents">← Back to Deploy monitoring</a>
   <header class="hero">
-    <p class="eyebrow">TooVix DAM · Deployment guide</p>
-    <h1>Deploy TooVix DAM — AgentLite, Agent &amp; Agentless</h1>
-    <p style="color:var(--muted);margin:0 0 14px;max-width:66ch">The complete deployment reference for all three capture models across <b>Oracle</b>, <b>MySQL / MariaDB</b>, <b>PostgreSQL</b>, <b>SQL Server</b> and <b>MongoDB</b>, on <b>GCP, AWS, and Azure</b>. Start with the <a href="#arch">architecture</a> to pick a model, then follow the per-database steps for <a href="#lite">AgentLite</a>, <a href="#agent">Agent</a>, or <a href="#less">Agentless</a>.</p>
+    <p class="eyebrow">TooVix DAM · AgentLite setup guide</p>
+    <h1>Connect a self-managed database with AgentLite</h1>
+    <p style="color:var(--muted);margin:0 0 14px;max-width:64ch">Monitor a <b>MySQL</b>, <b>PostgreSQL</b>, or <b>MongoDB</b> database on a Linux VM — in <b>GCP, AWS, or Azure</b> — using the AgentLite (audit-forward) approach. The steps are identical across clouds; only the per-engine telemetry setup (§2) and outbound-egress (§7) differ. <b>SQL Server</b> and <b>MongoDB</b> take a different path — see §2.</p>
     <div class="meta">
-      <span class="chip">📡 <b>3 models</b> · AgentLite · Agent · Agentless</span>
-      <span class="chip">🛢 <b>5 engines</b> · Oracle · MySQL · PostgreSQL · SQL Server · MongoDB</span>
-      <span class="chip">☁ GCP · AWS · Azure</span>
+      <span class="chip">⏱ <b>15–20 min</b></span>
+      <span class="chip">🔑 <b>sudo</b> on the DB VM + DB admin</span>
+      <span class="chip">🖥 Linux x86-64 · MySQL 5.7/8.x · MariaDB 10.x · PostgreSQL 12+ · SQL Server 2017+ · MongoDB 4.4+</span>
     </div>
   </header>
 
   <div class="toc">
     <b>On this page</b>
     <ol>
-      <li><a href="#arch">Deployment architecture</a></li>
-      <li><a href="#lite">AgentLite — per engine</a></li>
-      <li><a href="#user">Classification reader (optional)</a></li>
-      <li><a href="#token">Enrollment token</a></li>
+      <li><a href="#what">What AgentLite is</a></li>
+      <li><a href="#log">Enable the native audit log (per engine)</a></li>
+      <li><a href="#user">Read-only user (optional)</a></li>
+      <li><a href="#token">Get your enrollment token</a></li>
       <li><a href="#install">Install &amp; run the agent</a></li>
       <li><a href="#verify">Verify</a></li>
-      <li><a href="#agent">Agent — network · host · proxy</a></li>
-      <li><a href="#less">Agentless — managed / PaaS</a></li>
       <li><a href="#egress">Per-cloud egress notes</a></li>
-      <li><a href="#bus">AgentLite → audit stream</a></li>
+      <li><a href="#bus">Publish to an audit stream (optional)</a></li>
       <li><a href="#trouble">Troubleshooting</a></li>
       <li><a href="#security">Security &amp; privacy</a></li>
     </ol>
   </div>
 
-  <h2 id="arch">1. Deployment architecture — pick a capture model</h2>
-  <p>TooVix DAM captures database activity three ways, all feeding <b>one control plane</b>. Which model applies depends on the engine and where it runs — a <b>self-managed</b> database (VM / on-prem) exposes all three; a <b>managed PaaS</b> instance you don't control exposes only Agentless.</p>
-  <table>
-    <thead><tr><th>Model</th><th>How it captures</th><th>Best for</th><th>Blocks?</th></tr></thead>
-    <tbody>
-      <tr><td><b class="ok">AgentLite</b><br><span style="color:var(--muted);font-size:12px">audit-forward · recommended</span></td><td>Reads the telemetry the database <b>already produces</b> — no wire tap, no path change. Reads <b>after</b> decryption, so it captures TLS <b>and local/IPC</b> sessions.</td><td>Self-managed DBs on a VM / on-prem, any engine. The default choice.</td><td>No — detective</td></tr>
-      <tr><td><b style="color:var(--amber)">Agent</b><br><span style="color:var(--muted);font-size:12px">network · host · proxy</span></td><td>Taps the connection: <b>network</b> (passive, cleartext), <b>host eBPF</b> (below TLS), or <b>inline proxy</b>. Carries exact row counts.</td><td>MySQL / PostgreSQL where you want wire-level depth or prevention.</td><td>Proxy only — <b>yes</b></td></tr>
-      <tr><td><b style="color:var(--accent)">Agentless</b><br><span style="color:var(--muted);font-size:12px">cloud stream · PaaS</span></td><td>The cloud emits its native audit to a managed <b>stream</b> (Pub/Sub · Event Hub · Kinesis); DAM consumes it. Nothing installed.</td><td>Managed / PaaS: RDS, Cloud SQL, Azure SQL, Cosmos.</td><td>No — detective</td></tr>
-    </tbody>
-  </table>
-
-  <p><b>Which model works for each engine</b> — <span class="ok">✅ supported</span> · <span class="warn-i">⚠ limited / roadmap</span> · ✗ not applicable by the engine's design:</p>
-  <table>
-    <thead><tr><th>Engine</th><th>AgentLite</th><th>Agent (network / host / proxy)</th><th>Agentless (PaaS)</th><th>Row counts</th></tr></thead>
-    <tbody>
-      <tr><td><b>MySQL / MariaDB</b><br><span style="color:var(--muted);font-size:12px">open · OpenSSL</span></td><td>✅ general log</td><td>✅ all four modes</td><td>✅ Cloud SQL · <span class="warn-i">RDS ⚠</span></td><td>✅ network / host / proxy</td></tr>
-      <tr><td><b>PostgreSQL</b><br><span style="color:var(--muted);font-size:12px">open · OpenSSL</span></td><td>✅ pgaudit / statement log</td><td>✅ network + host eBPF</td><td>✅ Cloud SQL PG</td><td>✅ network / host / proxy</td></tr>
-      <tr><td><b>SQL Server</b><br><span style="color:var(--muted);font-size:12px">proprietary · SChannel</span></td><td>✅ TDS poll — Audit / XEvents</td><td><span class="warn-i">⚠ network only</span> · <b>no eBPF</b> (SChannel)</td><td>✅ Azure SQL → Event Hub</td><td>✅ <b>XEvents</b> only</td></tr>
-      <tr><td><b>Oracle</b><br><span style="color:var(--muted);font-size:12px">proprietary · libnnz</span></td><td>✅ SQL*Net poll — UNIFIED_AUDIT_TRAIL</td><td>✗ <b>no eBPF</b> (own crypto); TNS proprietary</td><td><span class="warn-i">⚠ RDS / OCI stream — roadmap</span></td><td>✅ via <code>V$SQLSTATS</code></td></tr>
-      <tr><td><b>MongoDB</b><br><span style="color:var(--muted);font-size:12px">wire · TLS</span></td><td>✅ profiler poll — system.profile</td><td>✗ <b>no eBPF</b>; wire decode low-value</td><td><span class="warn-i">⚠ Cosmos / Atlas — roadmap</span></td><td>⚠ best-effort</td></tr>
-    </tbody>
-  </table>
-  <aside><b>Why eBPF is MySQL / PostgreSQL only.</b> Host mode hooks <code>SSL_read</code>/<code>SSL_write</code> on <b>OpenSSL</b> (libssl). SQL Server (SChannel) and Oracle (libnnz) ship their own crypto stacks — there is no symbol to hook, so eBPF is <b>not applicable</b>, not merely unbuilt. For those engines, AgentLite is the primary path.</aside>
-  <aside class="warn"><b>Everything converges.</b> Whichever model you pick, events land in the same ingest and the same per-tenant event store — so classification, detection, and the tamper-evident audit trail work identically regardless of how the activity was captured.</aside>
+  <h2 id="what">1. What AgentLite is (and what it isn't)</h2>
+  <p><b>AgentLite</b> is a lightweight forwarder that reads <b>telemetry the database already produces</b> and ships each statement to TooVix DAM. For <b>MySQL and PostgreSQL</b> it tails a log file <b>on the database host</b>. For <b>SQL Server and MongoDB</b> there is no text log to tail, so it <b>polls the database's own telemetry over the network</b> — those two need a DB login but can run on a <b>separate host</b> (see §2).</p>
+  <ul>
+    <li><span class="ok">✅ No wire tap, no proxy, no path change</span> — it reads telemetry the database already produces.</li>
+    <li><span class="ok">✅ Transport-independent</span> — because it reads what the DB logs <em>after</em> decryption, it captures <b>TLS-encrypted</b> client sessions too.</li>
+    <li><span class="ok">✅ Works on private, no-public-IP databases</span> — the agent only makes <b>outbound</b> connections to DAM; DAM never connects into your network.</li>
+    <li><span class="warn-i">⚠️ Detective only</span> — it observes and alerts <b>after the fact</b>; it <b>cannot block</b> a query. (Use Inline Proxy mode if you need prevention.)</li>
+    <li><span class="warn-i">⚠️ Records all SQL</span> — the general log captures every statement from every session in cleartext on the VM. Treat the log file as sensitive (see §10).</li>
+  </ul>
+  <div class="flow">DB telemetry  →  AgentLite forwarder  →  TooVix DAM  →  Database Activity view
+ (MySQL general log / PostgreSQL log /    (HTTPS, or an audit stream)
+  SQL Server audit / MongoDB profiler)</div>
+  <p><b>Requirements:</b> Linux VM <b>x86-64 (amd64)</b> (arm64/Graviton not yet supported) · <b>MySQL 5.7/8.x, MariaDB 10.x, PostgreSQL 12+, SQL Server 2017+, or MongoDB 4.4+</b> · <b>outbound HTTPS (443)</b> from the VM to your DAM control-plane URL (see §7).</p>
+  <aside class="warn"><b>SQL Server?</b> AgentLite audit-forward doesn't apply — SQL Server Audit is a <b>binary</b> <code>.sqlaudit</code> trail, not a text log a forwarder can tail. For <b>Azure SQL / managed SQL Server</b>, use the <b>Agentless</b> path (DB Auditing → Event Hub → DAM). See <a href="#log">§2 → SQL Server</a>.</aside>
 
   <hr />
 
-  <h2 id="lite">2. AgentLite — enable the native telemetry (per engine)</h2>
-  <p><b>AgentLite</b> is a lightweight forwarder that reads telemetry the database <b>already produces</b> and ships each statement to DAM. It comes in two shapes:</p>
-  <ul>
-    <li><b>Log tailer</b> — tails a text log <b>on the DB host</b> (MySQL general log, PostgreSQL statement log).</li>
-    <li><b>Remote poller</b> — polls the database's own audit telemetry over its protocol; <b>nothing on the DB host</b>, runs on any Linux box with network reach (SQL Server over TDS, Oracle over SQL*Net, MongoDB over the wire).</li>
-  </ul>
-  <div class="flow">DB telemetry  →  AgentLite forwarder  →  TooVix DAM  →  Database Activity view
- (MySQL/PG log · SQL Server audit · Oracle       (HTTPS, or an audit stream)
-  UNIFIED_AUDIT_TRAIL · MongoDB profiler)</div>
-  <p><span class="ok">✅ transport-independent</span> (reads after TLS decryption, sees local/IPC) · <span class="ok">✅ outbound-only</span> (works on private, no-public-IP DBs) · <span class="warn-i">⚠️ detective only</span> (cannot block — use the <a href="#agent">inline proxy</a>) · <span class="warn-i">⚠️ records all SQL</span> (treat logs as sensitive — see <a href="#security">§12</a>).</p>
-  <p><b>Requirements:</b> Linux x86-64 for the collector · MySQL 5.7/8.x · MariaDB 10.x · PostgreSQL 12+ · SQL Server 2017+ · Oracle 19c/23ai · MongoDB 4.4+ · outbound HTTPS (443) to your DAM URL. Enable the source for your engine below — you'll pass the settings shown into <a href="#install">§5</a>.</p>
+  <h2 id="log">2. Step 1 — Enable the native audit log (choose your engine)</h2>
+  <p>AgentLite tails a log the database writes. Enable it for your engine at a known path — you'll pass that path as <code>AUDIT_LOG</code> in §5.</p>
 
   <h3>🐬 MySQL / MariaDB — general query log</h3>
   <p>As MySQL admin, write the general log to a FILE at a fixed path:</p>
@@ -245,26 +224,12 @@ db.createUser({
 
   <aside><b>Statements appear in Mongo syntax, not SQL</b> — <code>db.users.find({"email":"…"})</code> — because that's what actually ran. Operations still map onto the normal taxonomy (<code>SELECT</code>/<code>INSERT</code>/<code>UPDATE</code>/<code>DELETE</code>/<code>DDL</code>/<code>GRANT</code>), so existing policies and views work unchanged.</aside>
 
-  <h3>🔴 Oracle — Unified Auditing (polled over SQL*Net)</h3>
-  <p>Oracle's telemetry is the <b>Unified Audit Trail</b> — the view <code>UNIFIED_AUDIT_TRAIL</code> in the <code>AUDSYS</code> schema. Like SQL Server, there is no text log; AgentLite <b>polls the view over SQL*Net</b>, so the collector runs on <b>any Linux host</b> that can reach port <b>1521</b> — nothing installs on the DB host, and the <b>same collector covers Oracle on a VM, on RDS, and on OCI</b>.</p>
-  <p>Turn on unified auditing (23ai is unified by default) and create a policy that captures DML. Scoping the policy <code>BY &lt;appuser&gt;</code> keeps Oracle's own recursive/background activity out of the trail:</p>
-  <pre><code>CREATE AUDIT POLICY toovix_dml ACTIONS SELECT, INSERT, UPDATE, DELETE;
-AUDIT POLICY toovix_dml BY appuser;   <span class="cmt">-- audit the application schema owner</span></code></pre>
-  <p>Create the collector's read-only login. <code>AUDIT_VIEWER</code> reads <code>UNIFIED_AUDIT_TRAIL</code>; <code>SELECT_CATALOG_ROLE</code> lets it read <code>V$SQLSTATS</code> (for row counts) and <code>DBA_TAB_COLUMNS</code> (for classification). It gets <b>no data access</b> beyond that:</p>
-  <pre><code>CREATE USER dam_svc IDENTIFIED BY "&lt;strong-password&gt;";
-GRANT CREATE SESSION TO dam_svc;
-GRANT AUDIT_VIEWER TO dam_svc;
-GRANT SELECT_CATALOG_ROLE TO dam_svc;</code></pre>
-  <p>Agent → <code>DB_ENGINE=oracle</code> · <code>TARGET_PORT=1521</code> · <code>DB_NAME=&lt;service/PDB&gt;</code> (e.g. <code>FREEPDB1</code>) · <code>DB_USER=dam_svc</code>/<code>DB_PASSWORD</code>. <b>No <code>AUDIT_LOG</code></b> — the source is the connection. Set <code>TARGET_HOST</code> to the <b>database's</b> address, which is how DAM identifies the instance.</p>
-  <aside><b>Row counts</b> come from a join to <code>V$SQLSTATS</code> on the statement text — <b>exact</b> for ad-hoc queries (<code>EXECUTIONS=1</code>), a per-execution average for parameterised app traffic. <b>RDS Oracle</b> works through this same path (the master user can read the audit views); <b>OCI Autonomous</b> also works but needs a wallet, so set a full <code>oracle://</code> DSN with the wallet options. FGA (fine-grained auditing) is Enterprise-Edition only — Unified Auditing above covers Standard Edition and 23ai Free.</aside>
-
   <aside><b>Verify (MySQL/PG):</b> <code>sudo tail -f &lt;AUDIT_LOG&gt;</code> and run a query elsewhere — lines should appear. AgentLite tails the live file and handles rotation/truncation automatically; ensure <code>logrotate</code> + disk headroom on busy DBs.<br />
-  <b>Verify (MongoDB):</b> run a query, then <code>db.system.profile.find().sort({ts:-1}).limit(5)</code> — documents should appear.<br />
-  <b>Verify (SQL Server / Oracle):</b> run a query, then query the audit source directly (<code>sys.fn_get_audit_file</code> / <code>UNIFIED_AUDIT_TRAIL</code>) — rows should appear within the poll interval (~10s).</aside>
+  <b>Verify (MongoDB):</b> run a query, then <code>db.system.profile.find().sort({ts:-1}).limit(5)</code> — documents should appear.</aside>
 
   <hr />
 
-  <h2 id="user">3. Classification reader (optional)</h2>
+  <h2 id="user">3. Step 2 — (Optional) Create a read-only user for classification</h2>
   <p>DAM can classify which columns hold PII/PCI. This is <b>separate from capture</b> — it logs into the database as a <b>least-privilege reader</b>. Skip this if you only want activity capture.</p>
   <p><b>MySQL / MariaDB:</b></p>
   <pre><code>CREATE USER 'dam_svc'@'%' IDENTIFIED BY '&lt;strong-password&gt;';
@@ -277,15 +242,12 @@ GRANT CONNECT ON DATABASE &lt;db&gt; TO dam_svc;
 \c &lt;db&gt;
 GRANT USAGE ON SCHEMA public TO dam_svc;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;</code></pre>
-  <p><b>SQL Server:</b> a login with <code>VIEW ANY DEFINITION</code> (reads <code>information_schema</code> across databases) — or reuse the capture login if it already has <code>CONTROL SERVER</code>/<code>VIEW SERVER STATE</code>.</p>
-  <p><b>Oracle:</b> the <code>dam_svc</code> user from §2 already holds <code>SELECT_CATALOG_ROLE</code>, which reads <code>DBA_TAB_COLUMNS</code> — no extra grant needed. Set <code>DB_NAME=&lt;service/PDB&gt;</code>.</p>
-  <p><b>MongoDB:</b> the <code>read</code> role from §2 is sufficient — classification <b>samples documents</b> per collection to infer the field set (there is no fixed schema to read).</p>
-  <p><code>dam_svc</code> is <b>read-only</b> — it inspects schema/metadata but can never modify data. Pass it as <code>DB_USER</code>/<code>DB_PASSWORD</code> with <code>CLASSIFY=true</code> (PostgreSQL / SQL Server / Oracle / MongoDB also need <code>DB_NAME</code>).</p>
-  <aside><b>How classification reads each engine:</b> MySQL/PostgreSQL/SQL Server → <code>information_schema.columns</code>; Oracle → <code>DBA_TAB_COLUMNS</code> (scoped to non-Oracle-maintained schemas); MongoDB → <b>document sampling</b> (100 docs/collection, nested fields to depth 3). Mongo sampling is probabilistic — a sensitive field present in only a few rare documents can be missed, so its confidence is reported lower than the SQL engines'.</aside>
+  <p><code>dam_svc</code> is <b>read-only</b> — it inspects schema/metadata but can never modify data. Pass it as <code>DB_USER</code>/<code>DB_PASSWORD</code> with <code>CLASSIFY=true</code> (PostgreSQL also needs <code>DB_NAME</code>).</p>
+  <aside class="warn"><b>MongoDB: classification is not supported yet.</b> <code>CLASSIFY=true</code> is ignored for <code>DB_ENGINE=mongodb</code> — the scanner reads <code>information_schema</code>, which has no MongoDB equivalent (collections are schemaless, so classifying them means sampling documents). Capture still tags statements whose <b>text</b> contains sensitive field names (<code>email</code>, <code>aadhaar</code>, <code>ssn</code>, <code>card</code>…), but a read of a sensitive collection that doesn't name such a field — e.g. <code>db.kyc_documents.find({status:"verified"})</code> — will arrive <b>untagged</b>. If you rely on sensitive-collection policies, raise this with your DAM operator.</aside>
 
   <hr />
 
-  <h2 id="token">4. Enrollment token</h2>
+  <h2 id="token">4. Step 3 — Get your enrollment token</h2>
   <p>In the <b>TooVix DAM console</b>:</p>
   <ul>
     <li>Go to <b>Agents → Deploy monitoring</b> (or <b>Databases → register your instance</b>, then Deploy).</li>
@@ -296,11 +258,11 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;</code></pre>
 
   <hr />
 
-  <h2 id="install">5. Install &amp; run the agent</h2>
-  <p>Pick <b>one</b> install method. The agent needs to <b>read the audit source</b> (§2) and <b>reach DAM over HTTPS</b>. The examples below use <b>MySQL</b> values; for the other engines swap the settings shown per engine in §2 (a summary table follows the examples). Set these once:</p>
-  <pre><code>CONTROL_PLANE="https://dam.yourcompany.com"          <span class="cmt"># from §4</span>
-ENROLL_TOKEN="tvxenr_xxxxxxxxxxxxxxxxxxxx"            <span class="cmt"># from §4</span>
-AUDIT_LOG="/var/log/mysql/general.log"               <span class="cmt"># from §2</span>
+  <h2 id="install">5. Step 4 — Install &amp; run the agent</h2>
+  <p>Pick <b>one</b> install method. The agent needs to <b>read the audit log</b> (§2) and <b>reach DAM over HTTPS</b>. The examples below use <b>MySQL</b> values; for <b>PostgreSQL</b> swap <code>DB_ENGINE=postgresql</code>, <code>TARGET_PORT=5432</code>, <code>AUDIT_SOURCE=pgaudit</code>, and the PG log path from §2. Set these once:</p>
+  <pre><code>CONTROL_PLANE="https://dam.yourcompany.com"          <span class="cmt"># from Step 3</span>
+ENROLL_TOKEN="tvxenr_xxxxxxxxxxxxxxxxxxxx"            <span class="cmt"># from Step 3</span>
+AUDIT_LOG="/var/log/mysql/general.log"               <span class="cmt"># from Step 1</span>
 DB_VM_HOST="10.0.0.10"                               <span class="cmt"># THIS VM's private IP / hostname</span></code></pre>
   <aside><b><code>DB_VM_HOST</code></b> is how DAM identifies this database instance — use the VM's <b>private IP or hostname</b>, matching the instance as registered in the console. It must be <b>unique per DB VM</b> (don't use <code>127.0.0.1</code>, or several VMs collapse into one record).</aside>
 
@@ -339,7 +301,7 @@ EOF
 
 sudo systemctl enable --now dam-agent@audit
 journalctl -u dam-agent@audit -f     <span class="cmt"># watch it enroll + start tailing</span></code></pre>
-  <aside>To also run <b>classification</b> (§3), add <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=&lt;the password&gt;</code> to the env / <code>-e</code> flags.</aside>
+  <aside>To also run <b>classification</b> (Step 2), add <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=&lt;the password&gt;</code> to the env / <code>-e</code> flags.</aside>
 
   <h3>MongoDB variant</h3>
   <p>There's no log file, so drop <code>AUDIT_LOG</code> and the <code>-v</code> log mount, and supply the connection instead. The collector needs no privileged access to the host and can run <b>anywhere</b> that can reach <code>27017</code>:</p>
@@ -370,40 +332,9 @@ enrolled: agent=… instance=… tenant=…
 AgentLite audit-forward tailing /var/log/mysql/general.log (source=general_log engine=mysql)
 [capture] SELECT  rows=…  &lt;user&gt;  SELECT …</code></pre>
 
-  <h3>SQL Server &amp; Oracle variant (remote poller — nothing on the DB host)</h3>
-  <p>Both poll over the DB protocol, so like MongoDB they drop <code>AUDIT_LOG</code>/the log mount and supply a DB login. Run them on <b>any Linux host</b> that can reach the DB — including the DAM side or a small jump-box:</p>
-  <pre><code><span class="cmt"># SQL Server — Extended Events (row counts). Set TARGET_HOST to the SQL Server.</span>
-docker run -d --name toovix-agent-mssql --restart unless-stopped \
-  -e MODE=audit-forward -e DB_ENGINE=mssql \
-  -e TARGET_HOST=10.20.2.4 -e TARGET_PORT=1433 -e DB_NAME=YourDB \
-  -e AUDIT_SOURCE=xevents -e AUDIT_LOG='C:\SQLAudit\ToovixXE*.xel' \
-  -e DB_USER=dam_svc -e DB_PASSWORD=&lt;password&gt; \
-  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} -e CONTROL_PLANE=${CONTROL_PLANE} \
-  &lt;your-dam-agent-image&gt;
-
-<span class="cmt"># Oracle — Unified Auditing. DB_NAME is the service/PDB; no AUDIT_LOG.</span>
-docker run -d --name toovix-agent-oracle --restart unless-stopped \
-  -e MODE=audit-forward -e DB_ENGINE=oracle \
-  -e TARGET_HOST=10.0.13.149 -e TARGET_PORT=1521 -e DB_NAME=FREEPDB1 \
-  -e DB_USER=dam_svc -e DB_PASSWORD=&lt;password&gt; \
-  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} -e CONTROL_PLANE=${CONTROL_PLANE} \
-  &lt;your-dam-agent-image&gt;</code></pre>
-
-  <h3>Per-engine settings summary</h3>
-  <table>
-    <thead><tr><th>Engine</th><th><code>DB_ENGINE</code></th><th><code>AUDIT_SOURCE</code></th><th>Port</th><th>Needs DB login?</th><th><code>AUDIT_LOG</code></th></tr></thead>
-    <tbody>
-      <tr><td>MySQL / MariaDB</td><td><code>mysql</code></td><td><code>general_log</code></td><td>3306</td><td>only for classification</td><td>log path</td></tr>
-      <tr><td>PostgreSQL</td><td><code>postgresql</code></td><td><code>pgaudit</code></td><td>5432</td><td>only for classification</td><td>log path</td></tr>
-      <tr><td>SQL Server</td><td><code>mssql</code></td><td><code>xevents</code> / <code>sql_server_audit</code></td><td>1433</td><td><b>yes</b> (VIEW SERVER STATE / CONTROL SERVER)</td><td>.xel / .sqlaudit path</td></tr>
-      <tr><td>Oracle</td><td><code>oracle</code></td><td><em>(none)</em></td><td>1521</td><td><b>yes</b> (AUDIT_VIEWER)</td><td>— none —</td></tr>
-      <tr><td>MongoDB</td><td><code>mongodb</code></td><td><code>profiler</code></td><td>27017</td><td><b>yes</b> (read + profiler role)</td><td>— none —</td></tr>
-    </tbody>
-  </table>
-
   <hr />
 
-  <h2 id="verify">6. Verify</h2>
+  <h2 id="verify">6. Step 5 — Verify</h2>
   <ul>
     <li>Run a distinctive query against MySQL over <b>TCP</b>, so it's logged:
       <pre><code>mysql -h 127.0.0.1 -u &lt;someuser&gt; -p -e "SELECT 'dam-verify-123', NOW();"</code></pre>
@@ -415,95 +346,7 @@ docker run -d --name toovix-agent-oracle --restart unless-stopped \
 
   <hr />
 
-  <h2 id="agent">7. Agent — network · host eBPF · inline proxy</h2>
-  <p>The <b>Agent</b> taps the connection instead of reading the database's audit. It's for <b>MySQL and PostgreSQL</b> — open protocols on OpenSSL hosts — and is how you get <b>exact row counts on every event</b> and, with the proxy, <b>real-time blocking</b>. All three run from the same agent image, selected by <code>MODE</code>. Deploy on the <b>DB host</b> (network/host) or in the connection path (proxy).</p>
-  <table>
-    <thead><tr><th>Mode</th><th><code>MODE</code></th><th>Sees</th><th>Path change?</th><th>Blocks?</th></tr></thead>
-    <tbody>
-      <tr><td><b>Network</b></td><td><code>network</code></td><td>Cleartext wire traffic (passive, AF_PACKET). Blind to TLS.</td><td>No — out of band</td><td>No</td></tr>
-      <tr><td><b>Host (eBPF)</b></td><td><code>host</code></td><td><b>Below TLS</b> — hooks <code>SSL_read/SSL_write</code>, so it reads encrypted sessions. Blind to cleartext (pair with network).</td><td>No — transparent</td><td>No</td></tr>
-      <tr><td><b>Inline proxy</b></td><td><code>proxy</code></td><td>Terminates the connection, sees the real end-user, forwards to the DB.</td><td><b>Yes</b> — clients connect to the proxy</td><td><b>Yes</b></td></tr>
-    </tbody>
-  </table>
-  <aside class="warn"><b>Only MySQL / PostgreSQL.</b> Host eBPF hooks OpenSSL — <b>SQL Server (SChannel) and Oracle (libnnz) can't be hooked</b>, and MongoDB wire-decode is low-value. For those engines use <b>AgentLite</b> (§2). Network mode can passively decode SQL Server's TDS, but SQL Server encrypts by default, so it captures little in practice.</aside>
-
-  <h3>Network agent (passive wire capture)</h3>
-  <p>Runs on the DB host, shares its network namespace, and needs <code>NET_ADMIN</code>/<code>NET_RAW</code> to open a raw socket. Zero path change, ~0 overhead:</p>
-  <pre><code>docker run -d --name toovix-agent-network --restart unless-stopped \
-  --network host --cap-add NET_ADMIN --cap-add NET_RAW \
-  -e MODE=network \
-  -e DB_ENGINE=mysql -e TARGET_PORT=3306 \
-  -e TARGET_HOST=${DB_VM_HOST} \
-  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} -e CONTROL_PLANE=${CONTROL_PLANE} \
-  &lt;your-dam-agent-image&gt;
-<span class="cmt"># PostgreSQL: DB_ENGINE=postgresql TARGET_PORT=5432</span></code></pre>
-
-  <h3>Host agent (eBPF, below TLS)</h3>
-  <p>Also on the DB host, but attaches eBPF uprobes to the database's <b>libssl</b> — so it reads TLS-encrypted sessions the network agent can't. Needs <code>CAP_BPF</code>/<code>CAP_PERFMON</code> (kernel 5.8+) and the host PID namespace:</p>
-  <pre><code>docker run -d --name toovix-agent-host --restart unless-stopped \
-  --network host --pid host --privileged \
-  -e MODE=host \
-  -e DB_ENGINE=postgresql -e TARGET_PORT=5432 \
-  -e TARGET_HOST=${DB_VM_HOST} \
-  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} -e CONTROL_PLANE=${CONTROL_PLANE} \
-  &lt;your-dam-agent-image&gt;</code></pre>
-  <aside><b>Deploy network + host together</b> for full coverage — they're complementary, not redundant: network reads cleartext (TLS is opaque to it), host reads encrypted (cleartext never calls <code>SSL_read</code>). Neither double-counts the other. This is the recommended "full visibility" posture for self-managed MySQL/PG.</aside>
-
-  <h3>Inline proxy (the only mode that can block)</h3>
-  <p>The proxy listens on its own port, forwards to the real database, and can <b>drop or kill</b> a session per policy. Clients must connect <b>to the proxy</b> instead of the DB — the one mode with a connection-path change. Run it wherever it can reach the DB, then repoint your apps:</p>
-  <pre><code>docker run -d --name toovix-agent-proxy --restart unless-stopped \
-  -p 3307:3307 \
-  -e MODE=proxy \
-  -e DB_ENGINE=mysql \
-  -e LISTEN_PORT=3307 \
-  -e UPSTREAM=&lt;db-host&gt;:3306 \
-  -e TARGET_HOST=${DB_VM_HOST} \
-  -e AGENT_ENROLL_TOKEN=${ENROLL_TOKEN} -e CONTROL_PLANE=${CONTROL_PLANE} \
-  &lt;your-dam-agent-image&gt;
-<span class="cmt"># apps now connect to the proxy host on :3307 instead of the DB on :3306</span></code></pre>
-  <aside class="warn"><b>Pair the proxy with a network agent</b> so clients that <b>bypass</b> the proxy and hit the DB directly are still seen. Note: if the proxy→DB hop is cleartext, the network agent records that leg too, and its <code>client_ip</code> is the <b>proxy</b>, not the end user — keep the proxy→DB hop on TLS to avoid that duplicate.</aside>
-
-  <hr />
-
-  <h2 id="less">8. Agentless — managed / PaaS (cloud audit stream)</h2>
-  <p>For a <b>managed database you don't control</b> — RDS, Cloud SQL, Azure SQL, Cosmos — you can't install any agent. Instead the cloud emits the database's <b>native audit</b> to a managed <b>stream</b>, and the DAM connector consumes it. Nothing runs on the host; setup is entirely on the cloud side plus one connector in DAM.</p>
-  <div class="flow">Managed DB  →  native audit  →  cloud stream  →  DAM connector  →  Database Activity view
- (RDS · Cloud SQL ·   (Kinesis · Pub/Sub ·
-  Azure SQL · Cosmos)   Event Hub)</div>
-  <aside class="warn"><b>Agentless ≠ AgentLite publishing to a stream.</b> In Agentless the <b>cloud</b> produces the audit records natively (you never touch the host). Below, each cloud's setup — pick the row matching your database.</aside>
-
-  <h3>🟦 Azure SQL Database → Event Hub <span style="color:var(--muted);font-weight:400;font-size:13px">(verified ~2-min end-to-end)</span></h3>
-  <p>Enable <b>database-level</b> auditing to an Event Hub, then point the DAM connector at it. <b>It must be database-level</b> — server-level auditing with a DB-scoped diagnostic setting captures nothing.</p>
-  <pre><code>az sql db audit-policy update -g &lt;RG&gt; -s &lt;server&gt; -n &lt;db&gt; \
-  --state Enabled --event-hub-target-state Enabled \
-  --event-hub &lt;hub&gt; --event-hub-authorization-rule-id &lt;send-rule-id&gt; \
-  --actions BATCH_COMPLETED_GROUP SUCCESSFUL_DATABASE_AUTHENTICATION_GROUP</code></pre>
-  <p>In DAM, add an <b>Azure Event Hub</b> connector with the hub's <b>listen</b> connection string and your tenant's enrollment token. Captures statements, logins, and audit-config changes.</p>
-
-  <h3>🟨 GCP Cloud SQL (MySQL / PostgreSQL) → Pub/Sub <span style="color:var(--muted);font-weight:400;font-size:13px">(verified)</span></h3>
-  <p>Enable the database's audit flags, route its logs to a Pub/Sub topic via a Cloud Logging sink, and let the DAM connector pull the subscription.</p>
-  <pre><code><span class="cmt"># 1. turn on audit (PostgreSQL example — pgaudit)</span>
-gcloud sql instances patch &lt;instance&gt; \
-  --database-flags=cloudsql.enable_pgaudit=on,pgaudit.log=read,write,ddl,role
-<span class="cmt"># MySQL: --database-flags=cloudsql_mysql_audit=on  (then create an audit rule, wildcard '*')</span>
-
-<span class="cmt"># 2. route audit logs → Pub/Sub topic</span>
-gcloud pubsub topics create toovix-dam-audit
-gcloud logging sinks create toovix-cloudsql-audit-sink \
-  pubsub.googleapis.com/projects/&lt;proj&gt;/topics/toovix-dam-audit \
-  --log-filter='resource.type="cloudsql_database" AND resource.labels.database_id="&lt;proj&gt;:&lt;instance&gt;"'
-<span class="cmt"># grant the sink's writer identity roles/pubsub.publisher on the topic, then create a subscription</span></code></pre>
-  <p>In DAM, add a <b>GCP Pub/Sub</b> connector pointing at the subscription. Cloud SQL emits a <b>structured audit proto</b> (not text), which the connector normalizes.</p>
-
-  <h3>🟧 AWS RDS / Aurora → Kinesis <span class="warn-i">(roadmap)</span></h3>
-  <p>RDS publishes a <b>Database Activity Stream</b> (or exports the audit/general log to CloudWatch Logs) which a subscription filter forwards to <b>Kinesis</b>. The Kinesis source adapter is on the roadmap; for MySQL/PostgreSQL on RDS today, the <b>AgentLite remote poller</b> or an EC2-hosted collector is the interim path. <b>RDS Oracle</b> is reachable by the AgentLite Oracle collector (§2) via the master user.</p>
-
-  <h3>🍃 MongoDB — Cosmos / Atlas <span class="warn-i">(roadmap)</span></h3>
-  <p><b>Azure Cosmos DB for MongoDB</b> emits <code>MongoRequests</code> diagnostics to an <b>Event Hub</b> (the transport already exists — a normalizer is pending). <b>MongoDB Atlas</b> has no native push stream; its audit is a pull-based log export to S3. For managed MongoDB today, the <b>AgentLite profiler poller</b> (§2) can target a remote <code>mongod</code> including Atlas.</p>
-
-  <hr />
-
-  <h2 id="egress">9. Per-cloud notes (egress + the private-VM case)</h2>
+  <h2 id="egress">7. Per-cloud notes (egress + the private-VM case)</h2>
   <p>The core steps are <b>identical on GCP, AWS, and Azure.</b> The only cloud-specific concern is giving the VM <b>outbound HTTPS (443)</b> to reach DAM — especially for <b>private (no public IP)</b> databases.</p>
   <table>
     <thead><tr><th>Cloud</th><th>Give the private DB VM outbound HTTPS</th><th>Reach it to install</th></tr></thead>
@@ -517,9 +360,8 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
 
   <hr />
 
-  <h2 id="bus">10. (Optional) AgentLite → audit stream instead of direct HTTPS</h2>
-  <aside><b>This is not Agentless (§8).</b> Here the <b>AgentLite agent</b> — which you installed — publishes to a stream instead of POSTing DAM over HTTPS, as a durable buffer that survives brief DAM outages. Agentless (§8) is when the <b>cloud itself</b> emits the audit and no agent exists. Direct HTTPS (§5) is the simplest default; use this only if you want the buffer.</aside>
-  <p>The bus is the cloud-native stream for your provider:</p>
+  <h2 id="bus">8. (Optional) Publish to an audit stream instead of direct HTTPS</h2>
+  <p>Instead of POSTing DAM directly, the agent can publish audit events to your cloud's <b>message bus / audit stream</b> that DAM consumes — a durable buffer that survives brief DAM outages. This is optional; direct HTTPS (§5) works fine. The bus is the cloud-native stream for your provider:</p>
 
   <aside class="warn"><b>⚠️ The stream is never automatic.</b> On every cloud you <b>provision the stream yourself</b> and grant access — a fresh database or VM emits <b>nothing</b> to a stream until you configure it. There are always two parts: <b>(1)</b> create the stream (a Pub/Sub topic, Kinesis stream, or Event Hub), and <b>(2)</b> grant the publisher (this agent's VM identity) <em>and</em> the DAM consumer access to it.</aside>
 
@@ -572,7 +414,7 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
 
   <hr />
 
-  <h2 id="trouble">11. Troubleshooting</h2>
+  <h2 id="trouble">9. Troubleshooting</h2>
   <table>
     <thead><tr><th>Symptom</th><th>Cause &amp; fix</th></tr></thead>
     <tbody>
@@ -591,7 +433,7 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
 
   <hr />
 
-  <h2 id="security">12. Security &amp; privacy notes</h2>
+  <h2 id="security">10. Security &amp; privacy notes</h2>
   <ul>
     <li><b>The general query log contains every SQL statement</b> (from all apps and users) in cleartext on the VM. Restrict file permissions, enable rotation, and treat it as sensitive data.</li>
     <li><b>AgentLite is detective, not preventive</b> — it alerts after the fact and cannot block. For real-time blocking, use <b>Inline Proxy</b> mode.</li>
