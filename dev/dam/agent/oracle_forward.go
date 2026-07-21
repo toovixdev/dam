@@ -43,7 +43,10 @@ import (
 // don't ship the CA for, so verification is skipped (the ACL on the ADB is the access control).
 // For the mutual-TLS/wallet path instead, set ORACLE_WALLET to the unzipped wallet directory.
 func oracleDSN(cfg Config) string {
-	svc := orDefault(cfg.DBName, orDefault(env("ORACLE_SERVICE", ""), "FREEPDB1"))
+	// ORACLE_SERVICE wins for the connection service name — OCI ADB service names are long
+	// (…_toovixadb_low.adb.oraclecloud.com), so this lets DB_NAME stay a short display label
+	// while the real service is passed separately. Falls back to DB_NAME for on-VM Oracle.
+	svc := orDefault(env("ORACLE_SERVICE", ""), orDefault(cfg.DBName, "FREEPDB1"))
 	host := orDefault(cfg.TargetHost, "127.0.0.1")
 	port := atoiDefault(orDefault(cfg.TargetPort, "1521"), 1521)
 
