@@ -144,6 +144,45 @@
     section{break-inside:avoid;box-shadow:none;border:1px solid #ddd}
     .hero{background:#312e81 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   }
+
+  /* ── Deployment topology diagrams (namespaced dt-) ── */
+  svg.dt-ico{width:1em;height:1em;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;flex:none}
+  .dt-cloud{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:16px 0;border-top:4px solid var(--dca,#6366f1)}
+  .dt-cloud.gcp{--dca:#1a73e8} .dt-cloud.aws{--dca:#ff9900} .dt-cloud.azure{--dca:#0089d6} .dt-cloud.oci{--dca:#c74634} .dt-cloud.onprem{--dca:#5b6472}
+  .dt-head{padding:14px 18px 2px}
+  .dt-head h4{margin:0;font-size:16px;display:flex;align-items:center;gap:9px}
+  .dt-head .dt-tag{font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:600;color:#fff;background:var(--dca);border-radius:6px;padding:2px 8px}
+  .dt-head p{margin:7px 0 0;font-size:13px;color:var(--muted)}
+  .dt-diagram{display:flex;flex-wrap:wrap;align-items:stretch;gap:6px;margin:14px 16px;padding:16px 12px;background:#f7f9fc;border:1px solid #dbe2ec;border-radius:12px;overflow-x:auto}
+  .dt-zone{border:1.5px dashed #c6d0de;border-radius:12px;padding:26px 12px 12px;position:relative;display:flex;flex-direction:column;gap:10px;min-width:210px;flex:1}
+  .dt-zone .dt-zl{position:absolute;top:-9px;left:12px;background:#f7f9fc;padding:0 8px;font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#64748b;font-weight:600}
+  .dt-zone.dam{border-style:solid;border-color:#0f172a;min-width:180px;flex:.8}
+  .dt-host{border:1.5px solid var(--hc,#c6d0de);border-radius:10px;background:#fff;padding:9px 10px 10px}
+  .dt-host.iaas{--hc:#2563eb} .dt-host.collector{--hc:#0d9488} .dt-host.proxy{--hc:#d97706}
+  .dt-hcap{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.04em;text-transform:uppercase;color:#64748b;display:flex;align-items:center;gap:5px;margin-bottom:7px}
+  .dt-hcap svg{width:12px;height:12px}
+  .dt-n{display:flex;align-items:center;gap:9px}
+  .dt-n .dt-tile{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;border:1.5px solid;flex:none}
+  .dt-n .dt-nt{font-size:12.5px;font-weight:650;color:#0f172a;line-height:1.2}
+  .dt-n .dt-ns{font-size:10.3px;color:#64748b;font-family:ui-monospace,Menlo,monospace}
+  .dt-tile.iaas{background:#eaf1ff;border-color:#2563eb;color:#2563eb}
+  .dt-tile.paas{background:#f2ecfe;border-color:#7c3aed;color:#7c3aed}
+  .dt-tile.lite{background:#e3f7f4;border-color:#0d9488;color:#0d9488}
+  .dt-tile.agent{background:#fdf1de;border-color:#d97706;color:#d97706}
+  .dt-tile.stream{background:#ebeafe;border-color:#5b57e0;color:#5b57e0}
+  .dt-tile.net{background:#eef2f7;border-color:#64748b;color:#64748b}
+  .dt-tile.dam{background:#0f172a;border-color:#000;color:#eef2fb}
+  .dt-chips{display:flex;flex-direction:column;gap:6px;margin-top:8px;padding-top:8px;border-top:1px dashed #e2e8f0}
+  .dt-chip{display:flex;align-items:center;gap:7px;font-size:11.3px;color:#334155}
+  .dt-chip .dt-ct{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:12px;border:1.4px solid;flex:none}
+  .dt-chip.lite .dt-ct{background:#e3f7f4;border-color:#0d9488;color:#0d9488}
+  .dt-chip.agent .dt-ct{background:#fdf1de;border-color:#d97706;color:#d97706}
+  .dt-chip b{color:#0f172a;font-weight:640}
+  .dt-out{font-family:ui-monospace,Menlo,monospace;font-size:10px;color:#0d9488;font-weight:600}
+  .dt-out.stream{color:#5b57e0}
+  .dt-arrow{display:flex;align-items:center;justify-content:center;color:#64748b;font-size:22px;font-weight:700;padding:0 2px;flex:none}
+  .dt-note{font-size:11px;color:#64748b;font-style:italic;padding:4px 2px}
+  @media(max-width:720px){.dt-arrow{transform:rotate(90deg);width:100%}.dt-zone{min-width:100%}}
 </style>
 </head>
 <body>
@@ -195,6 +234,7 @@
     <a href="#deploy-lite" style="padding-left:20px;font-size:12.5px">— AgentLite (per engine)</a>
     <a href="#deploy-agent" style="padding-left:20px;font-size:12.5px">— Agent (network·host·proxy)</a>
     <a href="#deploy-less" style="padding-left:20px;font-size:12.5px">— Agentless (PaaS)</a>
+    <a href="#deploy-topos" style="padding-left:20px;font-size:12.5px">— Topologies by cloud</a>
     <a href="#s-classify">3 · Classify data</a>
     <a href="#s-policies">4 · Tune policies</a>
     <a href="#s-alerts">5 · Triage alerts</a>
@@ -710,6 +750,169 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
       <p><b>No cloud stream is used for OCI ADB.</b> A true agentless pipeline on OCI would be ADB → Data&nbsp;Safe → an OCI Function → Logging → Service Connector Hub → OCI Streaming — five hops with custom code, to turn a pull into a push. It isn't worth it: the <a href="#deploy-lite">AgentLite Oracle collector</a> already reaches managed ADB directly over one-way TLS (nothing installed on the ADB), with row counts and classification. That's the pragmatic agentless answer for OCI — verified end to end against a live Autonomous Database.</p>
 
       <div class="note">Once activity flows — by any model — you'll see it on the <span class="nav-chip">Dashboard</span> and, if risky, in <span class="nav-chip">Alerts</span>. Confirm the agent/connector is healthy under <span class="nav-chip">Agents &amp; Coverage</span>.</div>
+    </section>
+
+    <!-- ══ Deployment topologies ══ -->
+    <section id="deploy-topos">
+      <span class="part-badge">Step 2 · Topologies</span>
+      <h2>Deployment topologies — by cloud</h2>
+      <p>Putting the models together: <b>where each component runs</b>, per environment. Read each diagram left→right — your <b>VPC/VNet</b> holds the databases and the hosts that capture them, an <b>egress gateway</b> or <b>cloud bus</b> carries the data out, and it lands in the <b>DAM control plane</b>. The <b>AgentLite log tailer</b> and the <b>Agent</b> run <b>on the database host</b>; a <b>remote poller</b> runs on a <b>separate collector host</b>; <b>agentless</b> has no host — the cloud streams it.</p>
+
+      <!-- icon sprite -->
+      <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+        <symbol id="dt-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+        <symbol id="dt-clouddb" viewBox="0 0 24 24"><path d="M7 18a4 4 0 0 1-.5-8 5 5 0 0 1 9.7-1.2A3.5 3.5 0 0 1 18 18z"/><ellipse cx="12" cy="12.5" rx="4" ry="1.5"/><path d="M8 12.5v3c0 .8 1.8 1.5 4 1.5s4-.7 4-1.5v-3"/></symbol>
+        <symbol id="dt-host" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="7" rx="1.5"/><rect x="3" y="13" width="18" height="7" rx="1.5"/><circle cx="7" cy="7.5" r="1"/><circle cx="7" cy="16.5" r="1"/></symbol>
+        <symbol id="dt-forward" viewBox="0 0 24 24"><path d="M6 3h7l5 5v13H6z"/><path d="M13 3v5h5"/><path d="M8.5 14h6m0 0l-2.2-2.2M14.5 14l-2.2 2.2"/></symbol>
+        <symbol id="dt-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3.2M12 18.3v3.2M2.5 12h3.2M18.3 12h3.2M5.4 5.4l2.2 2.2M16.4 16.4l2.2 2.2M18.6 5.4l-2.2 2.2M7.6 16.4l-2.2 2.2"/></symbol>
+        <symbol id="dt-proxy" viewBox="0 0 24 24"><path d="M12 3l8 3.5v5.2c0 4.6-3.3 7.5-8 8.8-4.7-1.3-8-4.2-8-8.8V6.5z"/><path d="M8.5 12h7m0 0l-2.4-2.4M15.5 12l-2.4 2.4"/></symbol>
+        <symbol id="dt-bus" viewBox="0 0 24 24"><rect x="3" y="8" width="4" height="8" rx="1"/><rect x="10" y="8" width="4" height="8" rx="1"/><rect x="17" y="8" width="4" height="8" rx="1"/><path d="M7 12h3M14 12h3"/></symbol>
+        <symbol id="dt-gw" viewBox="0 0 24 24"><path d="M4 8h9m0 0l-3-3m3 3l-3 3"/><rect x="14" y="4" width="6" height="16" rx="1.5"/><path d="M4 16h9m0 0l-3-3m3 3l-3 3"/></symbol>
+        <symbol id="dt-shield" viewBox="0 0 24 24"><path d="M12 3l8 3.5v5.2c0 4.6-3.3 7.5-8 8.8-4.7-1.3-8-4.2-8-8.8V6.5z"/><path d="M8.8 12l2.2 2.2 4.2-4.4"/></symbol>
+        <symbol id="dt-store" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6"/><path d="M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/></symbol>
+      </defs></svg>
+
+      <!-- GCP -->
+      <div class="dt-cloud gcp">
+        <div class="dt-head"><h4>☁️ GCP <span class="dt-tag">MySQL · PostgreSQL</span></h4>
+          <p>AgentLite tailer + Agent run <b>on the Compute Engine VM</b>; Cloud SQL streams via a Logging sink → Pub/Sub. Private VMs egress through Cloud NAT.</p></div>
+        <div class="dt-diagram">
+          <div class="dt-zone"><span class="dt-zl">GCP Project · VPC</span>
+            <div class="dt-host iaas"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> Compute Engine VM · on the DB host</div>
+              <div class="dt-n"><span class="dt-tile iaas"><svg class="dt-ico"><use href="#dt-db"/></svg></span><div><div class="dt-nt">MySQL / PostgreSQL</div><div class="dt-ns">IaaS · private subnet</div></div></div>
+              <div class="dt-chips"><div class="dt-chip lite"><span class="dt-ct"><svg class="dt-ico"><use href="#dt-forward"/></svg></span><span><b>AgentLite</b> · tails log</span></div>
+                <div class="dt-chip agent"><span class="dt-ct"><svg class="dt-ico"><use href="#dt-gear"/></svg></span><span><b>Agent</b> · network + host eBPF</span></div></div></div>
+            <div class="dt-host proxy"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> Separate host · in the path</div>
+              <div class="dt-n"><span class="dt-tile agent"><svg class="dt-ico"><use href="#dt-proxy"/></svg></span><div><div class="dt-nt">Inline proxy <span style="color:#64748b;font-weight:400">(optional)</span></div><div class="dt-ns">the only mode that blocks</div></div></div></div>
+            <div class="dt-n"><span class="dt-tile paas"><svg class="dt-ico"><use href="#dt-clouddb"/></svg></span><div><div class="dt-nt">Cloud SQL — MySQL / PG</div><div class="dt-ns">PaaS · managed · no host</div></div></div>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone"><span class="dt-zl">Transit</span>
+            <div class="dt-n"><span class="dt-tile net"><svg class="dt-ico"><use href="#dt-gw"/></svg></span><div><div class="dt-nt">Cloud NAT + FW</div><div class="dt-ns">outbound 443</div></div></div>
+            <span class="dt-out">↑ agents → HTTPS</span>
+            <div class="dt-n"><span class="dt-tile stream"><svg class="dt-ico"><use href="#dt-bus"/></svg></span><div><div class="dt-nt">Pub/Sub topic</div><div class="dt-ns">toovix-dam-audit</div></div></div>
+            <span class="dt-out stream">↑ Cloud SQL audit → sink → bus</span>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest + consumer</div><div class="dt-ns">/api/agents/events · Pub/Sub</div></div></div>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AWS -->
+      <div class="dt-cloud aws">
+        <div class="dt-head"><h4>☁️ AWS <span class="dt-tag">MySQL · PostgreSQL</span></h4>
+          <p>Agent stack on the EC2 instance; RDS is polled by an AgentLite collector on a <b>separate EC2</b> today (Kinesis source adapter is on the roadmap). Egress via NAT Gateway.</p></div>
+        <div class="dt-diagram">
+          <div class="dt-zone"><span class="dt-zl">AWS Account · VPC</span>
+            <div class="dt-host iaas"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> EC2 · on the DB host</div>
+              <div class="dt-n"><span class="dt-tile iaas"><svg class="dt-ico"><use href="#dt-db"/></svg></span><div><div class="dt-nt">MySQL / PostgreSQL</div><div class="dt-ns">IaaS · private subnet</div></div></div>
+              <div class="dt-chips"><div class="dt-chip lite"><span class="dt-ct"><svg class="dt-ico"><use href="#dt-forward"/></svg></span><span><b>AgentLite</b> · tails log</span></div>
+                <div class="dt-chip agent"><span class="dt-ct"><svg class="dt-ico"><use href="#dt-gear"/></svg></span><span><b>Agent</b> · network + host + proxy</span></div></div></div>
+            <div class="dt-host collector"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> Separate collector EC2 · not on RDS</div>
+              <div class="dt-n"><span class="dt-tile lite"><svg class="dt-ico"><use href="#dt-forward"/></svg></span><div><div class="dt-nt">AgentLite collector</div><div class="dt-ns">polls RDS (today)</div></div></div></div>
+            <div class="dt-n"><span class="dt-tile paas"><svg class="dt-ico"><use href="#dt-clouddb"/></svg></span><div><div class="dt-nt">RDS / Aurora — MySQL / PG</div><div class="dt-ns">PaaS · managed · no host</div></div></div>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone"><span class="dt-zl">Transit</span>
+            <div class="dt-n"><span class="dt-tile net"><svg class="dt-ico"><use href="#dt-gw"/></svg></span><div><div class="dt-nt">NAT Gateway</div><div class="dt-ns">outbound 443</div></div></div>
+            <span class="dt-out">↑ agents / collector → HTTPS</span>
+            <div class="dt-n"><span class="dt-tile net"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">CloudWatch Logs</div><div class="dt-ns">RDS audit</div></div></div>
+            <div class="dt-n"><span class="dt-tile stream"><svg class="dt-ico"><use href="#dt-bus"/></svg></span><div><div class="dt-nt">Kinesis Data Stream</div><div class="dt-ns">agentless bus · roadmap</div></div></div>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest + consumer</div><div class="dt-ns">Kinesis source · roadmap</div></div></div>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Azure -->
+      <div class="dt-cloud azure">
+        <div class="dt-head"><h4>☁️ Azure <span class="dt-tag">SQL Server</span></h4>
+          <p>Nothing installs on the Windows SQL Server VM — a <b>separate Linux jump-box</b> polls over TDS. Azure SQL streams via DB-level auditing → diagnostic setting → Event Hub.</p></div>
+        <div class="dt-diagram">
+          <div class="dt-zone"><span class="dt-zl">Azure Subscription · VNet</span>
+            <div class="dt-host iaas"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> Azure VM (Windows) · nothing installed</div>
+              <div class="dt-n"><span class="dt-tile iaas"><svg class="dt-ico"><use href="#dt-db"/></svg></span><div><div class="dt-nt">SQL Server</div><div class="dt-ns">IaaS · Windows VM</div></div></div></div>
+            <div class="dt-host collector"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> Separate Linux jump-box · reaches TDS 1433</div>
+              <div class="dt-n"><span class="dt-tile lite"><svg class="dt-ico"><use href="#dt-forward"/></svg></span><div><div class="dt-nt">AgentLite remote poller</div><div class="dt-ns">XEvents / SQL Audit over TDS</div></div></div></div>
+            <div class="dt-n"><span class="dt-tile paas"><svg class="dt-ico"><use href="#dt-clouddb"/></svg></span><div><div class="dt-nt">Azure SQL Database</div><div class="dt-ns">PaaS · managed · no host</div></div></div>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone"><span class="dt-zl">Transit</span>
+            <div class="dt-n"><span class="dt-tile net"><svg class="dt-ico"><use href="#dt-gw"/></svg></span><div><div class="dt-nt">NAT / outbound</div><div class="dt-ns">jump-box → 443</div></div></div>
+            <span class="dt-out">↑ poller → HTTPS</span>
+            <div class="dt-n"><span class="dt-tile net"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">DB auditing + diag</div><div class="dt-ns">SQLSecurityAuditEvents</div></div></div>
+            <div class="dt-n"><span class="dt-tile stream"><svg class="dt-ico"><use href="#dt-bus"/></svg></span><div><div class="dt-nt">Event Hub</div><div class="dt-ns">toovix-dam-audit</div></div></div>
+            <span class="dt-out stream">↑ Azure SQL → Event Hub (~2 min)</span>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest + consumer</div><div class="dt-ns">Event Hub source</div></div></div>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- OCI -->
+      <div class="dt-cloud oci">
+        <div class="dt-head"><h4>☁️ OCI <span class="dt-tag">Oracle · Autonomous DB</span></h4>
+          <p>One AgentLite Oracle collector covers both: Oracle-on-VM over SQL*Net 1521, and Autonomous DB from a <b>separate collector host</b> over one-way TLS 1522 (no wallet). No cloud bus.</p></div>
+        <div class="dt-diagram">
+          <div class="dt-zone"><span class="dt-zl">OCI Tenancy · VCN</span>
+            <div class="dt-host iaas"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> OCI Compute VM · on / near the DB host</div>
+              <div class="dt-n"><span class="dt-tile iaas"><svg class="dt-ico"><use href="#dt-db"/></svg></span><div><div class="dt-nt">Oracle Database</div><div class="dt-ns">IaaS · SQL*Net 1521</div></div></div>
+              <div class="dt-chips"><div class="dt-chip lite"><span class="dt-ct"><svg class="dt-ico"><use href="#dt-forward"/></svg></span><span><b>AgentLite</b> · polls UNIFIED_AUDIT_TRAIL</span></div></div></div>
+            <div class="dt-host collector"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> Separate collector host · reaches ADB</div>
+              <div class="dt-n"><span class="dt-tile lite"><svg class="dt-ico"><use href="#dt-forward"/></svg></span><div><div class="dt-nt">AgentLite remote poller</div><div class="dt-ns">TLS 1522 · no wallet</div></div></div></div>
+            <div class="dt-n"><span class="dt-tile paas"><svg class="dt-ico"><use href="#dt-clouddb"/></svg></span><div><div class="dt-nt">Autonomous Database</div><div class="dt-ns">PaaS · ADB · public endpoint + ACL</div></div></div>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone"><span class="dt-zl">Transit</span>
+            <div class="dt-n"><span class="dt-tile net"><svg class="dt-ico"><use href="#dt-gw"/></svg></span><div><div class="dt-nt">NAT / Service GW</div><div class="dt-ns">outbound 443</div></div></div>
+            <span class="dt-out">↑ both collectors → HTTPS</span>
+            <div class="dt-note">No cloud bus — a native OCI stream would be a 5-hop Data&nbsp;Safe→Function→Logging→Connector&nbsp;Hub→Streaming pipeline.</div>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest</div><div class="dt-ns">/api/agents/events</div></div></div>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- On-prem -->
+      <div class="dt-cloud onprem">
+        <div class="dt-head"><h4>🏢 On-Prem <span class="dt-tag">any engine</span></h4>
+          <p>No managed service, no cloud bus. AgentLite and/or Agent run on the DB host (or a nearby collector for SQL Server/Oracle), egressing over outbound HTTPS 443 through the site firewall.</p></div>
+        <div class="dt-diagram">
+          <div class="dt-zone"><span class="dt-zl">On-premises data center</span>
+            <div class="dt-host iaas"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> Bare-metal / VM · on the DB host</div>
+              <div class="dt-n"><span class="dt-tile iaas"><svg class="dt-ico"><use href="#dt-db"/></svg></span><div><div class="dt-nt">Any database</div><div class="dt-ns">MySQL · PG · SQL Server · Oracle · Mongo</div></div></div>
+              <div class="dt-chips"><div class="dt-chip lite"><span class="dt-ct"><svg class="dt-ico"><use href="#dt-forward"/></svg></span><span><b>AgentLite</b> · tailer / poller</span></div>
+                <div class="dt-chip agent"><span class="dt-ct"><svg class="dt-ico"><use href="#dt-gear"/></svg></span><span><b>Agent</b> · network + host eBPF</span></div></div></div>
+            <div class="dt-host proxy"><div class="dt-hcap"><svg class="dt-ico"><use href="#dt-host"/></svg> Separate host · in the path</div>
+              <div class="dt-n"><span class="dt-tile agent"><svg class="dt-ico"><use href="#dt-proxy"/></svg></span><div><div class="dt-nt">Inline proxy <span style="color:#64748b;font-weight:400">(optional)</span></div><div class="dt-ns">real-time blocking</div></div></div></div>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone"><span class="dt-zl">Egress</span>
+            <div class="dt-n"><span class="dt-tile net"><svg class="dt-ico"><use href="#dt-gw"/></svg></span><div><div class="dt-nt">Firewall / proxy</div><div class="dt-ns">outbound 443 only</div></div></div>
+            <span class="dt-out">↑ all agents → HTTPS</span>
+            <div class="dt-note">No cloud stream on-prem — DAM never connects inbound.</div>
+          </div>
+          <div class="dt-arrow">→</div>
+          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest</div><div class="dt-ns">/api/agents/events</div></div></div>
+            <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="note"><b>Hosting rule of thumb:</b> the log tailer and the wire Agent live <b>on the database host</b>; the remote poller (SQL Server, Oracle, managed DBs) and the inline proxy live on a <b>separate host</b>; agentless has no host — the cloud pushes to a bus the DAM consumer pulls.</div>
     </section>
 
     <section id="s-classify">
