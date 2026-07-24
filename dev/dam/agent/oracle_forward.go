@@ -124,6 +124,12 @@ func tailOracleAudit(cfg Config) {
 	     = RTRIM(DBMS_LOB.SUBSTR(a.SQL_TEXT, 1000, 1), CHR(0)||CHR(10)||CHR(13)||CHR(9)||' ')
 	  WHERE a.EVENT_TIMESTAMP > TO_TIMESTAMP(:wm, 'YYYY-MM-DD HH24:MI:SS.FF6') - NUMTODSINTERVAL(:lb, 'SECOND')
 	    AND a.SQL_TEXT IS NOT NULL
+	    -- ORACLE_MAINTAINED='Y' is the authoritative flag for accounts Oracle runs itself: not
+	    -- just SYS, but the Autonomous-bundled tooling (ODI_REPO_USER, ORDS, GRAPH$, …) whose
+	    -- background jobs also flood the trail. The hardcoded list is a fallback in case
+	    -- DBA_USERS is unreadable or a flag is wrong.
+	    AND NVL(a.DBUSERNAME, 'x') NOT IN (SELECT username FROM DBA_USERS WHERE ORACLE_MAINTAINED = 'Y')
+	    AND NVL(a.OBJECT_SCHEMA, 'x') NOT IN (SELECT username FROM DBA_USERS WHERE ORACLE_MAINTAINED = 'Y')
 	    AND NVL(a.DBUSERNAME, 'x') NOT IN (` + inList + `)
 	    AND NVL(a.OBJECT_SCHEMA, 'x') NOT IN (` + inList + `)
 	  ORDER BY a.EVENT_TIMESTAMP`
