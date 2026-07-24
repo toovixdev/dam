@@ -226,13 +226,7 @@ Agent settings → `DB_ENGINE=mongodb` · `AUDIT_SOURCE=profiler` · `TARGET_POR
 
 Oracle's telemetry is **Unified Auditing**: every audited action lands in the view `UNIFIED_AUDIT_TRAIL`. Like SQL Server there's no text log to tail, so the collector **polls the view over SQL\*Net** with a timestamp watermark. It runs on any host that can reach `1521` with a read-only login — nothing is installed on the DB host, so the **same path covers Oracle on a VM, on RDS, and on OCI Autonomous DB** equally.
 
-Enable an audit policy for the actions you care about (23ai is pure-unified by default; on 19c ensure unified auditing is on):
-```sql
-CREATE AUDIT POLICY toovix_dml ACTIONS SELECT, INSERT, UPDATE, DELETE;
-AUDIT POLICY toovix_dml BY <appuser>;   -- or omit BY to audit all users
-```
-
-Create the read-only monitoring login:
+Create the read-only monitoring login first:
 ```sql
 CREATE USER dam_svc IDENTIFIED BY "<strong-password>";
 GRANT CREATE SESSION TO dam_svc;
@@ -240,10 +234,26 @@ GRANT AUDIT_VIEWER TO dam_svc;          -- reads UNIFIED_AUDIT_TRAIL
 GRANT SELECT_CATALOG_ROLE TO dam_svc;   -- reads V$SQLSTATS (row counts) + ALL_TAB_COLUMNS (classify)
 ```
 
+Enable an audit policy for the actions you care about (23ai is pure-unified by default; on 19c ensure unified auditing is on), and apply it **`EXCEPT dam_svc`**:
+```sql
+CREATE AUDIT POLICY toovix_dml ACTIONS SELECT, INSERT, UPDATE, DELETE;
+AUDIT POLICY toovix_dml EXCEPT dam_svc;   -- audit everyone BUT the monitor login
+```
+
+> **Why `EXCEPT dam_svc`, not `BY <appuser>`.** The collector polls `UNIFIED_AUDIT_TRAIL` continuously, and those reads are themselves auditable SELECTs — auditing the monitor account makes the agent audit its own polling (measured ~1,170 self-records / 20 min on a test ADB). `EXCEPT dam_svc` stops that at the source. Use `BY <appuser>` only if you want to scope to specific application users.
+
 Agent settings → `DB_ENGINE=oracle` · `AUDIT_SOURCE=unified_audit_trail` · `TARGET_PORT=1521` · `ORACLE_SERVICE=<service_name>` · `DB_USER=dam_svc` · `DB_PASSWORD=…`
 **No `AUDIT_LOG`** — the source is the database connection.
 
+> **OCI Autonomous DB / TLS.** The collector auto-detects an OCI ADB endpoint (host `*.oraclecloud.com`) and connects over **one-way TLS with no wallet** — set the ADB to `is_mtls_connection_required = false` and add the agent host's IP to the ADB access-control list. `ORACLE_SERVICE` is the long ADB service name, e.g. `g0…_toovixadb_low.adb.oraclecloud.com`. For the mutual-TLS/wallet path instead, unzip the wallet and set `ORACLE_WALLET=<dir>`. (Force TLS on any host with `ORACLE_SSL=true`.)
+
+> **Internal noise is filtered automatically — but especially matters on Autonomous DB.** ADB's built-in automatic SQL-tuning, plus bundled ODI/ORDS, generate heavy background audit traffic (measured ~87% of all records on an idle instance). The collector drops anything from an Oracle-maintained account (`DBA_USERS.ORACLE_MAINTAINED='Y'`), so only real user activity is forwarded — no setup needed.
+
+> **Audit visibility lags — the collector compensates.** `UNIFIED_AUDIT_TRAIL` becomes visible with a delay and slightly out of order (seconds to a few minutes, longer on ADB), so a captured statement may take **1–3 minutes** to appear in DAM. The collector re-scans a lookback window (`ORACLE_AUDIT_LOOKBACK_SEC`, default 900) so late-arriving records are never lost; widen it if your instance flushes slowly.
+
 > **Row counts (✅ but with a caveat worth understanding).** `UNIFIED_AUDIT_TRAIL` carries no rows-returned column, so the count is recovered by joining `V$SQLSTATS` on the statement. It's **exact** for ad-hoc statements (`SELECT * FROM customers → 25`) and an **estimate** (per-execution average) for parameterised app traffic, where `ROWS_PROCESSED` is cumulative across executions. `V$SQLSTATS` (not `V$SQL`) is used deliberately — `V$SQL` cursors age out of the shared pool within seconds, so a poller would routinely find nothing.
+
+> **A read+write DML appears as two events** — e.g. an `UPDATE … WHERE` records both the UPDATE (the write) and a SELECT (the read for the WHERE). That's Oracle's genuine dual-action auditing, the same as SQL Server, not a duplicate.
 
 > **Verify (Oracle):** run a query, then as `dam_svc`: `SELECT sql_text FROM unified_audit_trail ORDER BY event_timestamp DESC FETCH FIRST 5 ROWS ONLY;`
 
@@ -493,8 +503,12 @@ A healthy start then logs: `AgentLite: publishing audit events to Pub/Sub topic 
 | Azure SQL: agent captures nothing after a while | The `.xel` blob rolled to a new name. Set **`MSSQL_XE_SESSION`** so the agent discovers the live file and follows rollover, instead of pinning `AUDIT_LOG` to one blob name. |
 | SQL Server: `server_principal_name is not available` | You're on **Azure SQL** — its principal action is `sqlserver.username`, not `server_principal_name`. Use the Azure session DDL in §2. |
 | SQL Server: a lot of `exec sp_reset_connection` | Connection-pool chatter from the driver, not user activity — the agent already drops it. If you see it, you're on an older agent build. |
-| Oracle: `unified_audit_trail` empty | No audit policy is enabled/assigned (`AUDIT POLICY … BY <user>`), or unified auditing is off on 19c. Also confirm `dam_svc` has `AUDIT_VIEWER`. |
+| Oracle: `unified_audit_trail` empty | No audit policy is enabled/assigned (`AUDIT POLICY … EXCEPT dam_svc`), or unified auditing is off on 19c. Also confirm `dam_svc` has `AUDIT_VIEWER`. |
 | Oracle: statements captured but `row_count` is 0 | The cursor's stats aren't in `V$SQLSTATS` (rare) or `dam_svc` lacks `SELECT_CATALOG_ROLE`. Row counts are best-effort from `V$SQLSTATS`; capture still works without them. |
+| Oracle/ADB: `ORA-28000: the account is locked` | ADB's default profile locks after failed logins. Unlock: `ALTER USER dam_svc ACCOUNT UNLOCK;`. Check the password matches `DB_PASSWORD` exactly (ADB won't let you re-set the same one — `ORA-28007` on `ALTER USER … IDENTIFIED BY` means it's already current, which is fine). |
+| Oracle/ADB: `ORA-12506`/TLS handshake fails | The agent host's IP isn't on the ADB access-control list, or mTLS is still required — set `is_mtls_connection_required = false` and add the IP. Confirm `ORACLE_SERVICE` is the full `*.oraclecloud.com` service name (the collector then auto-enables one-way TLS). |
+| Oracle: captured events lag 1–3 min | Expected — `UNIFIED_AUDIT_TRAIL` flushes from the SGA on a delay. The collector's lookback window catches them; widen `ORACLE_AUDIT_LOOKBACK_SEC` if your instance is slower. |
+| Oracle/ADB: Autonomous internal SQL in the trail | You're on an old agent build. Current builds drop everything from `ORACLE_MAINTAINED='Y'` accounts (SYS, ODI, ORDS, …) automatically. |
 
 ---
 
