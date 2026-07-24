@@ -26,6 +26,7 @@ package main
 
 import (
 	"database/sql"
+	"fmt"
 	"log"
 	"strings"
 	"time"
@@ -94,7 +95,18 @@ func tailOracleAudit(cfg Config) {
 	// chars matches V$SQLSTATS.SQL_TEXT's width. The LEFT JOIN is essential — a V$SQLSTATS miss
 	// must still forward the audit event (rows=0), never drop it.
 	const tsFmt = `YYYY-MM-DD HH24:MI:SS.FF6`
-	const q = `SELECT
+
+	// Exclude Oracle-maintained accounts/schemas IN THE QUERY, not in Go. On OCI Autonomous DB
+	// the automatic SQL-tuning task generates enormous internal traffic — measured at 50,733 SYS
+	// records in 20 minutes on an idle instance — so filtering it in Go means reading all of it
+	// over the wire every poll (and, with the lookback below, repeatedly). Excluding it at the
+	// source keeps each poll to real user activity.
+	var q []string
+	for k := range oracleInternalSchemas {
+		q = append(q, "'"+k+"'")
+	}
+	inList := strings.Join(q, ",")
+	query := `SELECT
 	    TO_CHAR(a.EVENT_TIMESTAMP, 'YYYY-MM-DD HH24:MI:SS.FF6'),
 	    a.DBUSERNAME,
 	    NVL(a.OBJECT_SCHEMA, ''),
@@ -104,14 +116,27 @@ func tailOracleAudit(cfg Config) {
 	    a.RETURN_CODE,
 	    DBMS_LOB.SUBSTR(a.SQL_TEXT, 1000, 1),
 	    NVL(s.ROWS_PROCESSED, 0),
-	    NVL(s.EXECUTIONS, 0)
+	    NVL(s.EXECUTIONS, 0),
+	    NVL(a.SESSIONID, 0), NVL(a.ENTRY_ID, 0)
 	  FROM UNIFIED_AUDIT_TRAIL a
 	  LEFT JOIN V$SQLSTATS s
 	    ON RTRIM(s.SQL_TEXT, CHR(0)||CHR(10)||CHR(13)||CHR(9)||' ')
 	     = RTRIM(DBMS_LOB.SUBSTR(a.SQL_TEXT, 1000, 1), CHR(0)||CHR(10)||CHR(13)||CHR(9)||' ')
-	  WHERE a.EVENT_TIMESTAMP > TO_TIMESTAMP(:wm, 'YYYY-MM-DD HH24:MI:SS.FF6')
+	  WHERE a.EVENT_TIMESTAMP > TO_TIMESTAMP(:wm, 'YYYY-MM-DD HH24:MI:SS.FF6') - NUMTODSINTERVAL(:lb, 'SECOND')
 	    AND a.SQL_TEXT IS NOT NULL
+	    AND NVL(a.DBUSERNAME, 'x') NOT IN (` + inList + `)
+	    AND NVL(a.OBJECT_SCHEMA, 'x') NOT IN (` + inList + `)
 	  ORDER BY a.EVENT_TIMESTAMP`
+
+	// Lookback + de-dupe, because UNIFIED_AUDIT_TRAIL becomes visible with a LAG and OUT OF ORDER
+	// vs EVENT_TIMESTAMP: a statement at 08:17 can surface after the watermark has already
+	// advanced past it, so a plain "event_timestamp > watermark" silently loses it — verified on
+	// ADB, where real user DML was in the trail but never captured. We instead re-scan a window
+	// (watermark − lookback) each poll and de-dupe in Go by (timestamp|session|entry). Default 15
+	// min covers ADB's flush lag; tune with ORACLE_AUDIT_LOOKBACK_SEC.
+	lookback := atoiDefault(env("ORACLE_AUDIT_LOOKBACK_SEC", "900"), 900)
+	seen := map[string]bool{}
+	first := true
 
 	// Start from the newest existing record (as a UTC string) so a (re)start does not replay
 	// history. SYS_EXTRACT_UTC keeps the fallback in the same UTC frame as EVENT_TIMESTAMP.
@@ -122,31 +147,41 @@ func tailOracleAudit(cfg Config) {
 	if wm == "" {
 		wm = time.Now().UTC().Format("2006-01-02 15:04:05.000000")
 	}
-	log.Printf("audit-forward(oracle): polling UNIFIED_AUDIT_TRAIL every %ds (watermark %s)", pollSec, wm)
+	log.Printf("audit-forward(oracle): polling UNIFIED_AUDIT_TRAIL every %ds (watermark %s, lookback %ds)", pollSec, wm, lookback)
 
 	for {
-		rows, err := db.Query(tagAgentQuery(q), sql.Named("wm", wm))
+		rows, err := db.Query(tagAgentQuery(query), sql.Named("wm", wm), sql.Named("lb", lookback))
 		if err != nil {
 			log.Printf("audit-forward(oracle): read UNIFIED_AUDIT_TRAIL: %v — is unified auditing on, an audit policy enabled, and does DB_USER have AUDIT_VIEWER? retrying", err)
 			time.Sleep(time.Duration(pollSec) * time.Second)
 			continue
 		}
+		cur := map[string]bool{}
 		for rows.Next() {
 			var etStr, principal, objSchema, objName, userHost, action, statement string
-			var returnCode, rowsProcessed, executions int64
+			var returnCode, rowsProcessed, executions, sessionID, entryID int64
 			if err := rows.Scan(&etStr, &principal, &objSchema, &objName, &userHost, &action,
-				&returnCode, &statement, &rowsProcessed, &executions); err != nil {
+				&returnCode, &statement, &rowsProcessed, &executions, &sessionID, &entryID); err != nil {
 				continue
 			}
-			// The rows arrive in EVENT_TIMESTAMP order, so the last row's string is the new high
-			// water mark. Strings are fixed-width UTC, so this advances monotonically.
+			// De-dupe key: a record is uniquely (event_timestamp, session, entry). Within the
+			// re-scanned window the same record reappears every poll; forward it only once.
+			fp := fmt.Sprintf("%s|%d|%d", etStr, sessionID, entryID)
+			cur[fp] = true
+			// Advance the watermark to the max event_timestamp seen. The lookback below rewinds
+			// the actual query start, so this only needs to track how far the window has moved.
 			if etStr > wm {
 				wm = etStr
+			}
+			if first || seen[fp] { // seed on first poll (don't replay history); skip already-sent
+				continue
 			}
 			// The audit trail NUL-terminates SQL_TEXT (a C-string artifact); strip the NUL and any
 			// surrounding whitespace so the stored statement is clean and de-dupe/match is stable.
 			s := strings.TrimRight(statement, "\x00")
 			s = strings.TrimSpace(s)
+			// Internal users/schemas are already excluded in SQL; this drops the remaining
+			// data-dictionary chatter and the agent's own catalog reads by text.
 			if s == "" || !shouldForward(s) || isOracleSystemStmt(s) {
 				continue
 			}
@@ -164,6 +199,13 @@ func tailOracleAudit(cfg Config) {
 			forwardEventOp(cfg, orDefault(principal, "unknown"), userHost, s, oracleOp(action, s), rc, false)
 		}
 		rows.Close()
+		// The window's fingerprints become the new seen-set: anything still inside the lookback
+		// window is retained (so it isn't re-sent next poll), anything that aged out is dropped
+		// (bounding the set). Keep the old set on an empty poll so a transient gap can't clear it.
+		if len(cur) > 0 {
+			seen = cur
+		}
+		first = false
 		time.Sleep(time.Duration(pollSec) * time.Second)
 	}
 }
@@ -205,6 +247,10 @@ func isOracleSystemStmt(sqlText string) bool {
 	for _, p := range []string{
 		"unified_audit_trail", "v$sqlstats", "v$sql", "dbms_lob.substr",
 		"all_tab_columns", "sys.", "dba_", "gv$", "x$",
+		// AWR / SQL-tuning-set internal tables. On OCI Autonomous DB the automatic tuning task
+		// hammers these constantly — measured at ~87% of all captured events on an idle ADB —
+		// so without this the real user activity is buried. wri$/wrh$/wrr$ = the AWR families.
+		"wri$_", "wrh$_", "wrr$_", "dbms_stats", "dbms_space", "aw$", "sqlobj$",
 	} {
 		if strings.Contains(u, p) {
 			return true
@@ -212,3 +258,21 @@ func isOracleSystemStmt(sqlText string) bool {
 	}
 	return false
 }
+
+// oracleInternalSchemas are the accounts/schemas Oracle maintains itself — their activity is
+// dictionary/AWR housekeeping, never customer intent. Filtering on the audit record's own
+// principal + object owner (not just text) is what actually silences OCI Autonomous DB's
+// automatic tuning, which runs as SYS against SYS-owned objects. Mirrors how cloudSqlNoise
+// drops the cloudsql* maintenance users on the managed-MySQL path.
+var oracleInternalSchemas = map[string]bool{
+	"SYS": true, "SYSTEM": true, "AUDSYS": true, "WMSYS": true, "DBSNMP": true,
+	"XDB": true, "CTXSYS": true, "MDSYS": true, "DVSYS": true, "DVF": true, "LBACSYS": true,
+	"OLAPSYS": true, "ORDSYS": true, "ORDDATA": true, "GSMADMIN_INTERNAL": true, "APPQOSSYS": true,
+	"DBSFWUSER": true, "OUTLN": true, "SYS$UMF": true, "REMOTE_SCHEDULER_AGENT": true,
+	"ORACLE_OCM": true, "GGSYS": true, "DGPDB_INT": true, "SYSRAC": true, "SYSKM": true,
+	"SYSBACKUP": true, "SYSDG": true, "C##CLOUD$SERVICE": true,
+}
+
+// (The principal/schema exclusion is applied IN THE QUERY — see the NOT IN clause built from
+// oracleInternalSchemas — so there is no Go-side actor filter; doing it in SQL avoids reading
+// the huge internal volume over the wire every poll.)
