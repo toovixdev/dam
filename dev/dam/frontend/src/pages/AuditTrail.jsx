@@ -5,13 +5,28 @@ import KpiCard from '../components/KpiCard';
 import DataTable from '../components/shared/DataTable';
 import TabNav from '../components/shared/TabNav';
 import useApiData from '../hooks/useApiData';
+import useTimezone, { tzShortName } from '../hooks/useTimezone';
 import { toast } from '../components/shared/Toast';
 import { exportCsv } from '../exportCsv';
 import { apiFetch } from '../api/client';
 
-function formatDate(ts) {
-  if (!ts) return '-';
-  return new Date(ts).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+// ClickHouse returns UTC with no zone marker ("2026-07-21 15:45:37"); the browser would
+// otherwise parse that as LOCAL time. Mark it UTC before constructing the Date. Postgres
+// timestamps already carry a zone (ISO with 'T'/offset), so leave those alone.
+function toDate(ts) {
+  if (ts == null) return null;
+  if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/.test(ts)) {
+    ts = ts.replace(' ', 'T') + 'Z';
+  }
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// Render a timestamp in the user's CHOSEN timezone (Profile → Timezone), not the browser's.
+function formatDate(ts, tz) {
+  const d = toDate(ts);
+  if (!d) return '-';
+  return d.toLocaleString('en-GB', { timeZone: tz, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 const OP_COLOR = { SELECT: 'var(--info)', INSERT: 'var(--green)', UPDATE: 'var(--amber)', DELETE: 'var(--danger)', DDL: 'var(--danger)', LOGIN: 'var(--primary)', LOGIN_FAILED: 'var(--danger)', LOGOUT: 'var(--muted)', AUDIT_CHANGE: 'var(--danger)', GRANT: 'var(--danger)' };
@@ -32,6 +47,7 @@ const RANGES = [
 ];
 
 export default function AuditTrail() {
+  const [tz] = useTimezone(); // the user's chosen timezone (Profile → Timezone)
   const [tab, setTab] = useState('db');
   const [q, setQ] = useState('');
   const [op, setOp] = useState('');
@@ -68,20 +84,20 @@ export default function AuditTrail() {
   const onExport = () => {
     if (tab === 'db') {
       exportCsv('toovix-db-activity.csv',
-        ['Time', 'Principal', 'Database', 'Instance', 'Host', 'Action', 'SQL', 'Rows', 'Score', 'Chain'],
-        actRows.map((r) => [r.timestamp, r.principal, r.database_name, r.instance_name || '', r.source_host || r.client_ip, r.operation, (r.sql_text || '').replace(/\s+/g, ' '), r.row_count, r.anomaly_score, r.chain]));
+        [`Time (${tzShortName(tz)})`, 'Principal', 'Database', 'Instance', 'Host', 'Action', 'SQL', 'Rows', 'Score', 'Chain'],
+        actRows.map((r) => [formatDate(r.timestamp, tz), r.principal, r.database_name, r.instance_name || '', r.source_host || r.client_ip, r.operation, (r.sql_text || '').replace(/\s+/g, ' '), r.row_count, r.anomaly_score, r.chain]));
       toast(`Exported ${actRows.length} activity rows`, 'ok');
     } else {
       exportCsv('toovix-control-plane-audit.csv',
-        ['Time', 'Actor', 'Action', 'Resource', 'Details'],
-        cpRows.map((r) => [r.created_at, r.actor_email, r.action, r.resource_type, JSON.stringify(r.details || {})]));
+        [`Time (${tzShortName(tz)})`, 'Actor', 'Action', 'Resource', 'Details'],
+        cpRows.map((r) => [formatDate(r.created_at, tz), r.actor_email, r.action, r.resource_type, JSON.stringify(r.details || {})]));
       toast(`Exported ${cpRows.length} audit rows`, 'ok');
     }
   };
 
   // Database Activity (data plane / ClickHouse)
   const activityColumns = [
-    { key: 'timestamp', label: 'Time', render: (v) => formatDate(v) },
+    { key: 'timestamp', label: `Time (${tzShortName(tz)})`, render: (v) => formatDate(v, tz) },
     { key: 'principal', label: 'Principal' },
     { key: 'database_name', label: 'Database' },
     { key: 'source_host', label: 'Instance / Host', render: (v, row) => {
@@ -119,7 +135,7 @@ export default function AuditTrail() {
 
   // Control-plane audit (Postgres)
   const cpColumns = [
-    { key: 'created_at', label: 'Time', render: (v) => formatDate(v) },
+    { key: 'created_at', label: `Time (${tzShortName(tz)})`, render: (v) => formatDate(v, tz) },
     { key: 'actor_email', label: 'Actor' },
     { key: 'action', label: 'Action', render: (v) => {
       const colors = { create: 'var(--green)', update: 'var(--info)', delete: 'var(--danger)', login: 'var(--primary)', logout: 'var(--muted)', export: 'var(--amber)' };
@@ -135,7 +151,7 @@ export default function AuditTrail() {
   // Data-plane checkpoints (signed Merkle roots over event windows · Postgres)
   const ckColumns = [
     { key: 'seq', label: '#', align: 'right', render: (v) => <span className="mono">{v}</span> },
-    { key: 'window_start', label: 'Window', sortable: false, render: (v, row) => <span style={{ fontSize: 12 }}>{formatDate(v)} → {formatDate(row.window_end)}</span> },
+    { key: 'window_start', label: 'Window', sortable: false, render: (v, row) => <span style={{ fontSize: 12 }}>{formatDate(v, tz)} → {formatDate(row.window_end, tz)}</span> },
     { key: 'event_count', label: 'Events', align: 'right', render: (v) => Number(v).toLocaleString() },
     { key: 'merkle_root', label: 'Merkle root', sortable: false, render: (v, row) => <span className="mono muted" style={{ fontSize: 11 }} title={`root: ${v}\nchain: ${row.chain_hash}`}>{v ? v.slice(0, 12) + '…' : '—'}</span> },
     { key: 'signature', label: 'Signed', render: (v) => v ? <span className="badge green dot">HMAC ✓</span> : <span className="muted">—</span> },
