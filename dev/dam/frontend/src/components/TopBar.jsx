@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import useTimezone, { TIMEZONES, tzShortName, formatInTz } from '../hooks/useTimezone';
+import useTimezone, { TIMEZONES, tzShortName, formatInTz, fmtTs, getTimezone } from '../hooks/useTimezone';
 import { getBranding, onBrandingChange } from '../branding';
 
 const THEMES = [
