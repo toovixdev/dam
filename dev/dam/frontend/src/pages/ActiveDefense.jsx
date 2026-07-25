@@ -80,6 +80,7 @@ export default function ActiveDefense() {
   const threatLevel = data?.threatLevel ?? '—';
   const timeline = data?.timeline || [];
   const maxN = Math.max(1, ...timeline.map((t) => t.n));
+  const total24 = timeline.reduce((s, t) => s + (t.n || 0), 0);
 
   return (
     <Layout>
@@ -115,19 +116,26 @@ export default function ActiveDefense() {
           </div>
         </div>
         <div className="card">
-          <div className="card-header"><span className="card-title">Threat volume · 24h</span><span className="card-sub">alerts per 3h</span></div>
+          <div className="card-header"><span className="card-title">Threat volume · 24h</span><span className="card-sub">{total24} alert{total24 === 1 ? '' : 's'} · per 3h</span></div>
           <div className="card-body">
-            <div className="barchart">
-              {timeline.map((t, i) => (
-                <div className="barchart-row" key={i}>
-                  <span className="barchart-label">{t.label}</span>
-                  <span className="barchart-track"><span className="barchart-fill" style={{ width: `${Math.round((t.n / maxN) * 100)}%`, background: t.n >= maxN * 0.6 && maxN > 1 ? 'var(--danger)' : 'var(--primary)' }} /></span>
-                  <span className="barchart-val">{t.n}</span>
-                </div>
-              ))}
-              {timeline.length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>No alerts in the last 24h.</div>}
-            </div>
-            <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>Real alert volume (inline blocks + detections) bucketed over the last 24 hours.</p>
+            {total24 === 0 ? (
+              <div className="muted" style={{ fontSize: 12.5, padding: '28px 0', textAlign: 'center' }}>No alerts in the last 24h.</div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 128, padding: '4px 2px 0' }}>
+                {timeline.map((t, i) => {
+                  const h = t.n > 0 ? Math.max(6, Math.round((t.n / maxN) * 88)) : 3;
+                  const hot = t.n >= maxN * 0.6 && maxN > 1;
+                  return (
+                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, height: '100%', justifyContent: 'flex-end' }} title={`${t.label} — ${t.n} alert${t.n === 1 ? '' : 's'}`}>
+                      <span style={{ fontSize: 11, fontWeight: 700, color: t.n > 0 ? 'var(--ink)' : 'transparent', fontVariantNumeric: 'tabular-nums' }}>{t.n || 0}</span>
+                      <div style={{ width: '100%', maxWidth: 30, height: h, borderRadius: '5px 5px 2px 2px', background: t.n > 0 ? (hot ? 'var(--danger)' : 'var(--primary)') : 'var(--line)', transition: 'height .4s' }} />
+                      <span style={{ fontSize: 10.5, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>{t.label}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0' }}>Real alert volume (inline blocks + detections), bucketed into eight 3-hour windows over the last 24 hours. Red = a spike.</p>
           </div>
         </div>
       </div>
