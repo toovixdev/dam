@@ -227,6 +227,7 @@
     <a href="#respond">Responding to threats</a>
     <a href="#classify">Sensitive data & compliance</a>
     <a href="#deploy-topos">Deployment topologies</a>
+    <a href="#deploy-discovery">Deploying a discovery agent</a>
     <div class="toc-title">Part 3 · Using TooVix DAM</div>
     <a href="#tour">The interface</a>
     <a href="#quickstart">Quick-start walkthrough</a>
@@ -663,6 +664,41 @@
         <li>To add another database <em>under</em> an existing instance, click <span class="ui g">＋ DB</span> on that instance's row.</li>
       </ol>
       <div class="tip">Prefer to let TooVix find things for you? Use <span class="nav-chip">Discovery</span> → <span class="ui">Run scan</span>, then <span class="ui g">Approve</span> and <span class="ui g">Register</span> each database it finds. <span class="ui g">View registered</span> jumps back to the Databases list.</div>
+    </section>
+
+    <section id="deploy-discovery">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Deploying a discovery agent</h2>
+      <p><b>Discovery</b> finds databases you don't already know about. Network discovery is run by an in-network <b>discovery agent</b> — a scanner with reachability to your database subnets. It sweeps a range of addresses, identifies each open port by <b>protocol handshake</b> (so a database on a non-default port is still found), and reports candidates back over outbound HTTPS. You <span class="ui g">Approve</span> a candidate to register it; monitoring is deployed separately.</p>
+
+      <div class="note"><b>Where it runs.</b> Put one agent in a <b>hub VPC</b> that is VPC-peered to each VNet holding databases — the hub reaches every peered spoke, so you don't need an agent in every app VPC. Peering requires <b>non-overlapping CIDRs</b>. Managed / PaaS databases (RDS, Cloud SQL, Azure SQL) sit behind non-transitive service peerings and are found by <b>cloud-API discovery</b> (Cloud connectors) instead — no network path needed.</div>
+
+      <ol class="steps">
+        <li><b>Place it with network line-of-sight.</b> Deploy on a host that can reach the DB subnets on their ports. Allow its IP on DB ports from the spokes' firewalls; the agent itself needs only <b>outbound HTTPS</b> to the control plane — nothing inbound.</li>
+        <li><b>Use this workspace's enroll token.</b> Copy the <b>per-tenant</b> token from <span class="nav-chip">Discovery</span> → <span class="ui">How to deploy a discovery agent</span> (or <span class="nav-chip">Agents &amp; Coverage</span> → <span class="ui g">Deploy monitoring</span>). A shared/global token would enroll the agent into the wrong tenant, and it would never appear on your Discovery page.</li>
+        <li><b>Install &amp; run the agent</b> — it's a dependency-free Node service (Node 18+, for global <code>fetch</code>):
+          <pre><code><span class="cmt"># 1) Node 20+</span>
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - &amp;&amp; sudo apt-get install -y nodejs
+
+<span class="cmt"># 2) put the agent source (dev/dam/discovery/*.js) in /opt/toovix-discovery, then:</span>
+sudo tee /etc/toovix-discovery.env >/dev/null &lt;&lt;'EOF'
+CONTROL_PLANE=https://&lt;your-dam-host&gt;
+AGENT_ENROLL_TOKEN=tvxenr_&lt;this-workspace&gt;
+DISCOVERY_TARGETS=10.10.0.0/24,10.20.0.0/24   <span class="cmt"># your VNet CIDRs / hosts / ranges</span>
+DISCOVERY_PRESET=common
+DISCOVERY_INTERVAL=300000
+EOF
+
+<span class="cmt"># 3) run under systemd (restarts on crash, survives reboot)</span>
+sudo systemctl enable --now toovix-discovery</code></pre>
+        </li>
+        <li><b>Point it at your CIDRs.</b> <code>DISCOVERY_TARGETS</code> accepts hostnames, single IPs, <b>CIDR blocks</b> (<code>10.40.0.0/24</code>) and <b>ranges</b> (<code>10.50.0.10-40</code>), comma-separated. Expansion is IPv4-only and capped at a <code>/16</code> (override with <code>DISCOVERY_MAX_HOSTS</code>) so a fat prefix can't launch a million-host sweep.</li>
+        <li><b>Verify.</b> Within ~20 seconds (then every <code>DISCOVERY_INTERVAL</code>) it reports; on the <span class="nav-chip">Discovery</span> page the status strip flips to <b>agent online</b>, <span class="ui">Run scan</span> enables, and discovered databases appear as candidates.</li>
+      </ol>
+
+      <div class="tip"><b>GCP shortcut.</b> The <code>dev/enterprise-test/terraform/discovery-hub.tf</code> module builds the whole thing — hub VPC, star peering, Cloud NAT, firewall, and the scanner VM with the agent baked in. Set <code>agent_enroll_token</code> + <code>dam_control_plane_url</code> and <code>terraform apply</code>.</div>
+
+      <div class="warn"><b>Gotchas, in order of how often they bite:</b> wrong token (agent lands in the wrong tenant) · firewall blocks the agent from DB ports (0 found) · overlapping CIDRs (peering refuses them) · Node &lt; 18 (no global <code>fetch</code>).</div>
     </section>
 
     <section id="s-deploy">

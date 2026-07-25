@@ -159,7 +159,7 @@ export default function Discovery() {
                 Network discovery is run by an in-network <b>discovery agent</b> (a scanner VM with
                 reachability to your database subnets). Deploy one, and it will sweep your VNet CIDRs
                 and report candidates here. Network scanning stays disabled until an agent checks in.
-                {' '}<a href="#" onClick={(e) => { e.preventDefault(); setShowTopology(true); }}>View recommended topology →</a>
+                {' '}<a href="#" onClick={(e) => { e.preventDefault(); setShowTopology(true); }}>How to deploy a discovery agent →</a>
               </div>
             </div>
           </div>
@@ -173,7 +173,7 @@ export default function Discovery() {
               {discoveryAgents[0]?.scope && <> · sweeping <span className="mono" style={{ fontSize: 12 }}>{discoveryAgents[0].scope}</span></>}
             </span>
             <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>
-              last check-in {jobAge(discoveryAgents[0]?.last_seen)} · <a href="#" onClick={(e) => { e.preventDefault(); setShowTopology(true); }}>topology</a>
+              last check-in {jobAge(discoveryAgents[0]?.last_seen)} · <a href="#" onClick={(e) => { e.preventDefault(); setShowTopology(true); }}>deploy another →</a>
             </span>
           </div>
         </div>
@@ -332,43 +332,68 @@ export default function Discovery() {
   );
 }
 
-// ── Recommended discovery topology — a hub VPC peered to each DB VNet ──
-const DISCOVERY_DEPLOY = `# Discovery agent — runs inside the hub VPC, sweeps each peered spoke CIDR.
-# (Dependency-free Node service; identifies engines by protocol handshake, not port.)
-docker run -d --name toovix-discovery --restart unless-stopped --network host \\
-  -e CONTROL_PLANE="https://<your-dam-host>" \\
-  -e AGENT_ENROLL_TOKEN="<enroll-token>" \\
-  -e DISCOVERY_TARGETS="10.10.0.0/24,10.20.0.0/24,10.40.0.0/24,10.50.0.0/24" \\
-  -e DISCOVERY_PRESET="common" \\
-  toovix/dam-discovery:latest`;
+// ── Deploy a discovery agent — steps + a hub-VPC topology + a copy-paste install ──
+function deploySnippet(cp, token) {
+  return `# 1) Node 20+ (the agent uses global fetch)
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash - && sudo apt-get install -y nodejs
+
+# 2) Put the agent source (dev/dam/discovery/*.js) in /opt/toovix-discovery, then configure:
+sudo tee /etc/toovix-discovery.env >/dev/null <<'EOF'
+CONTROL_PLANE=${cp}
+AGENT_ENROLL_TOKEN=${token}
+DISCOVERY_TARGETS=10.10.0.0/24,10.20.0.0/24   # ← your VNet CIDRs / hosts / ranges
+DISCOVERY_PRESET=common
+DISCOVERY_INTERVAL=300000
+EOF
+
+# 3) Run it under systemd (restarts on crash, survives reboot)
+sudo systemctl enable --now toovix-discovery`;
+}
+
+function Step({ n, title, children }) {
+  return (
+    <li style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginBottom: 12 }}>
+      <span style={{ flex: '0 0 auto', width: 22, height: 22, borderRadius: '50%', background: 'var(--info-soft)', color: 'var(--info)', fontWeight: 700, fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{n}</span>
+      <div style={{ fontSize: 12.5, lineHeight: 1.6 }}>
+        <div style={{ fontWeight: 600, marginBottom: 2 }}>{title}</div>
+        <div className="muted">{children}</div>
+      </div>
+    </li>
+  );
+}
 
 function SpokeBox({ label, cidr }) {
   return (
-    <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', background: 'var(--surface)', minWidth: 116, textAlign: 'center' }}>
-      <div style={{ fontSize: 16 }}>🗄️</div>
-      <div style={{ fontSize: 12, fontWeight: 600 }}>{label}</div>
-      <div className="mono muted" style={{ fontSize: 10.5 }}>{cidr}</div>
+    <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '6px 10px', background: 'var(--surface)', minWidth: 110, textAlign: 'center' }}>
+      <div style={{ fontSize: 15 }}>🗄️</div>
+      <div style={{ fontSize: 11.5, fontWeight: 600 }}>{label}</div>
+      <div className="mono muted" style={{ fontSize: 10 }}>{cidr}</div>
     </div>
   );
 }
 
 function TopologyModal({ open, onClose }) {
+  const { data: enroll } = useApiData('/agents/enroll-token', { poll: 0 });
+  const token = enroll?.token || 'tvxenr_… (this workspace)';
+  const cp = enroll?.control_plane ? (/^https?:\/\//.test(enroll.control_plane) ? enroll.control_plane : `https://${enroll.control_plane}`) : 'https://<your-dam-host>';
+
   return (
-    <Modal open={open} onClose={onClose} title="Recommended discovery topology" width={720}>
-      <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, margin: '0 0 14px' }}>
-        Put one <b>discovery agent</b> in a dedicated <b>hub VPC</b> that is VPC-peered to each VNet
-        holding databases. The agent sweeps every peered spoke's CIDR and reports candidates outbound
-        over HTTPS — nothing inbound, no agent in every app VPC.
+    <Modal open={open} onClose={onClose} title="Deploy a discovery agent" width={760}>
+      <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, margin: '0 0 16px' }}>
+        A discovery agent is an in-network scanner that sweeps your database subnets and reports what it
+        finds back here. Put one in a <b>hub VPC</b> peered to each VNet that holds databases — it reaches
+        every spoke over the peering and reports outbound over HTTPS. No agent in every app VPC, nothing inbound.
       </p>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 18, justifyContent: 'center', flexWrap: 'wrap', padding: '10px 0 16px' }}>
-        <div style={{ border: '2px solid var(--info)', borderRadius: 10, padding: '12px 14px', background: 'var(--info-soft)', textAlign: 'center', minWidth: 150 }}>
+      {/* Topology */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, justifyContent: 'center', flexWrap: 'wrap', padding: '4px 0 18px' }}>
+        <div style={{ border: '2px solid var(--info)', borderRadius: 10, padding: '10px 14px', background: 'var(--info-soft)', textAlign: 'center', minWidth: 150 }}>
           <div style={{ fontSize: 20 }}>🛰️</div>
           <div style={{ fontSize: 12.5, fontWeight: 700 }}>Discovery hub VPC</div>
-          <div className="mono muted" style={{ fontSize: 10.5 }}>scanner · outbound HTTPS</div>
+          <div className="mono muted" style={{ fontSize: 10 }}>scanner · outbound HTTPS</div>
         </div>
         <div className="muted" style={{ fontSize: 11, textAlign: 'center', lineHeight: 1.3 }}>peered<br />⇄⇄⇄</div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
           <SpokeBox label="app-a VNet" cidr="10.10.0.0/24" />
           <SpokeBox label="app-b VNet" cidr="10.20.0.0/24" />
           <SpokeBox label="app-c VNet" cidr="10.40.0.0/24" />
@@ -376,16 +401,35 @@ function TopologyModal({ open, onClose }) {
         </div>
       </div>
 
-      <ul style={{ fontSize: 12.5, lineHeight: 1.7, margin: '0 0 14px', paddingLeft: 18 }}>
-        <li><b>Star peering.</b> The hub peers directly to each spoke — peering is non-transitive, so this is what gives the hub a route into every DB subnet.</li>
-        <li><b>Unique CIDRs required.</b> Peering refuses overlapping ranges; each VNet (and the hub) must have a distinct CIDR.</li>
-        <li><b>Least privilege + outbound only.</b> The scanner does TCP-connect + protocol handshake only — no auth, no data — and only dials home. Allow it on DB ports from the spokes' firewalls; keep it rate-limited to stay under IDS thresholds.</li>
-        <li><b>Managed / PaaS databases</b> (RDS, Cloud SQL, Azure SQL) are found by <b>cloud-API discovery</b> (Cloud connectors above) — no network path needed, since they sit behind non-transitive service peerings.</li>
-      </ul>
+      {/* Steps */}
+      <ol style={{ listStyle: 'none', padding: 0, margin: '0 0 12px' }}>
+        <Step n={1} title="Place it with network line-of-sight">
+          Deploy on a host in a hub VPC that reaches the DB subnets. Allow its IP on DB ports from the
+          spokes' firewalls; it needs only <b>outbound HTTPS</b> to the control plane. Peering requires
+          <b> unique CIDRs</b> — overlapping ranges can't be peered.
+        </Step>
+        <Step n={2} title="Use this workspace's enroll token">
+          The token below is scoped to <b>this workspace</b>, so the agent enrolls into the right tenant.
+          Don't use a shared/global token — the agent would land in the wrong tenant and never appear here.
+        </Step>
+        <Step n={3} title="Install & run the agent">
+          It's a dependency-free Node service (Node 18+). Drop the source in, set the env, run under systemd —
+          see the commands below.
+        </Step>
+        <Step n={4} title="Point it at your CIDRs">
+          <span className="mono">DISCOVERY_TARGETS</span> takes hostnames, IPs, <b>CIDR blocks</b> (10.40.0.0/24)
+          and <b>ranges</b> (10.50.0.10-40). Engines are identified by protocol handshake, so DBs on non-default
+          ports are still found. Managed/PaaS DBs use <b>cloud-API discovery</b> (Cloud connectors) instead — no network path.
+        </Step>
+        <Step n={5} title="Verify">
+          Within ~20s it reports; the status strip above flips to <b>agent online</b>, Run scan enables, and
+          discovered databases appear as candidates.
+        </Step>
+      </ol>
 
       <div className="form-field" style={{ margin: 0 }}>
-        <label>Deploy the agent</label>
-        <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{DISCOVERY_DEPLOY}</pre>
+        <label>Install commands <span className="muted">(token pre-filled for this workspace)</span></label>
+        <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{deploySnippet(cp, token)}</pre>
       </div>
     </Modal>
   );
