@@ -2479,11 +2479,11 @@ app.get('/api/admin/platform/overview', async (req, res) => {
 
 app.get('/api/admin/platform/events-timeline', async (req, res) => {
   try {
-    const rows = await chQuery(`SELECT toStartOfHour(timestamp) AS hour, count() AS cnt
+    const rows = await chQuery(`SELECT toUnixTimestamp(toStartOfHour(timestamp)) AS hour, count() AS cnt
                                 FROM dam_analytics.events
                                 WHERE timestamp >= now() - INTERVAL 24 HOUR
                                 GROUP BY hour ORDER BY hour`);
-    res.json(rows.map(r => ({ hour: r.hour, cnt: parseInt(r.cnt) })));
+    res.json(rows.map(r => ({ hour: parseInt(r.hour), cnt: parseInt(r.cnt) })));
   } catch {
     res.json([]);
   }
@@ -5031,7 +5031,7 @@ app.get('/api/active-defense', authRequired, async (req, res) => {
     const timeline = (await pgPool.query(`
       WITH buckets AS (
         SELECT generate_series(date_trunc('hour', now()) - interval '21 hours', date_trunc('hour', now()), interval '3 hours') AS b)
-      SELECT to_char(b, 'HH24') || 'h' AS label,
+      SELECT extract(epoch from b)::bigint AS t,
         (SELECT count(*) FROM alerts WHERE tenant_id = $1 AND created_at >= b AND created_at < b + interval '3 hours')::int AS n
       FROM buckets ORDER BY b`, [T])).rows;
 
@@ -9092,7 +9092,7 @@ app.get('/api/dashboard/kpis', authRequired, async (req, res) => {
 });
 
 app.get('/api/dashboard/events-timeline', authRequired, async (req, res) => {
-  try { const evDb = await eventsDbFor(req.user.tenantId); res.json(await chQuery(`SELECT toStartOfHour(timestamp) as hour, count() as cnt FROM ${evDb}.events WHERE tenant_id = '${req.user.tenantId}' AND timestamp >= now() - INTERVAL 12 HOUR GROUP BY hour ORDER BY hour`)); }
+  try { const evDb = await eventsDbFor(req.user.tenantId); const rows = await chQuery(`SELECT toUnixTimestamp(toStartOfHour(timestamp)) as hour, count() as cnt FROM ${evDb}.events WHERE tenant_id = '${req.user.tenantId}' AND timestamp >= now() - INTERVAL 12 HOUR GROUP BY hour ORDER BY hour`); res.json(rows.map(r => ({ hour: parseInt(r.hour), cnt: parseInt(r.cnt) }))); }
   catch(e) { res.json([]); }
 });
 

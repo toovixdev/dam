@@ -81,7 +81,9 @@ export default function ActiveDefense() {
   const timeline = data?.timeline || [];
   const maxN = Math.max(1, ...timeline.map((t) => t.n));
   const total24 = timeline.reduce((s, t) => s + (t.n || 0), 0);
-  const peak = timeline.reduce((a, t) => (t.n > a.n ? t : a), { n: 0, label: '—' });
+  const peak = timeline.reduce((a, t) => (t.n > a.n ? t : a), { n: 0, t: 0 });
+  // Buckets arrive as UTC epochs (seconds); render the hour in the viewer's local zone.
+  const fmtBucket = (t) => (t ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
 
   return (
     <Layout>
@@ -130,15 +132,15 @@ export default function ActiveDefense() {
                   </div>
                   <div>
                     <div style={{ fontSize: 27, fontWeight: 700, lineHeight: 1, color: 'var(--danger)', fontVariantNumeric: 'tabular-nums' }}>{peak.n}</div>
-                    <div className="muted" style={{ fontSize: 10.5, marginTop: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>peak · {peak.label}</div>
+                    <div className="muted" style={{ fontSize: 10.5, marginTop: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>peak · {fmtBucket(peak.t)}</div>
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', flex: 1, gap: 9, minHeight: 216 }}>
                   {timeline.map((t, i) => {
                     const hot = t.n >= maxN * 0.6 && maxN > 1;
                     return (
-                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }} title={`${t.label} — ${t.n} alert${t.n === 1 ? '' : 's'}`}>
-                        <span style={{ width: 34, flex: 'none', textAlign: 'right', fontSize: 11.5, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>{t.label}</span>
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }} title={`${fmtBucket(t.t)} — ${t.n} alert${t.n === 1 ? '' : 's'}`}>
+                        <span style={{ width: 34, flex: 'none', textAlign: 'right', fontSize: 11.5, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>{fmtBucket(t.t)}</span>
                         <div style={{ flex: 1, height: 22, background: 'var(--surface-2)', borderRadius: 6, overflow: 'hidden' }}>
                           <div style={{ width: t.n > 0 ? `${Math.max(5, Math.round((t.n / maxN) * 100))}%` : 0, height: '100%', borderRadius: 6, background: hot ? 'var(--danger)' : 'var(--primary)', transition: 'width .45s ease' }} />
                         </div>

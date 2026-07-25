@@ -2,7 +2,8 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 export default function EventsChart({ data }) {
   const chartData = data.map(row => ({
-    hour: new Date(row.hour).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
+    // row.hour is a UTC epoch (seconds); toLocaleTimeString renders it in the viewer's local zone.
+    hour: new Date(row.hour * 1000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false }),
     events: parseInt(row.cnt),
   }));
 
