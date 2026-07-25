@@ -97,11 +97,14 @@ async function pollPending() {
 }
 
 async function main() {
+  const autonomous = INTERVAL > 0; // DISCOVERY_INTERVAL=0 → on-demand ("Run scan") only
   console.log('=== TooVix DAM Discovery Agent ===');
-  console.log(`targets=${TARGETS.join(',')} preset=${PRESET}${CUSTOM_PORTS ? ` ports=${CUSTOM_PORTS}` : ''} · rescan ${INTERVAL / 1000}s · on-demand poll ${POLL_INTERVAL / 1000}s`);
+  console.log(`targets=${TARGETS.join(',')} preset=${PRESET}${CUSTOM_PORTS ? ` ports=${CUSTOM_PORTS}` : ''} · ${autonomous ? `rescan ${INTERVAL / 1000}s` : 'autonomous rescan OFF'} · on-demand poll ${POLL_INTERVAL / 1000}s`);
   await new Promise((r) => setTimeout(r, 20000)); // let the stack come up
-  await runOnce();
-  setInterval(runOnce, INTERVAL);
+  if (autonomous) {
+    await runOnce();
+    setInterval(runOnce, INTERVAL);
+  }
   setInterval(pollPending, POLL_INTERVAL);
 }
 
