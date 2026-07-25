@@ -16,6 +16,7 @@ export default function Classification() {
   const { data: objectsData, refetch: refetchObjects } = useApiData('/classification/objects');
   const { data: detectorsData, refetch: refetchDetectors } = useApiData('/classification/detectors');
   const { data: coverageData, refetch: refetchCoverage } = useApiData('/classification/coverage');
+  const { data: runsData, refetch: refetchRuns } = useApiData('/classification/runs', { poll: 30000 });
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [activeTab, setActiveTab] = useState('objects');
 
@@ -24,6 +25,7 @@ export default function Classification() {
     refetchObjects();
     refetchDetectors();
     refetchCoverage();
+    refetchRuns();
     setLastRefresh(new Date());
   };
 
@@ -31,6 +33,7 @@ export default function Classification() {
   const objects = Array.isArray(objectsData) ? objectsData : [];
   const detectors = Array.isArray(detectorsData?.detectors) ? detectorsData.detectors : [];
   const coverage = Array.isArray(coverageData?.databases) ? coverageData.databases : [];
+  const runs = Array.isArray(runsData) ? runsData : [];
 
   const runScan = async () => {
     const res = await apiPost('/classification/scan');
@@ -66,6 +69,18 @@ export default function Classification() {
     { id: 'inventory', label: 'Columns', count: inventory.length || '-' },
     { id: 'rules', label: 'Detection Rules', count: detectors.length || '-' },
     { id: 'coverage', label: 'Coverage', count: coverage.length || '-' },
+    { id: 'runs', label: 'Scan History', count: runs.length || '-' },
+  ];
+
+  const runColumns = [
+    { key: 'created_at', label: 'Time', render: (v) => fmtTs(v, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' }) },
+    { key: 'database_name', label: 'Database', render: (v) => v || '—' },
+    { key: 'host', label: 'Host', render: (v) => <span className="mono" style={{ fontSize: 12 }}>{v || '—'}</span> },
+    { key: 'source', label: 'Trigger', render: (v) => <span className={`badge ${v === 'manual' ? 'blue' : ''}`}>{v === 'manual' ? 'on-demand' : v || 'periodic'}</span> },
+    { key: 'status', label: 'Status', render: (v) => <span className={`badge ${v === 'ok' ? 'green' : 'red'} dot`}>{v === 'ok' ? 'ok' : 'failed'}</span> },
+    { key: 'objects', label: 'Objects', align: 'right', render: (v) => (v || 0).toLocaleString() },
+    { key: 'columns', label: 'Columns', align: 'right', render: (v) => (v || 0).toLocaleString() },
+    { key: 'sensitive', label: 'Sensitive', align: 'right', render: (v) => <span style={{ fontWeight: 600, color: v > 0 ? 'var(--amber)' : 'var(--muted)' }}>{(v || 0).toLocaleString()}</span> },
   ];
 
   const objectColumns = [
@@ -188,6 +203,18 @@ export default function Classification() {
           </div>
           <div className="card-body no-pad">
             <DataTable columns={coverageColumns} data={coverage} emptyMessage="No databases registered yet. Register an instance and deploy an agent with classification enabled." />
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'runs' && (
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">Scan History</span>
+            <span className="card-sub">last {runs.length} classification run{runs.length === 1 ? '' : 's'} · periodic + on-demand</span>
+          </div>
+          <div className="card-body no-pad">
+            <DataTable columns={runColumns} data={runs} emptyMessage="No classification runs yet. Deploy an agent with classification enabled, or press Run Scan." />
           </div>
         </div>
       )}

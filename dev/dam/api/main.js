@@ -471,6 +471,24 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS columns_total INT`);
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS objects_total INT`);
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS sensitive_total INT`);
+    // History of classification scans (one row per database scanned per run) so the
+    // Classification page can show the last N runs — time, source, status, counts.
+    await client.query(`CREATE TABLE IF NOT EXISTS classification_runs (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     UUID REFERENCES tenants(id),
+      database_id   UUID,
+      database_name VARCHAR(200),
+      host          VARCHAR(200),
+      engine        VARCHAR(40),
+      status        VARCHAR(12) DEFAULT 'ok',
+      source        VARCHAR(20) DEFAULT 'periodic',
+      objects       INT DEFAULT 0,
+      columns       INT DEFAULT 0,
+      sensitive     INT DEFAULT 0,
+      error         VARCHAR(500),
+      created_at    TIMESTAMPTZ DEFAULT now()
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_classification_runs_tenant ON classification_runs(tenant_id, created_at DESC)`);
 
     // Sensitivity tags for the real, running client databases (these genuinely hold such data).
     await client.query(`UPDATE databases SET sensitivity_tags = ARRAY['PII'] WHERE name = 'PG-CRM-PROD' AND sensitivity_tags = '{}'`);
@@ -7390,6 +7408,10 @@ app.get('/api/classification/detectors', authRequired, async (req, res) => {
 // whichever classifier serves it (a deployed agent, or the dev collector) polls
 // scan-pending with its enroll token and consumes the request (consume-once per tenant).
 const scanRequested = new Set(); // tenantIds with a pending on-demand scan
+// When an agent CONSUMES a manual trigger (scan-pending → true), we note the time so the
+// scan-results that lands moments later can be labelled 'manual' vs the periodic 'periodic'.
+const manualTriggerAt = new Map(); // tenantId → epoch ms of the last consumed on-demand trigger
+const MANUAL_WINDOW_MS = 180000;   // a report within 3 min of a consumed trigger counts as manual
 app.post('/api/classification/scan', authRequired, (req, res) => {
   scanRequested.add(req.user.tenantId);
   res.json({ requested: true });
@@ -7400,7 +7422,7 @@ app.get('/api/classification/scan-pending', async (req, res) => {
   const tenantId = await tenantFromEnrollToken(req.query.token || req.headers['x-enroll-token']);
   if (!tenantId) return res.json({ pending: false });
   const pending = scanRequested.has(tenantId);
-  if (pending) scanRequested.delete(tenantId);
+  if (pending) { scanRequested.delete(tenantId); manualTriggerAt.set(tenantId, Date.now()); }
   res.json({ pending });
 });
 
@@ -7467,6 +7489,15 @@ app.post('/api/classification/scan-results', async (req, res) => {
       `UPDATE databases SET classified_at = now(), columns_total = $2, objects_total = $3, sensitive_total = $4 WHERE id = $1`,
       [dbRow.id, colsTotal, objsTotal, sensTotal]
     );
+    // Record this scan in the run history. Label it 'manual' if an on-demand trigger was
+    // consumed for this tenant within the window (see manualTriggerAt), else 'periodic'.
+    const trig = manualTriggerAt.get(tenantId);
+    const source = trig && (Date.now() - trig) < MANUAL_WINDOW_MS ? 'manual' : 'periodic';
+    await pgPool.query(
+      `INSERT INTO classification_runs (tenant_id, database_id, database_name, host, engine, status, source, objects, columns, sensitive)
+       VALUES ($1,$2,$3,$4,$5,'ok',$6,$7,$8,$9)`,
+      [tenantId, dbRow.id, dbres.name, host || null, engine || null, source, objsTotal, colsTotal, sensTotal]
+    );
     for (const obj of (dbres.objects || [])) {
       const o = await pgPool.query(
         `INSERT INTO classified_objects (tenant_id, database_id, schema_name, object_name, object_type, row_count, sensitivity, owner, column_count)
@@ -7484,8 +7515,18 @@ app.post('/api/classification/scan-results', async (req, res) => {
       }
     }
   }
+  manualTriggerAt.delete(tenantId); // one report consumes the on-demand label
   console.log(`[Classification] scan ingested: ${objCount} objects, ${colCount} columns`);
   res.json({ objects: objCount, columns: colCount });
+});
+
+// Last 50 classification runs for the Classification page's Scan History tab.
+app.get('/api/classification/runs', authRequired, async (req, res) => {
+  const { rows } = await pgPool.query(
+    `SELECT id, database_name, host, engine, status, source, objects, columns, sensitive, error, created_at
+       FROM classification_runs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50`, [req.user.tenantId]
+  );
+  res.json(rows);
 });
 
 // ── Compliance Center ─────────────────────────────────────
