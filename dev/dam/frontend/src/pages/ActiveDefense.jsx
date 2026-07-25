@@ -81,6 +81,7 @@ export default function ActiveDefense() {
   const timeline = data?.timeline || [];
   const maxN = Math.max(1, ...timeline.map((t) => t.n));
   const total24 = timeline.reduce((s, t) => s + (t.n || 0), 0);
+  const peak = timeline.reduce((a, t) => (t.n > a.n ? t : a), { n: 0, label: '—' });
 
   return (
     <Layout>
@@ -117,25 +118,38 @@ export default function ActiveDefense() {
         </div>
         <div className="card">
           <div className="card-header"><span className="card-title">Threat volume · 24h</span><span className="card-sub">{total24} alert{total24 === 1 ? '' : 's'} · per 3h</span></div>
-          <div className="card-body">
+          <div className="card-body" style={{ display: 'flex', flexDirection: 'column' }}>
             {total24 === 0 ? (
-              <div className="muted" style={{ fontSize: 12.5, padding: '28px 0', textAlign: 'center' }}>No alerts in the last 24h.</div>
+              <div className="muted" style={{ fontSize: 12.5, flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 220 }}>No alerts in the last 24h.</div>
             ) : (
-              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: 128, padding: '4px 2px 0' }}>
-                {timeline.map((t, i) => {
-                  const h = t.n > 0 ? Math.max(6, Math.round((t.n / maxN) * 88)) : 3;
-                  const hot = t.n >= maxN * 0.6 && maxN > 1;
-                  return (
-                    <div key={i} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5, height: '100%', justifyContent: 'flex-end' }} title={`${t.label} — ${t.n} alert${t.n === 1 ? '' : 's'}`}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: t.n > 0 ? 'var(--ink)' : 'transparent', fontVariantNumeric: 'tabular-nums' }}>{t.n || 0}</span>
-                      <div style={{ width: '100%', maxWidth: 30, height: h, borderRadius: '5px 5px 2px 2px', background: t.n > 0 ? (hot ? 'var(--danger)' : 'var(--primary)') : 'var(--line)', transition: 'height .4s' }} />
-                      <span style={{ fontSize: 10.5, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>{t.label}</span>
-                    </div>
-                  );
-                })}
-              </div>
+              <>
+                <div style={{ display: 'flex', gap: 30, paddingBottom: 14, marginBottom: 16, borderBottom: '1px solid var(--line)' }}>
+                  <div>
+                    <div style={{ fontSize: 27, fontWeight: 700, lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>{total24}</div>
+                    <div className="muted" style={{ fontSize: 10.5, marginTop: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>alerts · 24h</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 27, fontWeight: 700, lineHeight: 1, color: 'var(--danger)', fontVariantNumeric: 'tabular-nums' }}>{peak.n}</div>
+                    <div className="muted" style={{ fontSize: 10.5, marginTop: 5, textTransform: 'uppercase', letterSpacing: '.05em' }}>peak · {peak.label}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between', flex: 1, gap: 9, minHeight: 216 }}>
+                  {timeline.map((t, i) => {
+                    const hot = t.n >= maxN * 0.6 && maxN > 1;
+                    return (
+                      <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12 }} title={`${t.label} — ${t.n} alert${t.n === 1 ? '' : 's'}`}>
+                        <span style={{ width: 34, flex: 'none', textAlign: 'right', fontSize: 11.5, color: 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>{t.label}</span>
+                        <div style={{ flex: 1, height: 22, background: 'var(--surface-2)', borderRadius: 6, overflow: 'hidden' }}>
+                          <div style={{ width: t.n > 0 ? `${Math.max(5, Math.round((t.n / maxN) * 100))}%` : 0, height: '100%', borderRadius: 6, background: hot ? 'var(--danger)' : 'var(--primary)', transition: 'width .45s ease' }} />
+                        </div>
+                        <span style={{ width: 24, flex: 'none', textAlign: 'right', fontSize: 12.5, fontWeight: 700, color: t.n > 0 ? 'var(--ink)' : 'var(--muted)', fontVariantNumeric: 'tabular-nums' }}>{t.n}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="muted" style={{ fontSize: 11.5, margin: '16px 0 0' }}>Alert volume (inline blocks + detections) across eight 3-hour windows over 24h. <span style={{ color: 'var(--danger)', fontWeight: 600 }}>Red</span> marks a spike.</p>
+              </>
             )}
-            <p className="muted" style={{ fontSize: 11.5, margin: '10px 0 0' }}>Real alert volume (inline blocks + detections), bucketed into eight 3-hour windows over the last 24 hours. Red = a spike.</p>
           </div>
         </div>
       </div>
