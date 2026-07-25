@@ -105,7 +105,7 @@ variable "discovery_hub" {
     machine_type = optional(string, "e2-small")
     subnet_cidr  = optional(string, "10.90.0.0/24") # must not overlap any DB subnet
     preset       = optional(string, "common")       # portsets.js preset
-    interval_ms  = optional(number, 300000)          # rescan cadence
+    interval_ms  = optional(number, 1800000)         # autonomous rescan cadence (30 min; 0 = on-demand only)
     max_hosts    = optional(number, 65536)           # per-CIDR expansion cap (/16)
   })
   default = {}
