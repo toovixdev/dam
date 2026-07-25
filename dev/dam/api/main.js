@@ -6293,6 +6293,32 @@ app.get('/api/discovery/agents', authRequired, async (req, res) => {
   res.json(rows);
 });
 
+// Resolve the tenant an agent belongs to FROM its enrollment token (per-tenant token;
+// the legacy global dev token falls back to the reference/oldest tenant).
+async function tenantFromEnrollToken(token) {
+  if (!token) return null;
+  let id = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
+  if (!id && token === AGENT_ENROLL_TOKEN) {
+    id = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
+  }
+  return id;
+}
+
+// The in-network discovery agent polls this to run UI-queued ("Run scan") jobs on demand.
+// Claim-on-read: atomically flip pending → running and return them, so each job runs once
+// even with several agents. The agent then scans the job's scope and reports candidates
+// against the job id (which marks it done).
+app.post('/api/discovery/pending', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.body?.token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const { rows } = await pgPool.query(
+    `UPDATE discovery_jobs SET status = 'running'
+      WHERE tenant_id = $1 AND scan_type = 'network' AND status = 'pending'
+      RETURNING id, scope, port_set`, [tenantId]
+  );
+  res.json(rows);
+});
+
 app.get('/api/discovery/jobs', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
     `SELECT * FROM discovery_jobs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 25`, [req.user.tenantId]
@@ -6303,16 +6329,9 @@ app.get('/api/discovery/jobs', authRequired, async (req, res) => {
 // Token-gated ingest — the scanner agent reports what it found (it is not a user).
 app.post('/api/discovery/candidates', async (req, res) => {
   const { token, agent_id, agent_name, job, scan_type, scope, port_set, ports_count, candidates } = req.body;
-  // Resolve the tenant FROM the token (per-tenant), mirroring /api/agents/enroll — a shared
-  // global token can't tell tenants apart, so agents would all land in the oldest one. The
-  // legacy global dev token still works and maps to the reference (oldest) tenant.
-  let tenantId = null;
-  if (token) {
-    tenantId = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
-    if (!tenantId && token === AGENT_ENROLL_TOKEN) {
-      tenantId = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
-    }
-  }
+  // Resolve the tenant FROM the token (per-tenant) — a shared global token can't tell tenants
+  // apart, so agents would all land in the oldest one.
+  const tenantId = await tenantFromEnrollToken(token);
   if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
   if (!Array.isArray(candidates)) return res.status(400).json({ error: 'candidates[] required' });
 
@@ -6389,10 +6408,13 @@ app.post('/api/discovery/candidates', async (req, res) => {
 app.post('/api/discovery/scan', authRequired, async (req, res) => {
   const { scan_type, scope, port_set, ports_count, providers } = req.body;
   const id = 'scan-' + Date.now().toString(36);
+  // Network scans queue as 'pending' — the in-network agent claims them via
+  // /api/discovery/pending and runs them. Cloud-API discovery runs inline below.
+  const status = scan_type === 'cloud_api' ? 'running' : 'pending';
   await pgPool.query(
     `INSERT INTO discovery_jobs (id, tenant_id, scan_type, scope, port_set, ports_count, status)
-     VALUES ($1,$2,$3,$4,$5,$6,'running')`,
-    [id, req.user.tenantId, scan_type || 'network', scope || null, port_set || null, ports_count || 0]
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [id, req.user.tenantId, scan_type || 'network', scope || null, port_set || null, ports_count || 0, status]
   );
   // Cloud API discovery runs centrally right here (outbound to the provider's API).
   if (scan_type === 'cloud_api') {

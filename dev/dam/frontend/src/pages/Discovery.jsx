@@ -115,9 +115,9 @@ export default function Discovery() {
     });
     setScanCfg(null);
     if (res && res.ok) {
-      toast(`Scan ${res.data.id} queued — ${ports_count.toLocaleString()} ports/host`, 'ok');
+      toast(`Scan queued — the discovery agent will run it within ~20s (${ports_count.toLocaleString()} ports/host)`, 'ok');
       refetchJobs();
-      setTimeout(refetchCands, 1500);
+      setTimeout(() => { refetchJobs(); refetchCands(); }, 25000);
     } else {
       toast('Could not start scan', 'err');
     }
