@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+export DEBIAN_FRONTEND=noninteractive
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Discovery scanner VM. The discovery agent is dependency-free (Node built-ins +
+# global fetch), so rather than pulling a container image we install Node 20 and
+# run the embedded source as a systemd service. Ubuntu's apt Node is too old for
+# global fetch (needs 18+), hence NodeSource.
+# ─────────────────────────────────────────────────────────────────────────────
+apt-get update -y
+apt-get install -y ca-certificates curl gnupg
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+
+# ── Agent source, embedded at apply time (base64 so nothing needs to be fetched) ──
+install -d -m 0755 /opt/toovix-discovery
+echo '${portsets_b64}' | base64 -d > /opt/toovix-discovery/portsets.js
+echo '${targets_b64}'  | base64 -d > /opt/toovix-discovery/targets.js
+echo '${scanner_b64}'  | base64 -d > /opt/toovix-discovery/scanner.js
+echo '${agent_b64}'    | base64 -d > /opt/toovix-discovery/agent.js
+
+# ── Runtime config. DISCOVERY_TARGETS holds the peered spoke CIDRs; the scanner
+#    expands them (targets.js) and fingerprints each open port by handshake. ──
+cat > /etc/toovix-discovery.env <<EOENV
+CONTROL_PLANE=${control_plane_url}
+AGENT_ENROLL_TOKEN=${enroll_token}
+DISCOVERY_TARGETS=${targets}
+DISCOVERY_PRESET=${preset}
+DISCOVERY_INTERVAL=${interval}
+DISCOVERY_MAX_HOSTS=${max_hosts}
+DISCOVERY_AGENT_NAME=discovery-hub
+EOENV
+chmod 0600 /etc/toovix-discovery.env
+
+# ── systemd service: survives reboot, restarts on crash. ──
+cat > /etc/systemd/system/toovix-discovery.service <<'EOSVC'
+[Unit]
+Description=TooVix DAM Discovery Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/toovix-discovery.env
+ExecStart=/usr/bin/node /opt/toovix-discovery/agent.js
+Restart=always
+RestartSec=10
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOSVC
+
+systemctl daemon-reload
+systemctl enable --now toovix-discovery.service

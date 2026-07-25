@@ -598,6 +598,18 @@ async function runAuthMigration() {
       status      VARCHAR(15) DEFAULT 'running',
       created_at  TIMESTAMPTZ DEFAULT now()
     )`);
+    // Deployed network discovery agents (the in-network scanner VMs). A row is a
+    // heartbeat: upserted every time an agent reports candidates. The Discovery
+    // page gates network scanning on there being at least one of these.
+    await client.query(`CREATE TABLE IF NOT EXISTS discovery_agents (
+      id         VARCHAR(120) PRIMARY KEY,
+      tenant_id  UUID REFERENCES tenants(id),
+      name       VARCHAR(200),
+      scope      VARCHAR(400),
+      last_job   VARCHAR(40),
+      created_at TIMESTAMPTZ DEFAULT now(),
+      last_seen  TIMESTAMPTZ DEFAULT now()
+    )`);
 
     // ── Alerts: rich detail fields for the alert drilldown popup ──
     for (const col of [
@@ -6269,6 +6281,18 @@ app.get('/api/discovery/candidates', authRequired, async (req, res) => {
   res.json(rows);
 });
 
+// Deployed network discovery agents (scanner VMs). `online` = heartbeat within the
+// last 15 min (≈3 scan intervals). The UI uses this to gate network scanning and to
+// show a "set up a discovery agent" prompt when none is deployed.
+app.get('/api/discovery/agents', authRequired, async (req, res) => {
+  const { rows } = await pgPool.query(
+    `SELECT id, name, scope, last_job, last_seen, created_at,
+            (last_seen > now() - interval '15 minutes') AS online
+       FROM discovery_agents WHERE tenant_id = $1 ORDER BY last_seen DESC`, [req.user.tenantId]
+  );
+  res.json(rows);
+});
+
 app.get('/api/discovery/jobs', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
     `SELECT * FROM discovery_jobs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 25`, [req.user.tenantId]
@@ -6278,10 +6302,20 @@ app.get('/api/discovery/jobs', authRequired, async (req, res) => {
 
 // Token-gated ingest — the scanner agent reports what it found (it is not a user).
 app.post('/api/discovery/candidates', async (req, res) => {
-  const { token, job, scan_type, scope, port_set, ports_count, candidates } = req.body;
+  const { token, agent_id, agent_name, job, scan_type, scope, port_set, ports_count, candidates } = req.body;
   if (token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid enrollment token' });
   if (!Array.isArray(candidates)) return res.status(400).json({ error: 'candidates[] required' });
   const tenantId = (await pgPool.query('SELECT id FROM tenants LIMIT 1')).rows[0].id;
+
+  // Heartbeat: every report proves this network discovery agent is deployed + alive.
+  // The Discovery page gates network scanning on there being ≥1 recent agent.
+  const agentId = agent_id || 'disco-default';
+  await pgPool.query(
+    `INSERT INTO discovery_agents (id, tenant_id, name, scope, last_job, last_seen)
+     VALUES ($1,$2,$3,$4,$5, now())
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, scope = EXCLUDED.scope, last_job = EXCLUDED.last_job, last_seen = now()`,
+    [agentId, tenantId, agent_name || agentId, scope || null, job || null]
+  );
 
   // Record the scan job (so agent-driven scans show in the history with the port-set used).
   if (job) {

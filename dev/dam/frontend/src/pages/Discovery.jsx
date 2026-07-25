@@ -66,11 +66,19 @@ export default function Discovery() {
   const { data: candData, refetch: refetchCands } = useApiData('/discovery/candidates', { poll: 30000 });
   const { data: jobData, refetch: refetchJobs } = useApiData('/discovery/jobs', { poll: 30000 });
   const { data: dbData, refetch: refetchDbs } = useApiData('/databases', { poll: 30000 });
+  const { data: agentData } = useApiData('/discovery/agents', { poll: 30000 });
   const { data: cloudCfg } = useApiData('/settings/cloud-providers', { poll: 0 });
   const tenantClouds = Array.isArray(cloudCfg?.providers) ? cloudCfg.providers : [];
   const cloudLabel = (id) => (cloudCfg?.available || []).find((a) => a.id === id)?.label || id;
   const [scanCfg, setScanCfg] = useState(null); // open scan-config modal when set
   const [confirmCand, setConfirmCand] = useState(null); // unreachable-approve confirmation
+  const [showTopology, setShowTopology] = useState(false); // recommended-topology modal
+
+  // Network scanning is done BY an in-network discovery agent (scanner VM). Until one
+  // is deployed there is nothing to run a scan, so the scan action is gated on it.
+  const discoveryAgents = Array.isArray(agentData) ? agentData : [];
+  const hasAgent = discoveryAgents.length > 0;
+  const onlineAgent = discoveryAgents.find((a) => a.online) || null;
 
   // Live data only — no sample/static data.
   const candidates = Array.isArray(candData) ? candData.map(mapCandidate) : [];
@@ -85,6 +93,7 @@ export default function Discovery() {
 
   const runScan = async () => {
     const cfg = scanCfg;
+    if (cfg.scanType === 'network' && !hasAgent) { toast('Deploy a discovery agent before running a network scan', 'err'); return; }
     if (cfg.scanType === 'cloud_api') {
       if (!(cfg.providers || []).length) { toast('Pick at least one cloud to enumerate', 'err'); return; }
       const res = await apiPost('/discovery/scan', { scan_type: 'cloud_api', scope: cfg.providers.join(', '), providers: cfg.providers });
@@ -135,9 +144,40 @@ export default function Discovery() {
   return (
     <Layout lastRefresh={new Date()} onRefresh={refetchCands}>
       <PageHeader title="Discovery" meta={['cloud API + network scan + manual', `${candidates.length} candidates`]}>
-        <button className="btn-secondary" onClick={openScan}>⊞ Run scan</button>
+        <button className="btn-secondary" onClick={openScan} disabled={!hasAgent}
+          title={hasAgent ? 'Run a discovery scan' : 'Deploy a discovery agent first'}>⊞ Run scan</button>
         <button className="btn-primary" onClick={() => navigate('/databases')}>View registered</button>
       </PageHeader>
+
+      {!hasAgent ? (
+        <div className="card" style={{ marginBottom: 14, borderLeft: '3px solid var(--amber)' }}>
+          <div className="card-body" style={{ display: 'flex', gap: 14, alignItems: 'flex-start' }}>
+            <div style={{ fontSize: 22, lineHeight: 1 }}>🛰️</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>No discovery agent deployed</div>
+              <div className="muted" style={{ fontSize: 13, lineHeight: 1.55 }}>
+                Network discovery is run by an in-network <b>discovery agent</b> (a scanner VM with
+                reachability to your database subnets). Deploy one, and it will sweep your VNet CIDRs
+                and report candidates here. Network scanning stays disabled until an agent checks in.
+                {' '}<a href="#" onClick={(e) => { e.preventDefault(); setShowTopology(true); }}>View recommended topology →</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="card" style={{ marginBottom: 14, borderLeft: `3px solid var(${onlineAgent ? '--green' : '--amber'})` }}>
+          <div className="card-body" style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <span className={`badge ${onlineAgent ? 'green' : 'amber'} dot`}>{onlineAgent ? 'agent online' : 'agent offline'}</span>
+            <span style={{ fontSize: 13 }}>
+              {discoveryAgents.length} discovery agent{discoveryAgents.length > 1 ? 's' : ''} deployed
+              {discoveryAgents[0]?.scope && <> · sweeping <span className="mono" style={{ fontSize: 12 }}>{discoveryAgents[0].scope}</span></>}
+            </span>
+            <span className="muted" style={{ fontSize: 12, marginLeft: 'auto' }}>
+              last check-in {jobAge(discoveryAgents[0]?.last_seen)} · <a href="#" onClick={(e) => { e.preventDefault(); setShowTopology(true); }}>topology</a>
+            </span>
+          </div>
+        </div>
+      )}
 
       <section className="kpi-grid">
         <KpiCard icon="▣" iconBg="var(--green-soft)" iconColor="var(--green)" label="Registered" value={registered} detail="monitored" />
@@ -269,6 +309,8 @@ export default function Discovery() {
         })()}
       </Modal>
 
+      <TopologyModal open={showTopology} onClose={() => setShowTopology(false)} />
+
       <Modal open={!!confirmCand} onClose={() => setConfirmCand(null)} title="Database unreachable" width={460}>
         {confirmCand && (
           <>
@@ -287,6 +329,65 @@ export default function Discovery() {
         )}
       </Modal>
     </Layout>
+  );
+}
+
+// ── Recommended discovery topology — a hub VPC peered to each DB VNet ──
+const DISCOVERY_DEPLOY = `# Discovery agent — runs inside the hub VPC, sweeps each peered spoke CIDR.
+# (Dependency-free Node service; identifies engines by protocol handshake, not port.)
+docker run -d --name toovix-discovery --restart unless-stopped --network host \\
+  -e CONTROL_PLANE="https://<your-dam-host>" \\
+  -e AGENT_ENROLL_TOKEN="<enroll-token>" \\
+  -e DISCOVERY_TARGETS="10.10.0.0/24,10.20.0.0/24,10.40.0.0/24,10.50.0.0/24" \\
+  -e DISCOVERY_PRESET="common" \\
+  toovix/dam-discovery:latest`;
+
+function SpokeBox({ label, cidr }) {
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', background: 'var(--surface)', minWidth: 116, textAlign: 'center' }}>
+      <div style={{ fontSize: 16 }}>🗄️</div>
+      <div style={{ fontSize: 12, fontWeight: 600 }}>{label}</div>
+      <div className="mono muted" style={{ fontSize: 10.5 }}>{cidr}</div>
+    </div>
+  );
+}
+
+function TopologyModal({ open, onClose }) {
+  return (
+    <Modal open={open} onClose={onClose} title="Recommended discovery topology" width={720}>
+      <p className="muted" style={{ fontSize: 13, lineHeight: 1.55, margin: '0 0 14px' }}>
+        Put one <b>discovery agent</b> in a dedicated <b>hub VPC</b> that is VPC-peered to each VNet
+        holding databases. The agent sweeps every peered spoke's CIDR and reports candidates outbound
+        over HTTPS — nothing inbound, no agent in every app VPC.
+      </p>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 18, justifyContent: 'center', flexWrap: 'wrap', padding: '10px 0 16px' }}>
+        <div style={{ border: '2px solid var(--info)', borderRadius: 10, padding: '12px 14px', background: 'var(--info-soft)', textAlign: 'center', minWidth: 150 }}>
+          <div style={{ fontSize: 20 }}>🛰️</div>
+          <div style={{ fontSize: 12.5, fontWeight: 700 }}>Discovery hub VPC</div>
+          <div className="mono muted" style={{ fontSize: 10.5 }}>scanner · outbound HTTPS</div>
+        </div>
+        <div className="muted" style={{ fontSize: 11, textAlign: 'center', lineHeight: 1.3 }}>peered<br />⇄⇄⇄</div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <SpokeBox label="app-a VNet" cidr="10.10.0.0/24" />
+          <SpokeBox label="app-b VNet" cidr="10.20.0.0/24" />
+          <SpokeBox label="app-c VNet" cidr="10.40.0.0/24" />
+          <SpokeBox label="app-d VNet" cidr="10.50.0.0/24" />
+        </div>
+      </div>
+
+      <ul style={{ fontSize: 12.5, lineHeight: 1.7, margin: '0 0 14px', paddingLeft: 18 }}>
+        <li><b>Star peering.</b> The hub peers directly to each spoke — peering is non-transitive, so this is what gives the hub a route into every DB subnet.</li>
+        <li><b>Unique CIDRs required.</b> Peering refuses overlapping ranges; each VNet (and the hub) must have a distinct CIDR.</li>
+        <li><b>Least privilege + outbound only.</b> The scanner does TCP-connect + protocol handshake only — no auth, no data — and only dials home. Allow it on DB ports from the spokes' firewalls; keep it rate-limited to stay under IDS thresholds.</li>
+        <li><b>Managed / PaaS databases</b> (RDS, Cloud SQL, Azure SQL) are found by <b>cloud-API discovery</b> (Cloud connectors above) — no network path needed, since they sit behind non-transitive service peerings.</li>
+      </ul>
+
+      <div className="form-field" style={{ margin: 0 }}>
+        <label>Deploy the agent</label>
+        <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{DISCOVERY_DEPLOY}</pre>
+      </div>
+    </Modal>
   );
 }
 

@@ -96,6 +96,21 @@ variable "mongo_vm" {
   default = {}
 }
 
+# ── The discovery hub: a dedicated VPC (peered to the shared VPC) running a scanner
+#    VM that sweeps the DB-VM subnet CIDRs. Models the production hub-and-spoke model. ──
+variable "discovery_hub" {
+  type = object({
+    name         = optional(string, "discovery-hub")
+    vpc_name     = optional(string, "toovix-discovery-hub-vpc")
+    machine_type = optional(string, "e2-small")
+    subnet_cidr  = optional(string, "10.90.0.0/24") # must not overlap any DB subnet
+    preset       = optional(string, "common")       # portsets.js preset
+    interval_ms  = optional(number, 300000)          # rescan cadence
+    max_hosts    = optional(number, 65536)           # per-CIDR expansion cap (/16)
+  })
+  default = {}
+}
+
 # ── The Cloud SQL (PaaS) MySQL database, in its own VPC ──
 variable "cloudsql" {
   type = object({

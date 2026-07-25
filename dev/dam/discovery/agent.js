@@ -7,10 +7,15 @@
  * candidates over a token-gated channel (it is not a user).
  */
 
+const os = require('os');
 const { scan } = require('./scanner');
 
 const CONTROL_PLANE = process.env.CONTROL_PLANE || 'http://dam-api:3000';
 const ENROLL_TOKEN = process.env.AGENT_ENROLL_TOKEN || 'dev-agent-enroll-token';
+// Stable identity so the control plane can track this scanner as a DEPLOYED
+// discovery agent (heartbeat) — the Discovery page gates network scanning on it.
+const AGENT_ID = process.env.AGENT_ID || `disco-${os.hostname()}`;
+const AGENT_NAME = process.env.DISCOVERY_AGENT_NAME || os.hostname();
 const INTERVAL = parseInt(process.env.DISCOVERY_INTERVAL || '300000', 10); // 5 min
 const PRESET = process.env.DISCOVERY_PRESET || 'common';
 const CUSTOM_PORTS = process.env.DISCOVERY_PORTS || '';
@@ -30,6 +35,8 @@ async function runOnce() {
 
     const body = {
       token: ENROLL_TOKEN,
+      agent_id: AGENT_ID,
+      agent_name: AGENT_NAME,
       job,
       scan_type: 'network',
       scope: TARGETS.join(', '),
