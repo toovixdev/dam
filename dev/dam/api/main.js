@@ -463,6 +463,9 @@ async function runAuthMigration() {
     // GET /api/databases — we only persist descriptive metadata here.
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS environment VARCHAR(20) DEFAULT 'prod'`);
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS sensitivity_tags TEXT[] DEFAULT '{}'`);
+    // Real engine version strings are long (e.g. MySQL "8.0.46-0ubuntu0.22.04.3" = 23 chars);
+    // widen to match db_instances.version so approving a discovered instance can't overflow.
+    await client.query(`ALTER TABLE databases ALTER COLUMN version TYPE VARCHAR(40)`);
     // Classification scan summary (drives the real Coverage tab + Avg Coverage KPI).
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS classified_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE databases ADD COLUMN IF NOT EXISTS columns_total INT`);
@@ -6430,35 +6433,40 @@ app.post('/api/discovery/scan', authRequired, async (req, res) => {
 
 // Approve a candidate → register it as an instance (+ its first database).
 app.post('/api/discovery/candidates/:id/approve', authRequired, async (req, res) => {
-  const c = (await pgPool.query('SELECT * FROM discovery_candidates WHERE id = $1', [req.params.id])).rows[0];
-  if (!c) return res.status(404).json({ error: 'Candidate not found' });
-  // Keep engine canonical (lowercase, as agents enroll) so UI-approve and agent-enroll
-  // converge on the SAME instance instead of creating a duplicate.
-  const engine = (c.engine || 'unknown').toLowerCase();
+  try {
+    const c = (await pgPool.query('SELECT * FROM discovery_candidates WHERE id = $1', [req.params.id])).rows[0];
+    if (!c) return res.status(404).json({ error: 'Candidate not found' });
+    // Keep engine canonical (lowercase, as agents enroll) so UI-approve and agent-enroll
+    // converge on the SAME instance instead of creating a duplicate.
+    const engine = (c.engine || 'unknown').toLowerCase();
 
-  const found = await pgPool.query(
-    `SELECT id FROM db_instances WHERE host = $1 AND port IS NOT DISTINCT FROM $2 AND engine = $3`,
-    [c.host, c.port, engine]
-  );
-  let instanceId;
-  if (found.rows.length) instanceId = found.rows[0].id;
-  else {
-    const created = await pgPool.query(
-      `INSERT INTO db_instances (tenant_id, name, engine, version, host, port, deployment_type, cloud_provider, region)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
-      [req.user.tenantId, c.host, engine, c.version, c.host, c.port, c.deployment_type, c.cloud_provider, c.region]
+    const found = await pgPool.query(
+      `SELECT id FROM db_instances WHERE host = $1 AND port IS NOT DISTINCT FROM $2 AND engine = $3`,
+      [c.host, c.port, engine]
     );
-    instanceId = created.rows[0].id;
+    let instanceId;
+    if (found.rows.length) instanceId = found.rows[0].id;
+    else {
+      const created = await pgPool.query(
+        `INSERT INTO db_instances (tenant_id, name, engine, version, host, port, deployment_type, cloud_provider, region)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+        [req.user.tenantId, c.host, engine, c.version, c.host, c.port, c.deployment_type, c.cloud_provider, c.region]
+      );
+      instanceId = created.rows[0].id;
+    }
+    const dbName = (req.body && req.body.database_name) || c.host;
+    await pgPool.query(
+      `INSERT INTO databases (tenant_id, instance_id, name, engine, version, host, port, deployment_type, cloud_provider, region, monitoring_status, risk_score)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'not_monitored',0)`,
+      [req.user.tenantId, instanceId, dbName, engine, c.version, c.host, c.port, c.deployment_type, c.cloud_provider, c.region]
+    );
+    await pgPool.query(`UPDATE discovery_candidates SET status = 'approved' WHERE id = $1`, [req.params.id]);
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'discovery.approve', resourceType: 'instance', resourceId: instanceId, details: { endpoint: c.endpoint, engine } });
+    res.json({ instance_id: instanceId, message: `Registered ${c.endpoint}` });
+  } catch (e) {
+    console.error('[discovery.approve] failed:', e.message);
+    res.status(500).json({ error: 'Could not register candidate: ' + e.message });
   }
-  const dbName = (req.body && req.body.database_name) || c.host;
-  await pgPool.query(
-    `INSERT INTO databases (tenant_id, instance_id, name, engine, version, host, port, deployment_type, cloud_provider, region, monitoring_status, risk_score)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'not_monitored',0)`,
-    [req.user.tenantId, instanceId, dbName, engine, c.version, c.host, c.port, c.deployment_type, c.cloud_provider, c.region]
-  );
-  await pgPool.query(`UPDATE discovery_candidates SET status = 'approved' WHERE id = $1`, [req.params.id]);
-  await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'discovery.approve', resourceType: 'instance', resourceId: instanceId, details: { endpoint: c.endpoint, engine } });
-  res.json({ instance_id: instanceId, message: `Registered ${c.endpoint}` });
 });
 
 app.post('/api/discovery/candidates/:id/dismiss', authRequired, async (req, res) => {
