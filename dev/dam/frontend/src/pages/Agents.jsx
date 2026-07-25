@@ -617,16 +617,20 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
       env.push(`AUDIT_TOPIC=${opts.auditTopic || 'toovix-dam-audit'}`);
       if (opts.gcpProject) env.push(`GCP_PROJECT=${opts.gcpProject}`);
     }
-  } else if (opts.classify) {
-    // Data classification (optional) — the agent logs into the DB as a least-privilege
-    // reader and classifies columns. Attached to a single container by the caller.
-    env.push(
-      'CLASSIFY=true',
-      `DB_USER=${opts.dbUser || 'dam_svc'}`,
-      `DB_PASSWORD=${opts.dbPass || '<db-reader-password>'}`,
-    );
+  }
+  // Data classification (optional) — the agent logs into the DB as a least-privilege reader
+  // and classifies columns. It runs alongside ANY capture mode (AgentLite included), so this
+  // is NOT tied to the agentless branch. Reuse DB_USER/DB_PASSWORD/DB_NAME if a poll engine
+  // already set them above; otherwise add them here.
+  if (opts.classify) {
+    env.push('CLASSIFY=true');
+    if (!env.some((e) => e.startsWith('DB_USER='))) {
+      env.push(`DB_USER=${opts.dbUser || 'dam_svc'}`, `DB_PASSWORD=${opts.dbPass || '<db-reader-password>'}`);
+    }
     // Postgres/SQL Server information_schema is per-database, so classification needs the target DB.
-    if (eng === 'postgresql' || eng === 'mssql') env.push(`DB_NAME=${opts.dbName || '<database-name>'}`);
+    if ((eng === 'postgresql' || eng === 'mssql') && !env.some((e) => e.startsWith('DB_NAME='))) {
+      env.push(`DB_NAME=${opts.dbName || '<database-name>'}`);
+    }
     env.push('CLASSIFY_INTERVAL_MIN=30');
   }
 
