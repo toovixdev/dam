@@ -94,25 +94,52 @@ function SupCell({ s, n, v }) {
   );
 }
 
-// ── Per-mode capability cards ────────────────────────────────────────────────
-const CAPS = [
-  { k: '01 · Passive', name: 'Network agent',
-    desc: "Sniffs the DB's traffic and decodes the wire protocol out-of-band. Zero path change, tamper-resistant — but cleartext only.",
-    attrs: [['Runs', 'on host / SPAN', ''], ['Sees TLS', '✗ no', 'no'], ['Row counts', '✓ yes', 'yes'], ['Can block', '✗ no', 'no'], ['Engines', 'MySQL · PG · MSSQL', '']] },
-  { k: '02 · Kernel', name: 'Host agent (eBPF)',
-    desc: 'Hooks the TLS library on the DB host, reading sessions below encryption — the exact complement of passive capture.',
-    attrs: [['Runs', 'on DB host (Linux)', ''], ['Sees TLS', '✓ below it', 'yes'], ['Row counts', '✓ yes', 'yes'], ['Can block', '✗ no', 'no'], ['Engines', 'MySQL · PG', '']] },
-  { k: '03 · Gateway', name: 'Inline proxy',
-    desc: "Clients connect through it, so it's the only mode that can block or quarantine, and the only one that sees the real end-user behind a pool.",
-    attrs: [['Runs', 'in the data path', ''], ['Sees TLS', '✓ terminates', 'yes'], ['Row counts', '✓ yes', 'yes'], ['Can block', '✓ only mode', 'yes'], ['Engines', 'MySQL', '']] },
-  { k: '04 · Audit-forward', name: 'AgentLite',
-    desc: "Reads the DB's own audit source — a log file (MySQL/PG) or a polled view (SQL Server / Mongo / Oracle). Runs off-host for the polled engines, covering managed services.",
-    attrs: [['Runs', 'on host / any host', ''], ['Sees TLS', '✓ post-decrypt', 'yes'], ['Row counts', '◐ XEvents · Oracle', 'part'], ['Can block', '✗ no', 'no'], ['Engines', 'all five', '']] },
-  { k: '05 · Cloud stream', name: 'Agentless',
-    desc: "The cloud routes a managed DB's native audit into a stream (Pub/Sub · Event Hub) that DAM consumes. Zero install — the only option where nothing can be deployed.",
-    attrs: [['Runs', 'nothing on host', ''], ['Sees TLS', '✓ post-decrypt', 'yes'], ['Row counts', '✗ no', 'no'], ['Can block', '✗ no', 'no'], ['Engines', 'managed DBs', '']] },
+// ── Capability matrix: what each configuration can do ────────────────────────
+// bool rows: cell = [state, qualifier?]  ·  value rows (v:1): cell = [text, tone]
+const CAP_MODES = [
+  ['Network', 'passive · wire'], ['Host (eBPF)', 'kernel · below TLS'],
+  ['Inline Proxy', 'gateway'], ['AgentLite', 'audit-forward'], ['Agentless', 'cloud stream'],
 ];
-const TONE = { yes: 'var(--green)', no: 'var(--muted)', part: 'var(--amber)', '': 'var(--ink)' };
+const G = { yes: ['var(--green)', '✓'], part: ['var(--amber)', '◐'], no: ['var(--muted)', '✗'] };
+const VTONE = { warn: 'var(--amber)', dim: 'var(--muted)', num: 'var(--ink)', '': 'var(--ink)' };
+const CAP_BANDS = [
+  { band: 'Footprint & deployment', rows: [
+    { name: 'Where it runs', v: 1, cells: [['DB host / SPAN', 'dim'], ['DB host (kernel)', 'dim'], ['in the data path', 'dim'], ['on host / any host', 'dim'], ['nothing (cloud)', 'dim']] },
+    { name: 'Runs on the DB host', cells: [['part', 'host or SPAN'], ['yes'], ['no', 'separate box'], ['part', 'file-tail only'], ['no']] },
+    { name: 'Reroutes clients', hint: 'connection-path change', v: 1, cells: [['no', ''], ['no', ''], ['YES', 'warn'], ['no', ''], ['no', '']] },
+    { name: 'Overhead', v: 1, cells: [['~0 · passive', 'dim'], ['low · kernel', 'dim'], ['low–med', 'dim'], ['low · poll/tail', 'dim'], ['none · off-host', 'dim']] },
+    { name: 'Components to deploy', v: 1, cells: [['1', 'num'], ['1', 'num'], ['1', 'num'], ['1', 'num'], ['0', 'num']] },
+    { name: 'Covers managed / PaaS', cells: [['no'], ['no'], ['part', 'in your VPC'], ['part', 'reachable-PaaS'], ['yes', 'the PaaS option']] },
+  ] },
+  { band: 'What it can see', rows: [
+    { name: 'Cleartext traffic', cells: [['yes'], ['yes'], ['yes'], ['yes'], ['yes']] },
+    { name: 'TLS-encrypted sessions', cells: [['no', 'opaque'], ['yes', 'below TLS'], ['yes', 'terminates'], ['yes', 'post-decrypt'], ['yes', 'post-decrypt']] },
+    { name: 'Local / IPC', hint: 'unix socket · shared mem', cells: [['no'], ['yes', 'only one'], ['no'], ['yes', 'audit sees all'], ['yes', 'audit sees all']] },
+    { name: 'Result size / row counts', hint: 'powers mass-read detection', key: 1, cells: [['yes'], ['yes'], ['yes'], ['part', 'XEvents · Oracle'], ['no']] },
+    { name: 'Real end-user', hint: 'behind a pooled connection', cells: [['no'], ['part'], ['yes', 'only one'], ['part'], ['part']] },
+    { name: 'Private / no-public-IP DB', cells: [['yes'], ['yes'], ['yes'], ['yes'], ['yes', 'all outbound']] },
+  ] },
+  { band: 'Action & posture', rows: [
+    { name: 'Block / quarantine', hint: 'real-time prevention', key: 1, cells: [['no'], ['part', 'local only'], ['yes', 'only mode'], ['no'], ['no']] },
+    { name: 'Posture', v: 1, cells: [['detective', 'dim'], ['detective', 'dim'], ['preventive', 'warn'], ['detective', 'dim'], ['detective', 'dim']] },
+    { name: 'Engines', v: 1, cells: [['MySQL · PG · MSSQL', 'dim'], ['MySQL · PG', 'dim'], ['MySQL', 'dim'], ['all five', ''], ['managed DBs', 'dim']] },
+  ] },
+];
+
+function CapCell({ v, cell }) {
+  if (v) {
+    const [text, tone] = cell;
+    return <td style={{ padding: '11px 14px', textAlign: 'center', borderBottom: '1px solid var(--line)' }}>
+      <span style={{ fontFamily: MONO, fontSize: tone === 'num' ? 13 : 11.5, fontWeight: (tone === 'warn' || tone === 'num') ? 700 : (tone === 'dim' ? 500 : 600), color: VTONE[tone] || 'var(--ink)', fontVariantNumeric: tone === 'num' ? 'tabular-nums' : 'normal' }}>{text}</span>
+    </td>;
+  }
+  const [state, q] = cell;
+  const [color, glyph] = G[state];
+  return <td style={{ padding: '11px 14px', textAlign: 'center', borderBottom: '1px solid var(--line)' }}>
+    <span style={{ fontFamily: MONO, fontWeight: 800, fontSize: 15, color }}>{glyph}</span>
+    {q && <span style={{ display: 'block', marginTop: 3, fontFamily: MONO, fontSize: 10, color: 'var(--muted)', lineHeight: 1.3 }}>{q}</span>}
+  </td>;
+}
 
 export default function CaptureModes() {
   const navigate = useNavigate();
@@ -175,25 +202,47 @@ export default function CaptureModes() {
         </div>
       </div>
 
-      {/* ── Per-mode capability cards ── */}
-      <div className="grid2" style={{ marginBottom: 14, gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', display: 'grid', gap: 14 }}>
-        {CAPS.map((c) => (
-          <div className="card" key={c.name}>
-            <div className="card-body">
-              <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--primary)', fontWeight: 600 }}>{c.k}</span>
-              <h3 style={{ margin: '3px 0 0', fontSize: 14.5, fontWeight: 640, letterSpacing: '-.01em' }}>{c.name}</h3>
-              <p className="muted" style={{ margin: '9px 0 12px', fontSize: 12, lineHeight: 1.45 }}>{c.desc}</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, borderTop: '1px solid var(--line)', paddingTop: 11 }}>
-                {c.attrs.map(([l, val, tone]) => (
-                  <div key={l} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, fontSize: 11.5 }}>
-                    <span style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: '.03em', color: 'var(--muted)', textTransform: 'uppercase' }}>{l}</span>
-                    <span style={{ fontWeight: 600, fontSize: 12, textAlign: 'right', color: TONE[tone] }}>{val}</span>
-                  </div>
+      {/* ── Capability matrix — what each configuration can do ── */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-header">
+          <span className="card-title">What each configuration can do</span>
+          <span className="card-sub">footprint · visibility · enforcement · ★ = decision-driver</span>
+        </div>
+        <div className="card-body no-pad" style={{ overflowX: 'auto' }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 840 }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: 'left', padding: '13px 16px', minWidth: 210, borderBottom: '1px solid var(--line)', background: 'var(--surface-2)' }}>
+                  <span style={{ fontFamily: MONO, fontSize: 10.5, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>Capability</span>
+                </th>
+                {CAP_MODES.map(([name, sub]) => (
+                  <th key={name} style={{ textAlign: 'center', padding: '13px 14px 12px', borderBottom: '1px solid var(--line)', background: 'var(--surface-2)', verticalAlign: 'bottom' }}>
+                    <span style={{ fontSize: 13, fontWeight: 640, letterSpacing: '-.01em', display: 'block' }}>{name}</span>
+                    <span style={{ fontFamily: MONO, fontSize: 10, color: 'var(--muted)', letterSpacing: '.03em', textTransform: 'uppercase', marginTop: 3, display: 'block' }}>{sub}</span>
+                  </th>
                 ))}
-              </div>
-            </div>
-          </div>
-        ))}
+              </tr>
+            </thead>
+            <tbody>
+              {CAP_BANDS.map((b) => (
+                <Fragment key={b.band}>
+                  <tr>
+                    <td colSpan={6} style={{ background: 'var(--surface-2)', padding: '8px 16px', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', fontFamily: MONO, fontSize: 10.5, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>{b.band}</td>
+                  </tr>
+                  {b.rows.map((r) => (
+                    <tr key={r.name} style={r.key ? { background: 'color-mix(in srgb, var(--primary) 7%, transparent)' } : undefined}>
+                      <td style={{ padding: '11px 16px', borderRight: '1px solid var(--line)', borderBottom: '1px solid var(--line)' }}>
+                        <span style={{ fontSize: 13, fontWeight: 560, color: 'var(--ink)', display: 'block' }}>{r.name}{r.key ? <span style={{ color: 'var(--primary)', fontSize: 10, marginLeft: 6, verticalAlign: 'top' }}>★</span> : null}</span>
+                        {r.hint ? <span style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2, display: 'block' }}>{r.hint}</span> : null}
+                      </td>
+                      {r.cells.map((c, i) => <CapCell key={i} v={r.v} cell={c} />)}
+                    </tr>
+                  ))}
+                </Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* ── Reading the matrix ── */}
