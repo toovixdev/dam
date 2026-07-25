@@ -2266,3 +2266,51 @@ Operational note: `system.profile` is **capped**, so profiler capture is best-ef
 guaranteed trail — and at a 5s poll the agent's own reads were 56 of 71 documents in it, i.e. the
 collector's polling itself evicts real events on a busy instance. Longer `AUDIT_POLL_SEC` or a
 larger profile collection is the mitigation.
+
+## 67. Compliance evidence catalog + tamper-evident attestation workflow
+
+Closed the largest "compliance reporting depth" gap against the incumbents (IBM Guardium's
+Compliance Accelerators): TooVix had posture *scores* (`compliance_scores`), report *cards*
+(`REPORTS`), and DDL-change attestation, but no **control-mapped report catalog** and no general
+**report → review → sign-off → sealed evidence** loop. That sign-off loop is what auditors actually
+buy — documented proof a human reviewed DB activity (PCI 10.6, SOX control attestation).
+
+**What shipped**
+
+- `api/compliance-catalog.js` — a library of 9 named reports, each mapped to a specific control ID
+  (PCI-DSS 10.2.x / 10.6, SOX ITGC, GDPR Art.17/30) and expressed as a ClickHouse `where(...)`
+  over the events plane: schema/privilege changes (DDL/GRANT), sensitive-object access, mass
+  extraction (≥10k rows on tagged objects), after-hours access, sensitive DML, auth activity,
+  high-risk (anomaly ≥70), data deletion, personal-data access. Same code pattern as `REPORTS`.
+- `compliance_evidence` table (Postgres) — a run snapshots the matching events (capped 1000 rows)
+  into an **immutable record**: `content_hash = sha256(stableStr(snapshot))` seals the evidence;
+  reviewer sign-off writes `sign_hash = sha256(prev_sign_hash|content_hash|decision|reviewer|ts|note)`,
+  chaining sign-offs exactly like the `audit_trail` hash chain. Both the generate and attest actions
+  also append to `audit_trail`.
+- Endpoints (all `authRequired`): `GET /compliance/catalog`, `POST /compliance/catalog/:id/run`,
+  `GET /compliance/evidence` (+ `/:id`), `POST /compliance/evidence/:id/attest`,
+  `GET /compliance/evidence/verify`. **`/verify` is declared before `/:id`** or Express captures
+  "verify" as an id. The attest route is **server-role-gated** to `tenant_admin|compliance|auditor`
+  (`EVIDENCE_ATTEST_ROLES`) — the first compliance endpoint with authoritative server-side
+  separation-of-duties, not just the client-side `roles.js` hide.
+- `frontend/pages/Attestations.jsx` — catalog grouped by framework with a period picker + "Generate
+  evidence"; an evidence log; a sign-off drawer (attest / flag exception / escalate, note required
+  for the latter two) that shows the seal state + snapshot rows + CSV export; a "Verify integrity"
+  action. Wired into nav (`✍ Attestations`, under Compliance) + `roles.js` for compliance/auditor/
+  db_owner. `screen=attestations`.
+
+**Two gotchas**
+
+1. **The api image copies files by name, not the dir.** `api/Dockerfile:32` is
+   `COPY api/main.js api/archive.js ./` — a new `require('./compliance-catalog')` threw
+   `Cannot find module` at boot until the file was added to that COPY line. Any new api-side module
+   must be added there.
+2. **Hash recompute must be deterministic across JSONB round-trip.** `content_hash` is taken over
+   `stableStr(snapshot)` (recursively key-sorted) at generate time and recomputed from the parsed
+   `result_json` on read/verify — all snapshot values are strings/ints so JSONB preserves them and
+   the hashes match. `reviewed_at` is hashed as its ISO string and re-derived via
+   `new Date(reviewed_at).toISOString()` on verify (ms precision, matches).
+
+**Deferred (next increments):** a real scheduler/worker to auto-run + email evidence on a cadence
+(`report_schedules` is still storage-only, no runner); entitlement / access-recertification reports;
+a per-framework control→evidence mapping surface; server-side PDF export of a sealed artifact.
