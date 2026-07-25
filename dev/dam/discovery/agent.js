@@ -14,15 +14,19 @@ const ENROLL_TOKEN = process.env.AGENT_ENROLL_TOKEN || 'dev-agent-enroll-token';
 const INTERVAL = parseInt(process.env.DISCOVERY_INTERVAL || '300000', 10); // 5 min
 const PRESET = process.env.DISCOVERY_PRESET || 'common';
 const CUSTOM_PORTS = process.env.DISCOVERY_PORTS || '';
-// Hosts to sweep. In dev these are the simulated customer DB hosts on client-net.
+const MAX_HOSTS = process.env.DISCOVERY_MAX_HOSTS ? parseInt(process.env.DISCOVERY_MAX_HOSTS, 10) : undefined;
+// What to sweep. Tokens may be hostnames, single IPs, CIDR blocks, or dashed IP
+// ranges (see targets.js) — e.g. "10.40.0.0/24,10.50.0.10-40". In production a
+// discovery hub sets this to the CIDR of each spoke VNet it is peered to. In dev
+// these are the simulated customer DB hosts on client-net.
 const TARGETS = (process.env.DISCOVERY_TARGETS || 'client-postgres,client-mysql,client-mongo')
   .split(',').map((s) => s.trim()).filter(Boolean);
 
 async function runOnce() {
   const job = 'scan-' + Date.now().toString(36);
   try {
-    const res = await scan({ targets: TARGETS, preset: PRESET, customPorts: CUSTOM_PORTS });
-    console.log(`[discovery] ${job}: ${res.openPorts} open / ${res.scanned} probed → ${res.candidates.length} db(s)`);
+    const res = await scan({ targets: TARGETS, preset: PRESET, customPorts: CUSTOM_PORTS, maxHosts: MAX_HOSTS });
+    console.log(`[discovery] ${job}: ${res.hosts} host(s) expanded, ${res.openPorts} open / ${res.scanned} probed → ${res.candidates.length} db(s)`);
 
     const body = {
       token: ENROLL_TOKEN,
@@ -30,6 +34,7 @@ async function runOnce() {
       scan_type: 'network',
       scope: TARGETS.join(', '),
       scanned_hosts: TARGETS,
+      scanned_hosts_count: res.hosts,
       port_set: CUSTOM_PORTS || PRESET,
       ports_count: res.ports.length,
       candidates: res.candidates.map((c) => ({

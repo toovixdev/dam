@@ -12,6 +12,7 @@
 
 const net = require('net');
 const { expandPortSet } = require('./portsets');
+const { expandTargets } = require('./targets');
 
 const DEFAULTS = { connectTimeout: 800, fingerprintTimeout: 1500, concurrency: 200 };
 
@@ -158,17 +159,20 @@ async function pool(items, worker, concurrency) {
 
 /**
  * Scan hosts for databases.
- * @param {{targets: string[], preset?: string, customPorts?: string,
+ * `targets` may be hostnames, single IPs, CIDR blocks, or dashed IP ranges
+ * (see targets.js) — they are expanded to a concrete host list before probing.
+ * @param {{targets: string[]|string, preset?: string, customPorts?: string, maxHosts?: number,
  *          connectTimeout?: number, fingerprintTimeout?: number, concurrency?: number}} config
- * @returns {Promise<{ports: number[], scanned: number, candidates: object[]}>}
+ * @returns {Promise<{ports: number[], hosts: number, scanned: number, openPorts: number, candidates: object[], warnings: string[]}>}
  */
 async function scan(config) {
   const opts = { ...DEFAULTS, ...config };
   const ports = expandPortSet({ preset: config.preset, customPorts: config.customPorts });
-  const targets = config.targets || [];
+  const { hosts, warnings } = expandTargets(config.targets || [], { maxHosts: config.maxHosts });
+  for (const w of warnings) console.warn(`[discovery] target skipped: ${w}`);
 
   const work = [];
-  for (const host of targets) for (const port of ports) work.push({ host, port });
+  for (const host of hosts) for (const port of ports) work.push({ host, port });
 
   const openFlags = await pool(work, ({ host, port }) => probePort(host, port, opts.connectTimeout), opts.concurrency);
   const open = work.filter((_, idx) => openFlags[idx]);
@@ -176,23 +180,24 @@ async function scan(config) {
   const fingerprints = await pool(open, ({ host, port }) => fingerprint(host, port, opts.fingerprintTimeout), opts.concurrency);
   const candidates = fingerprints.filter((c) => c.engine !== 'unknown');
 
-  return { ports, scanned: targets.length * ports.length, openPorts: open.length, candidates };
+  return { ports, hosts: hosts.length, scanned: hosts.length * ports.length, openPorts: open.length, candidates, warnings };
 }
 
-module.exports = { scan, probePort, fingerprint, expandPortSet };
+module.exports = { scan, probePort, fingerprint, expandPortSet, expandTargets };
 
-// ── CLI: node scanner.js --targets a,b --preset common [--ports "5432,3300-3400"] ──
+// ── CLI: node scanner.js --targets 10.40.0.0/24,db-vm-a --preset common [--ports "5432,3300-3400"] ──
 if (require.main === module) {
   const argv = process.argv.slice(2);
   const get = (flag) => { const i = argv.indexOf(flag); return i !== -1 ? argv[i + 1] : undefined; };
   const targets = (get('--targets') || '').split(',').map((s) => s.trim()).filter(Boolean);
   const preset = get('--preset') || 'common';
   const customPorts = get('--ports');
-  if (!targets.length) { console.error('usage: node scanner.js --targets host1,host2 [--preset default|common|top|full|custom] [--ports "5432,3300-3400"]'); process.exit(1); }
+  const maxHosts = get('--max-hosts') ? parseInt(get('--max-hosts'), 10) : undefined;
+  if (!targets.length) { console.error('usage: node scanner.js --targets 10.40.0.0/24,10.50.0.10-40,db-vm-a [--preset default|common|top|full|custom] [--ports "5432,3300-3400"] [--max-hosts N]'); process.exit(1); }
 
-  console.log(`[discovery] scanning ${targets.length} host(s), preset=${preset}${customPorts ? ` ports=${customPorts}` : ''}`);
-  scan({ targets, preset, customPorts }).then((res) => {
-    console.log(`[discovery] ${res.openPorts} open / ${res.scanned} probed → ${res.candidates.length} database(s):`);
+  console.log(`[discovery] target spec: ${targets.join(', ')} preset=${preset}${customPorts ? ` ports=${customPorts}` : ''}`);
+  scan({ targets, preset, customPorts, maxHosts }).then((res) => {
+    console.log(`[discovery] expanded to ${res.hosts} host(s); ${res.openPorts} open / ${res.scanned} probed → ${res.candidates.length} database(s):`);
     for (const c of res.candidates) {
       console.log(`  ${c.host}:${c.port}\t${c.engine}${c.version ? ' ' + c.version : ''}\t(${c.confidence})`);
     }
