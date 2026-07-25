@@ -95,7 +95,7 @@ export default function TopBar({ lastRefresh, onRefresh }) {
 
       {lastRefresh && (
         <div className="topbar-refresh">
-          <span className="refresh-time">{lastRefresh.toLocaleTimeString()}</span>
+          <span className="refresh-time">{fmtTs(lastRefresh, getTimezone(), { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}</span>
           <button className="topbar-btn" onClick={onRefresh} title="Refresh">⟳</button>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { getUser } from '../api/client';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 
 export default function Header({ lastRefresh, onRefresh }) {
   const user = getUser();
@@ -33,7 +34,7 @@ export default function Header({ lastRefresh, onRefresh }) {
           <span>🏢 {tenant}</span>
           {lastRefresh && (
             <span className="refresh-info">
-              Last updated: {lastRefresh.toLocaleTimeString()}
+              Last updated: {fmtTs(lastRefresh, getTimezone(), { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })}
               <button className="refresh-btn" onClick={onRefresh} title="Refresh now">⟳</button>
             </span>
           )}
