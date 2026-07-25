@@ -5,29 +5,14 @@ import KpiCard from '../components/KpiCard';
 import DataTable from '../components/shared/DataTable';
 import TabNav from '../components/shared/TabNav';
 import useApiData from '../hooks/useApiData';
-import useTimezone, { tzShortName } from '../hooks/useTimezone';
+import useTimezone, { tzShortName, fmtTs } from '../hooks/useTimezone';
 import { toast } from '../components/shared/Toast';
 import { exportCsv } from '../exportCsv';
 import { apiFetch } from '../api/client';
 
-// ClickHouse returns UTC with no zone marker ("2026-07-21 15:45:37"); the browser would
-// otherwise parse that as LOCAL time. Mark it UTC before constructing the Date. Postgres
-// timestamps already carry a zone (ISO with 'T'/offset), so leave those alone.
-function toDate(ts) {
-  if (ts == null) return null;
-  if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/.test(ts)) {
-    ts = ts.replace(' ', 'T') + 'Z';
-  }
-  const d = new Date(ts);
-  return isNaN(d.getTime()) ? null : d;
-}
-
 // Render a timestamp in the user's CHOSEN timezone (Profile → Timezone), not the browser's.
-function formatDate(ts, tz) {
-  const d = toDate(ts);
-  if (!d) return '-';
-  return d.toLocaleString('en-GB', { timeZone: tz, day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
+const AUDIT_FMT = { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit' };
+const formatDate = (ts, tz) => fmtTs(ts, tz, AUDIT_FMT);
 
 const OP_COLOR = { SELECT: 'var(--info)', INSERT: 'var(--green)', UPDATE: 'var(--amber)', DELETE: 'var(--danger)', DDL: 'var(--danger)', LOGIN: 'var(--primary)', LOGIN_FAILED: 'var(--danger)', LOGOUT: 'var(--muted)', AUDIT_CHANGE: 'var(--danger)', GRANT: 'var(--danger)' };
 

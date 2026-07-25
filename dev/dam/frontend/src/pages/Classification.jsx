@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -112,7 +113,7 @@ export default function Classification() {
       const color = v >= 90 ? 'var(--green)' : v >= 70 ? 'var(--amber)' : 'var(--danger)';
       return <span style={{ fontWeight: 600, color }}>{row.scanned ? `${v}%` : 'not scanned'}</span>;
     }},
-    { key: 'last_scan', label: 'Last Scan', render: (v) => v ? new Date(v).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—' },
+    { key: 'last_scan', label: 'Last Scan', render: (v) => fmtTs(v, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) },
   ];
 
   if (loading && activeTab === 'inventory') {

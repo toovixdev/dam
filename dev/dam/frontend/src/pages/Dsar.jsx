@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -11,7 +12,7 @@ import { exportCsv } from '../exportCsv';
 
 function formatDate(ts) {
   if (!ts) return '-';
-  return new Date(ts).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  return fmtTs(ts, getTimezone(), { day: '2-digit', month: 'short', year: 'numeric' });
 }
 function daysUntil(ts) {
   if (!ts) return null;

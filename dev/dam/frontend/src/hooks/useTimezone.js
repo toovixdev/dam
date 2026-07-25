@@ -57,6 +57,41 @@ export function formatInTz(tz, date = new Date(), opts = { hour: '2-digit', minu
   }
 }
 
+// ── Shared timestamp formatting (UTC-aware + chosen-timezone) ──────────────────
+// ClickHouse returns UTC with NO zone marker ("2026-07-21 15:45:37"); the browser would
+// parse that as LOCAL time. Mark it UTC first. Postgres timestamps already carry a zone
+// (ISO with 'T'/offset) and pass through unchanged. Returns null for empty/invalid input.
+export function toDate(ts) {
+  if (ts == null || ts === '') return null;
+  if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$/.test(ts)) {
+    ts = ts.replace(' ', 'T') + 'Z';
+  }
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+const FMT_DATETIME = { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' };
+
+// Format an absolute timestamp in the user's chosen timezone. Pass `opts` to vary the fields.
+export function fmtTs(ts, tz, opts) {
+  const d = toDate(ts);
+  if (!d) return '—';
+  try { return new Intl.DateTimeFormat('en-GB', { timeZone: tz, ...(opts || FMT_DATETIME) }).format(d); }
+  catch { return new Intl.DateTimeFormat('en-GB', opts || FMT_DATETIME).format(d); }
+}
+
+// Relative "time ago" — timezone-independent, but still needs the UTC-aware parse to be correct.
+export function timeAgo(ts) {
+  const d = toDate(ts);
+  if (!d) return '-';
+  const diff = Date.now() - d.getTime();
+  if (diff < 0) return 'just now';
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+  return `${Math.floor(diff / 86400000)}d ago`;
+}
+
 export default function useTimezone() {
   const [tz, setTz] = useState(getTimezone());
 

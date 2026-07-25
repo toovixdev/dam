@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -193,7 +194,7 @@ function SsoModal({ provider, azure, okta, google, onClose, onSaved }) {
   const meta = SSO_META[provider];
   const isAdmin = user?.role === 'tenant_admin';
   const enabled = !!info?.enabledForTenant;
-  const fmt = (d) => d ? new Date(d).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
+  const fmt = (d) => d ? fmtTs(d, getTimezone(), { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—';
   const rows = [
     ['Credentials', info?.configured ? '● Configured' : '○ Not configured', info?.configured ? 'var(--green)' : 'var(--muted)'],
     ['On your login page', enabled ? '● Enabled' : '○ Disabled', enabled ? 'var(--green)' : 'var(--muted)'],

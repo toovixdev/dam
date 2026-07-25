@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
@@ -334,7 +335,7 @@ function CloudConnectors({ tenantClouds, cloudLabel, onChanged }) {
                   : c.ingest_status === 'ok' ? <span className="badge green dot" title={`${c.subscription}\n${c.last_result || ''}`}>streaming</span>
                   : c.ingest_status === 'error' ? <span className="badge red dot" title={c.last_result}>error</span>
                   : <span className="badge" title={c.subscription}>configured</span>}</td>
-                <td style={{ fontSize: 12 }} title={c.last_result || ''}>{c.last_ingest_at || c.last_run_at ? new Date(c.last_ingest_at || c.last_run_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                <td style={{ fontSize: 12 }} title={c.last_result || ''}>{c.last_ingest_at || c.last_run_at ? fmtTs(c.last_ingest_at || c.last_run_at, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                 <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                   <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} disabled={busy === c.id} onClick={() => test(c.id)}>Test</button>{' '}
                   <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11, color: 'var(--danger)', borderColor: 'var(--danger)' }} disabled={busy === c.id} onClick={() => remove(c.id)}>Remove</button>

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -12,7 +13,7 @@ import { toast } from '../components/shared/Toast';
 
 function formatDate(ts) {
   if (!ts) return 'Never';
-  return new Date(ts).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+  return fmtTs(ts, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 // SSO account types (auth_provider → display label). Local is not listed here.

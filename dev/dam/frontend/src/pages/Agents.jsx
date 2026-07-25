@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { toDate } from '../hooks/useTimezone';
 import { useSearchParams } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
@@ -53,7 +54,8 @@ function fmtLag(ms) {
 
 function timeAgo(ts) {
   if (!ts) return '-';
-  const diff = Date.now() - new Date(ts).getTime();
+  const _d = toDate(ts); if (!_d) return '-';
+  const diff = Date.now() - _d.getTime();
   if (diff < 60000) return 'just now';
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;

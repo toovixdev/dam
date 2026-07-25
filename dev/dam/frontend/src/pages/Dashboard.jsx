@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import { Link } from 'react-router-dom';
 import useDashboard from '../hooks/useDashboard';
 import Layout from '../components/Layout';
@@ -50,7 +51,7 @@ export default function Dashboard() {
         <div>
           <h1>Security Dashboard</h1>
           <div className="page-meta">
-            <span>📅 {new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}</span>
+            <span>📅 {fmtTs(Date.now(), getTimezone(), { day: '2-digit', month: 'short', year: 'numeric' })}</span>
             <span>🏢 Meridian Financial Group</span>
             <span>◉ {kpis?.databases?.total ?? 0} databases · {kpis?.agents?.total ?? 0} agents</span>
           </div>

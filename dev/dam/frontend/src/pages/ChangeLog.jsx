@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -106,7 +107,7 @@ export default function ChangeLog() {
                   const dirty = !!draft[c.id];
                   return (
                     <tr key={c.id}>
-                      <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{new Date(c.event_ts).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
+                      <td style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{fmtTs(c.event_ts, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</td>
                       <td style={{ fontSize: 12.5 }}>{c.principal}</td>
                       <td style={{ fontSize: 12.5 }}>{c.database_name || '—'}</td>
                       <td style={{ fontSize: 12.5 }}>{c.object_name || '—'}</td>

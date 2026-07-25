@@ -4,7 +4,7 @@ import PageHeader from '../components/shared/PageHeader';
 import Modal from '../components/shared/Modal';
 import { useAuth } from '../context/AuthContext';
 import useApiData from '../hooks/useApiData';
-import useTimezone, { TIMEZONES, tzShortName } from '../hooks/useTimezone';
+import useTimezone, { TIMEZONES, tzShortName, fmtTs, getTimezone } from '../hooks/useTimezone';
 import { apiPost } from '../api/client';
 import { toast } from '../components/shared/Toast';
 
@@ -94,7 +94,7 @@ export default function Profile() {
               </select>
             </span>
             <span className="k">Member since</span><span className="v">{fmtDate(me?.created_at)}</span>
-            <span className="k">Last login</span><span className="v">{me?.last_login_at ? new Date(me.last_login_at).toLocaleString('en-GB') : 'Just now'}</span>
+            <span className="k">Last login</span><span className="v">{me?.last_login_at ? fmtTs(me.last_login_at, getTimezone(), { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Just now'}</span>
           </div>
         </div></div>
 

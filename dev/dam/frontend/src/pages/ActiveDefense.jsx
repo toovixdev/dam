@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -17,7 +18,7 @@ function streamStyle(ev) {
   const c = { critical: 'var(--danger)', high: 'var(--amber)', medium: 'var(--info)', low: 'var(--green)' }[ev.severity] || 'var(--info)';
   return { ic: ev.severity === 'critical' ? '⚠' : ev.severity === 'high' ? '▲' : '◷', color: c };
 }
-const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString('en-GB', { hour12: false }) : '';
+const fmtTime = (ts) => ts ? fmtTs(ts, getTimezone(), { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : '';
 const riskColor = (r) => r >= 80 ? 'var(--danger)' : r >= 50 ? 'var(--amber)' : 'var(--green)';
 const levelColor = (l) => l === 'High' ? 'var(--danger)' : l === 'Med' ? 'var(--amber)' : 'var(--green)';
 
@@ -83,7 +84,7 @@ export default function ActiveDefense() {
   const total24 = timeline.reduce((s, t) => s + (t.n || 0), 0);
   const peak = timeline.reduce((a, t) => (t.n > a.n ? t : a), { n: 0, t: 0 });
   // Buckets arrive as UTC epochs (seconds); render the hour in the viewer's local zone.
-  const fmtBucket = (t) => (t ? new Date(t * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
+  const fmtBucket = (t) => (t ? fmtTs(t * 1000, getTimezone(), { hour: '2-digit', minute: '2-digit', hour12: false }) : '—');
 
   return (
     <Layout>
@@ -180,7 +181,7 @@ export default function ActiveDefense() {
                 <b className="mono">{d.schema_name}.{d.table_name}</b>
                 <span className="muted" style={{ marginLeft: 'auto', textAlign: 'right' }}>
                   {d.state === 'hit'
-                    ? <span style={{ color: 'var(--danger)' }}>probed by {d.hit_principal} · {d.hit_at ? new Date(d.hit_at).toLocaleTimeString('en-GB', { hour12: false }) : ''}</span>
+                    ? <span style={{ color: 'var(--danger)' }}>probed by {d.hit_principal} · {d.hit_at ? fmtTs(d.hit_at, getTimezone(), { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }) : ''}</span>
                     : <>{d.table_created ? 'table live' : 'name-only'} · no hits</>}
                   <button className="btn-secondary" style={{ padding: '1px 7px', fontSize: 11, marginLeft: 8, borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={async () => { const r = await apiDelete(`/deception/${d.id}`); if (r?.ok) { toast('Decoy removed', 'ok'); refetchDec(); } }}>✕</button>
                 </span>

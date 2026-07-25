@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { fmtTs, getTimezone, toDate } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -40,7 +41,7 @@ export default function Quarantine() {
   const now = Date.now();
   const rows = (Array.isArray(data) ? data : []).map((s) => ({
     ...s,
-    hold_time: s.status === 'held' && s.held_at ? fmtDur((now - new Date(s.held_at).getTime()) / 1000) : '-',
+    hold_time: s.status === 'held' && s.held_at ? fmtDur((now - (toDate(s.held_at)?.getTime() ?? now)) / 1000) : '-',
   }));
 
   // KPIs come from the authoritative summary (real COUNTs), not the capped list.
@@ -191,7 +192,7 @@ function QuarantineAccount({ onDone, onClose }) {
 
 function fmtTime(ts) {
   if (!ts) return '-';
-  return new Date(ts).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return fmtTs(ts, getTimezone(), { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
 // Why the account is held: a deliberate manual quarantine, or auto-quarantined by a policy block.

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import KpiCard from '../components/KpiCard';
@@ -181,7 +182,7 @@ function PolicyDetail({ p, onStatus, onEdit }) {
                 <span className="badge">v{v.version}</span>
                 <span style={{ flex: 1 }}>{v.change}</span>
                 <span className="muted">{v.changed_by || 'system'}</span>
-                <span className="muted">{new Date(v.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+                <span className="muted">{fmtTs(v.created_at, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</span>
               </div>
             ))}
           </div>
@@ -302,7 +303,7 @@ function ExceptionsPanel({ rules }) {
     if (res?.ok) { toast('Exception revoked — kept in the trail', 'ok'); refetch(); }
     else toast(res?.data?.error || 'Could not revoke', 'err');
   };
-  const fmtD = (d) => d ? new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) : '—';
+  const fmtD = (d) => d ? fmtTs(d, getTimezone(), { day: '2-digit', month: 'short' }) : '—';
   const short = (s) => { if (!s) return '—'; const at = s.indexOf('@'); const v = at > 0 ? s.slice(0, at) : s; return v.length > 16 ? v.slice(0, 16) + '…' : v; };
   const state = (e) => e.status === 'revoked' ? 'revoked' : (e.expired ? 'expired' : 'active');
   const stateBadge = { active: 'status-green', expired: 'sev-high', revoked: '' };

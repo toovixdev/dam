@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { fmtTs, getTimezone, toDate } from '../hooks/useTimezone';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
@@ -8,7 +9,8 @@ import { toast } from '../components/shared/Toast';
 
 function relativeAge(ts) {
   if (!ts) return '-';
-  const diff = Date.now() - new Date(ts).getTime();
+  const _d = toDate(ts); if (!_d) return '-';
+  const diff = Date.now() - _d.getTime();
   if (diff < 60000) return 'just now';
   if (diff < 3600000) return `${Math.floor(diff / 60000)}m`;
   if (diff < 86400000) return `${Math.floor(diff / 3600000)}h`;
@@ -150,7 +152,7 @@ export default function AlertDetail() {
         <StatusPill status={a.status || 'open'} />
         <span>Score <b style={{ color: scoreColor(a.anomaly_score || 0) }}>{a.anomaly_score || 0}/100</b></span>
         <span>Rule <b style={{ color: 'var(--ink)' }}>{a.rule || '—'}</b></span>
-        {a.resolved_at && <span>Closed <b style={{ color: 'var(--ink)' }}>{new Date(a.resolved_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</b></span>}
+        {a.resolved_at && <span>Closed <b style={{ color: 'var(--ink)' }}>{fmtTs(a.resolved_at, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</b></span>}
       </div>
 
       <div className="card" style={{ marginBottom: 12, background: 'var(--primary-soft)' }}>
@@ -350,7 +352,7 @@ export default function AlertDetail() {
                 <span className={`badge ${NOTE_BADGE[n.action] || ''}`} style={{ height: 'fit-content', whiteSpace: 'nowrap' }}>{NOTE_LABEL[n.action] || n.action}</span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   {n.note && <div style={{ fontSize: 13, lineHeight: 1.5 }}>{n.note}</div>}
-                  <div className="muted" style={{ fontSize: 11.5, marginTop: 2 }}>{n.actor_email || '—'} · {new Date(n.created_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
+                  <div className="muted" style={{ fontSize: 11.5, marginTop: 2 }}>{n.actor_email || '—'} · {fmtTs(n.created_at, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>
                 </div>
               </div>
             ))}

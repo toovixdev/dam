@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { fmtTs, getTimezone } from '../hooks/useTimezone';
 import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import TabNav from '../components/shared/TabNav';
@@ -37,7 +38,7 @@ function ReportView({ report, onPrint }) {
   return (
     <div className="report-print">
       <div className="muted" style={{ fontSize: 12.5, marginBottom: 12 }}>
-        {report.period} · generated {new Date(report.generated_at).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+        {report.period} · generated {fmtTs(report.generated_at, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
       </div>
       {report.note && <div style={{ background: 'var(--amber-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12.5, marginBottom: 14, lineHeight: 1.5 }}>{report.note}</div>}
 
