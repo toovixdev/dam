@@ -6303,17 +6303,27 @@ app.get('/api/discovery/jobs', authRequired, async (req, res) => {
 // Token-gated ingest — the scanner agent reports what it found (it is not a user).
 app.post('/api/discovery/candidates', async (req, res) => {
   const { token, agent_id, agent_name, job, scan_type, scope, port_set, ports_count, candidates } = req.body;
-  if (token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid enrollment token' });
+  // Resolve the tenant FROM the token (per-tenant), mirroring /api/agents/enroll — a shared
+  // global token can't tell tenants apart, so agents would all land in the oldest one. The
+  // legacy global dev token still works and maps to the reference (oldest) tenant.
+  let tenantId = null;
+  if (token) {
+    tenantId = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
+    if (!tenantId && token === AGENT_ENROLL_TOKEN) {
+      tenantId = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
+    }
+  }
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
   if (!Array.isArray(candidates)) return res.status(400).json({ error: 'candidates[] required' });
-  const tenantId = (await pgPool.query('SELECT id FROM tenants LIMIT 1')).rows[0].id;
 
   // Heartbeat: every report proves this network discovery agent is deployed + alive.
-  // The Discovery page gates network scanning on there being ≥1 recent agent.
+  // The Discovery page gates network scanning on there being ≥1 recent agent. tenant_id is
+  // refreshed on conflict so re-tokening an agent moves it to the right tenant.
   const agentId = agent_id || 'disco-default';
   await pgPool.query(
     `INSERT INTO discovery_agents (id, tenant_id, name, scope, last_job, last_seen)
      VALUES ($1,$2,$3,$4,$5, now())
-     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, scope = EXCLUDED.scope, last_job = EXCLUDED.last_job, last_seen = now()`,
+     ON CONFLICT (id) DO UPDATE SET tenant_id = EXCLUDED.tenant_id, name = EXCLUDED.name, scope = EXCLUDED.scope, last_job = EXCLUDED.last_job, last_seen = now()`,
     [agentId, tenantId, agent_name || agentId, scope || null, job || null]
   );
 
