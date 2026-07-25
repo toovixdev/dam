@@ -26,6 +26,7 @@ import Billing from './pages/Billing';
 import Support from './pages/Support';
 import Profile from './pages/Profile';
 import Reports from './pages/Reports';
+import Attestations from './pages/Attestations';
 import Settings from './pages/Settings';
 import Masking from './pages/Masking';
 import Discovery from './pages/Discovery';
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="/dsar" element={<ProtectedRoute screen="dsar"><Dsar /></ProtectedRoute>} />
           <Route path="/audit" element={<ProtectedRoute screen="audit"><AuditTrail /></ProtectedRoute>} />
           <Route path="/change-log" element={<ProtectedRoute screen="change-log"><ChangeLog /></ProtectedRoute>} />
+          <Route path="/attestations" element={<ProtectedRoute screen="attestations"><Attestations /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute screen="reports"><Reports /></ProtectedRoute>} />
           <Route path="/llm" element={<ProtectedRoute screen="llm"><LlmMonitoring /></ProtectedRoute>} />
           <Route path="/copilot" element={<ProtectedRoute screen="copilot"><Copilot /></ProtectedRoute>} />

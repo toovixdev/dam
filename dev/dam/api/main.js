@@ -893,6 +893,36 @@ async function runAuthMigration() {
       }
     }
 
+    // ── Compliance evidence & attestation ──
+    // A run of a control-mapped catalog report (see compliance-catalog.js) snapshots
+    // the matching events into an immutable evidence record: content_hash seals the
+    // snapshot, and a reviewer sign-off (attest / exception / escalate) is chained via
+    // sign_hash — the same tamper-evident model as audit_trail. This is the audit-
+    // process → review → sign-off → evidence lifecycle incumbents (Guardium) lead on.
+    await client.query(`CREATE TABLE IF NOT EXISTS compliance_evidence (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     UUID REFERENCES tenants(id),
+      catalog_id    VARCHAR(80),
+      framework     VARCHAR(40),
+      control       VARCHAR(80),
+      report_name   VARCHAR(200),
+      period_from   TIMESTAMPTZ,
+      period_to     TIMESTAMPTZ,
+      generated_by  VARCHAR(160),
+      generated_at  TIMESTAMPTZ DEFAULT now(),
+      row_total     INT DEFAULT 0,
+      row_returned  INT DEFAULT 0,
+      result_json   JSONB,
+      content_hash  VARCHAR(64),
+      status        VARCHAR(20) DEFAULT 'open',
+      reviewer      VARCHAR(160),
+      reviewed_at   TIMESTAMPTZ,
+      reviewer_note TEXT,
+      prev_hash     VARCHAR(64),
+      sign_hash     VARCHAR(64)
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_comp_evidence_tenant ON compliance_evidence (tenant_id, generated_at DESC)`);
+
     // Data-plane integrity: signed Merkle checkpoints over event windows (stored
     // here in the control plane, separate from ClickHouse, so deleting events
     // can't delete the proof they existed).
@@ -7895,6 +7925,155 @@ app.get('/api/reports/:type', authRequired, async (req, res) => {
     console.log('[Reports] failed:', e.message);
     res.status(500).json({ error: 'Report generation failed' });
   }
+});
+
+// ── Compliance evidence & attestation ─────────────────────────────────────────
+// Control-mapped report catalog → run → sealed evidence record → reviewer sign-off.
+// Closes the "compliance reporting depth" gap vs. incumbents: named reports mapped
+// to specific control requirements, each producing a tamper-evident, attestable
+// evidence artifact (content_hash seals the snapshot; sign_hash chains the sign-off).
+const { CATALOG: COMPLIANCE_CATALOG, catalogById: complianceCatalogById } = require('./compliance-catalog');
+// Separation of duties: only these roles may sign off on evidence (server-enforced,
+// not merely hidden client-side). Mirrors the auditor/compliance segregation model.
+const EVIDENCE_ATTEST_ROLES = ['tenant_admin', 'compliance', 'auditor'];
+
+// The catalog, grouped by framework, annotated with each report's evidence-run tallies.
+app.get('/api/compliance/catalog', authRequired, async (req, res) => {
+  try {
+    const counts = (await pgPool.query(
+      `SELECT catalog_id, status, count(*) AS c FROM compliance_evidence WHERE tenant_id = $1 GROUP BY catalog_id, status`,
+      [req.user.tenantId])).rows;
+    const byId = {};
+    for (const r of counts) { (byId[r.catalog_id] || (byId[r.catalog_id] = {}))[r.status] = parseInt(r.c); }
+    const items = COMPLIANCE_CATALOG.map((c) => ({
+      id: c.id, framework: c.framework, control: c.control, controlName: c.controlName,
+      name: c.name, description: c.description, kind: c.kind, runs: byId[c.id] || {},
+    }));
+    res.json({ frameworks: [...new Set(COMPLIANCE_CATALOG.map((c) => c.framework))], items });
+  } catch (e) { console.error('[Compliance] catalog failed:', e.message); res.status(500).json({ error: 'Failed to load catalog' }); }
+});
+
+// Run a catalog report over the last N days, snapshot the rows, seal them as an
+// immutable evidence record (status 'open', awaiting reviewer sign-off).
+app.post('/api/compliance/catalog/:id/run', authRequired, async (req, res) => {
+  const def = complianceCatalogById(req.params.id);
+  if (!def) return res.status(404).json({ error: 'Unknown report' });
+  const days = Math.min(365, Math.max(1, parseInt(req.body && req.body.days) || 90));
+  try {
+    const evDb = await eventsDbFor(req.user.tenantId);
+    const esc = chEsc(req.user.tenantId);
+    const base = `FROM ${evDb}.events WHERE tenant_id = '${esc}' AND timestamp >= now() - INTERVAL ${days} DAY AND (${def.where()})`;
+    const total = parseInt(await chSafe(`SELECT count() ${base}`, 'TabSeparated')) || 0;
+    const rows = await chSafe(
+      `SELECT toString(timestamp) AS ts, principal, database_name,
+        concat(schema_name, if(table_name != '', concat('.', table_name), '')) AS object,
+        operation, toString(row_count) AS rows, client_ip,
+        arrayStringConcat(arraySort(tags), ',') AS tags, substring(sql_text, 1, 240) AS sql_preview
+       ${base} ORDER BY timestamp DESC LIMIT 1000`);
+    const now = new Date();
+    const from = new Date(now.getTime() - days * 86400000);
+    const snapshot = {
+      def: { id: def.id, name: def.name, framework: def.framework, control: def.control, kind: def.kind },
+      period: { from: from.toISOString(), to: now.toISOString(), days },
+      total, returned: Array.isArray(rows) ? rows.length : 0, rows: Array.isArray(rows) ? rows : [],
+    };
+    const contentHash = crypto.createHash('sha256').update(stableStr(snapshot)).digest('hex');
+    const r = (await pgPool.query(
+      `INSERT INTO compliance_evidence
+        (tenant_id, catalog_id, framework, control, report_name, period_from, period_to, generated_by, row_total, row_returned, result_json, content_hash, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open') RETURNING id, generated_at`,
+      [req.user.tenantId, def.id, def.framework, def.control, def.name, from.toISOString(), now.toISOString(),
+       req.user.email, total, snapshot.returned, JSON.stringify(snapshot), contentHash])).rows[0];
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.evidence.generate', resourceType: 'evidence', resourceId: r.id, details: { report: def.id, control: def.control, total, contentHash } });
+    res.status(201).json({ ok: true, id: r.id, generated_at: r.generated_at, total, returned: snapshot.returned, content_hash: contentHash });
+  } catch (e) { console.error('[Compliance] run failed:', e.message); res.status(500).json({ error: 'Evidence run failed' }); }
+});
+
+// List evidence records (summary + metadata only; result rows fetched per-record).
+app.get('/api/compliance/evidence', authRequired, async (req, res) => {
+  try {
+    const where = ['tenant_id = $1']; const params = [req.user.tenantId];
+    if (req.query.framework) { params.push(req.query.framework); where.push(`framework = $${params.length}`); }
+    if (req.query.status) { params.push(req.query.status); where.push(`status = $${params.length}`); }
+    const rows = (await pgPool.query(
+      `SELECT id, catalog_id, framework, control, report_name, period_from, period_to, generated_by, generated_at,
+              row_total, row_returned, content_hash, status, reviewer, reviewed_at, reviewer_note
+       FROM compliance_evidence WHERE ${where.join(' AND ')} ORDER BY generated_at DESC LIMIT 300`, params)).rows;
+    const sum = (await pgPool.query(`SELECT status, count(*) AS c FROM compliance_evidence WHERE tenant_id = $1 GROUP BY status`, [req.user.tenantId])).rows;
+    const summary = { open: 0, attested: 0, exception: 0, escalated: 0 };
+    for (const s of sum) summary[s.status] = parseInt(s.c);
+    res.json({ evidence: rows, summary });
+  } catch (e) { console.error('[Compliance] evidence list failed:', e.message); res.status(500).json({ error: 'Failed to load evidence' }); }
+});
+
+// Integrity verification: recompute every content seal + sign-off chain link.
+// NOTE: must be declared before '/evidence/:id' so 'verify' isn't captured as an id.
+app.get('/api/compliance/evidence/verify', authRequired, async (req, res) => {
+  try {
+    const rows = (await pgPool.query(
+      `SELECT id, result_json, content_hash, status, reviewer, reviewed_at, reviewer_note, prev_hash, sign_hash
+       FROM compliance_evidence WHERE tenant_id = $1 ORDER BY reviewed_at ASC NULLS LAST`, [req.user.tenantId])).rows;
+    let checked = 0, signed = 0, broken = null;
+    for (const r of rows) {
+      const cok = crypto.createHash('sha256').update(stableStr(r.result_json)).digest('hex') === r.content_hash;
+      if (!cok) { broken = { id: r.id, reason: 'content_hash' }; break; }
+      checked++;
+      if (r.sign_hash) {
+        const iso = r.reviewed_at ? new Date(r.reviewed_at).toISOString() : '';
+        const expect = crypto.createHash('sha256').update([r.prev_hash || GENESIS_HASH, r.content_hash, r.status, r.reviewer || '', iso, r.reviewer_note || ''].join('|')).digest('hex');
+        if (expect !== r.sign_hash) { broken = { id: r.id, reason: 'sign_hash' }; break; }
+        signed++;
+      }
+    }
+    res.json({ ok: !broken, total: rows.length, checked, signed, broken });
+  } catch (e) { console.error('[Compliance] verify failed:', e.message); res.status(500).json({ error: 'Verify failed' }); }
+});
+
+// One evidence record incl. its sealed snapshot rows; re-checks the content seal.
+app.get('/api/compliance/evidence/:id', authRequired, async (req, res) => {
+  try {
+    const r = (await pgPool.query(`SELECT * FROM compliance_evidence WHERE id = $1 AND tenant_id = $2`, [req.params.id, req.user.tenantId])).rows[0];
+    if (!r) return res.status(404).json({ error: 'Not found' });
+    const recomputed = crypto.createHash('sha256').update(stableStr(r.result_json)).digest('hex');
+    res.json({ ...r, content_ok: recomputed === r.content_hash });
+  } catch (e) { console.error('[Compliance] evidence get failed:', e.message); res.status(500).json({ error: 'Failed to load evidence' }); }
+});
+
+// Reviewer sign-off: attest / flag exception / escalate. Role-gated (segregation of
+// duties) and chained via sign_hash so the sign-off record is tamper-evident.
+app.post('/api/compliance/evidence/:id/attest', authRequired, async (req, res) => {
+  if (!EVIDENCE_ATTEST_ROLES.includes(req.user.role)) {
+    return res.status(403).json({ error: 'Only Compliance, Auditor, or Admin roles may sign off on evidence' });
+  }
+  const decision = String((req.body && req.body.decision) || '').toLowerCase();
+  if (!['attested', 'exception', 'escalated'].includes(decision)) {
+    return res.status(400).json({ error: 'decision must be attested, exception, or escalated' });
+  }
+  const note = ((req.body && req.body.note) || '').trim();
+  if (decision !== 'attested' && !note) {
+    return res.status(400).json({ error: 'A note is required to flag an exception or escalate' });
+  }
+  const client = await pgPool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(918274)'); // serialize sign_hash chain appends
+    const rec = (await client.query(`SELECT * FROM compliance_evidence WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, [req.params.id, req.user.tenantId])).rows[0];
+    if (!rec) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Not found' }); }
+    const prev = (await client.query(`SELECT sign_hash FROM compliance_evidence WHERE tenant_id = $1 AND sign_hash IS NOT NULL ORDER BY reviewed_at DESC LIMIT 1`, [req.user.tenantId])).rows[0];
+    const prevHash = (prev && prev.sign_hash) || GENESIS_HASH;
+    const reviewedAt = new Date().toISOString();
+    const signHash = crypto.createHash('sha256').update([prevHash, rec.content_hash, decision, req.user.email, reviewedAt, note].join('|')).digest('hex');
+    await client.query(
+      `UPDATE compliance_evidence SET status = $1, reviewer = $2, reviewed_at = $3, reviewer_note = $4, prev_hash = $5, sign_hash = $6 WHERE id = $7`,
+      [decision, req.user.email, reviewedAt, note || null, prevHash, signHash, rec.id]);
+    await client.query('COMMIT');
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.evidence.attest', resourceType: 'evidence', resourceId: rec.id, details: { decision, control: rec.control, signHash } });
+    res.json({ ok: true, status: decision, reviewer: req.user.email, reviewed_at: reviewedAt, sign_hash: signHash });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[Compliance] attest failed:', e.message);
+    res.status(500).json({ error: 'Attestation failed' });
+  } finally { client.release(); }
 });
 
 // ── DSAR ──────────────────────────────────────────────────

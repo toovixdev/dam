@@ -1,0 +1,124 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Compliance report catalog — control-mapped evidence definitions.
+//
+// This is the missing "reporting depth" leg versus incumbents (IBM Guardium's
+// Compliance Accelerators): a library of named reports, each mapped to a specific
+// regulatory control requirement, each expressed as a query over the ClickHouse
+// events plane. A run of any catalog entry produces a sealed, attestable evidence
+// record (see the /api/compliance/catalog + /evidence endpoints in main.js).
+//
+// Every `where(...)` returns a ClickHouse boolean expression over the `events`
+// columns (see dev/dam/clickhouse/init.sql). The runner adds the tenant_id and
+// timestamp window, then snapshots the rows. Keep expressions to columns that
+// actually exist: operation, principal, schema_name, table_name, row_count,
+// tags[], anomaly_score, event_class, timestamp, client_ip, sql_text.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Sensitivity tags an object carries when classification marks it personal /
+// regulated. Matches the tag vocabulary written by the classifier + policy engine.
+const SENSITIVE = ['pii', 'pci', 'phi', 'aadhaar', 'pan', 'gstin', 'ssn', 'dob'];
+const PERSONAL = ['pii', 'aadhaar', 'pan', 'ssn', 'dob', 'email', 'name', 'address', 'phone'];
+
+const chList = (arr) => '[' + arr.map((t) => `'${t}'`).join(',') + ']';
+const sensAny = `hasAny(tags, ${chList(SENSITIVE)})`;
+const personalAny = `hasAny(tags, ${chList(PERSONAL)})`;
+
+// kind:
+//   'activity'  — an evidence log the reviewer confirms was reviewed (PCI 10.6 style).
+//   'exception' — rows are already the concerning subset; each is a finding to clear.
+const CATALOG = [
+  {
+    id: 'ddl-privilege-changes',
+    framework: 'SOX',
+    control: 'PCI 10.2.7 / SOX ITGC',
+    controlName: 'Schema & privilege changes',
+    name: 'Schema & privilege changes (DDL / GRANT)',
+    description: 'Every DDL and GRANT/REVOKE captured — the change record auditors reconcile against approved change tickets.',
+    kind: 'activity',
+    where: () => `operation IN ('DDL','GRANT')`,
+  },
+  {
+    id: 'sensitive-object-access',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.1',
+    controlName: 'Access to cardholder / sensitive data',
+    name: 'Access to sensitive objects',
+    description: 'All reads of objects classified PII/PCI/PHI — establishes who touched regulated data and when.',
+    kind: 'activity',
+    where: () => `operation = 'SELECT' AND ${sensAny}`,
+  },
+  {
+    id: 'mass-sensitive-read',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.1',
+    controlName: 'Bulk sensitive-data extraction',
+    name: 'Mass sensitive-data extraction',
+    description: 'Reads of sensitive objects returning 10,000+ rows — the signature of bulk export / mass data access.',
+    kind: 'exception',
+    where: () => `operation = 'SELECT' AND ${sensAny} AND row_count >= 10000`,
+  },
+  {
+    id: 'after-hours-sensitive',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.4',
+    controlName: 'Off-hours access to sensitive data',
+    name: 'After-hours access to sensitive data',
+    description: 'Access to regulated objects outside 07:00–20:00 UTC — reviewed for unauthorized or anomalous activity.',
+    kind: 'exception',
+    where: () => `${sensAny} AND (toHour(timestamp) < 7 OR toHour(timestamp) >= 20)`,
+  },
+  {
+    id: 'sensitive-data-modification',
+    framework: 'SOX',
+    control: 'PCI 10.2.2 / SOX',
+    controlName: 'Modification of sensitive data',
+    name: 'Modifications to sensitive data',
+    description: 'INSERT/UPDATE/DELETE against classified objects — integrity evidence for financially-relevant data.',
+    kind: 'activity',
+    where: () => `operation IN ('INSERT','UPDATE','DELETE') AND ${sensAny}`,
+  },
+  {
+    id: 'authentication-activity',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.5',
+    controlName: 'Authentication & session activity',
+    name: 'Database authentication activity',
+    description: 'LOGIN/LOGOUT and auth-class events — the access record for account-usage review.',
+    kind: 'activity',
+    where: () => `(operation IN ('LOGIN','LOGOUT') OR event_class = 'auth')`,
+  },
+  {
+    id: 'high-risk-activity',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.6',
+    controlName: 'Review of high-risk activity',
+    name: 'High-risk (anomalous) activity',
+    description: 'Statements scored anomaly ≥ 70 by the detection engine — the daily high-risk review queue.',
+    kind: 'exception',
+    where: () => `anomaly_score >= 70`,
+  },
+  {
+    id: 'data-deletion',
+    framework: 'GDPR',
+    control: 'GDPR Art.17 / SOX',
+    controlName: 'Data deletion / right to erasure',
+    name: 'Data deletion events',
+    description: 'All DELETE operations — supports erasure (right-to-be-forgotten) evidence and destructive-change review.',
+    kind: 'activity',
+    where: () => `operation = 'DELETE'`,
+  },
+  {
+    id: 'personal-data-access',
+    framework: 'GDPR',
+    control: 'GDPR Art.30',
+    controlName: 'Records of processing (personal data)',
+    name: 'Access to personal data (GDPR)',
+    description: 'Reads of objects tagged as personal data — the processing record for GDPR Article 30 accountability.',
+    kind: 'activity',
+    where: () => `operation = 'SELECT' AND ${personalAny}`,
+  },
+];
+
+const catalogById = (id) => CATALOG.find((c) => c.id === id) || null;
+
+module.exports = { CATALOG, catalogById, SENSITIVE, PERSONAL };
