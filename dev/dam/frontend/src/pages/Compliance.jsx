@@ -4,9 +4,8 @@ import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import TabNav from '../components/shared/TabNav';
 import useApiData from '../hooks/useApiData';
-import { apiPost } from '../api/client';
+import { apiPost, getToken } from '../api/client';
 import { toast } from '../components/shared/Toast';
-import { exportCsv } from '../exportCsv';
 
 const scoreColor = (s) => (s >= 90 ? 'var(--green)' : s >= 80 ? 'var(--amber)' : 'var(--danger)');
 
@@ -48,10 +47,24 @@ export default function Compliance() {
     if (res && res.ok) { toast('Dynamic mask applied', 'ok'); refetchMask(); refetchFw(); }
     else toast('Could not apply mask', 'err');
   };
-  const exportEvidence = () => {
+  const exportEvidence = async () => {
     if (!cur) return;
-    exportCsv(`toovix-${cur.key}-controls.csv`, ['Status', 'Control', 'Reference'], cur.controls.map((c) => [c.status, c.control, c.reference]));
-    toast('Evidence pack exported', 'ok');
+    try {
+      const res = await fetch(`/api/compliance/frameworks/${cur.key}/pdf`, { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!res.ok) return toast('Could not generate evidence pack', 'err');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `evidence-pack-${cur.key}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast('Evidence pack (PDF) downloaded', 'ok');
+    } catch {
+      toast('Could not generate evidence pack', 'err');
+    }
   };
 
   if (loading) {

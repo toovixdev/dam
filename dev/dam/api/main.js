@@ -9200,6 +9200,98 @@ app.get('/api/compliance/evidence/:id/pdf', authRequired, async (req, res) => {
   } catch (e) { console.error('[Compliance] evidence PDF failed:', e.message); res.status(500).json({ error: 'Could not generate evidence PDF' }); }
 });
 
+// ── Compliance Evidence Pack PDF (multi-page, header/footer, per-framework) ───
+function buildCompliancePackPdf(fw, tenantName, generatedBy) {
+  const W = 595, H = 842, ML = 50, MR = 545;
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
+  const pages = [];
+  let content = '', y = 0, pageNo = 0;
+  const esc = (s) => String(s).replace(/[\\()]/g, (m) => '\\' + m);
+  const A = (s) => String(s == null ? '' : s).replace(/[^\x20-\x7E]/g, (ch) => (ch === '\n' || ch === '\t') ? ' ' : '');
+  const T = (x, top, s, f = 'F1', sz = 10) => { content += `BT /${f} ${sz} Tf ${x.toFixed(2)} ${(H - top).toFixed(2)} Td (${esc(A(s))}) Tj ET\n`; };
+  const fill = (r, g, b) => { content += `${r} ${g} ${b} rg\n`; };
+  const stroke = (r, g, b) => { content += `${r} ${g} ${b} RG\n`; };
+  const line = (x1, t1, x2, t2, w = 0.7) => { content += `${w} w ${x1} ${(H - t1).toFixed(2)} m ${x2} ${(H - t2).toFixed(2)} l S\n`; };
+  const box = (x, top, w, h, doFill) => { content += `${x} ${(H - (top + h)).toFixed(2)} ${w} ${h} re ${doFill ? 'f' : 'S'}\n`; };
+  const wrap = (s, n) => { const out = []; let ln = ''; for (const w of String(s || '').split(' ')) { if ((ln + ' ' + w).trim().length > n) { if (ln) out.push(ln); ln = w; } else ln = (ln ? ln + ' ' : '') + w; } if (ln) out.push(ln); return out.length ? out : ['']; };
+  const chrome = (n) => {
+    fill(0.06, 0.09, 0.16); box(0, 0, W, 6, true);
+    fill(0.1, 0.12, 0.2); T(ML, 42, 'TooVix', 'F2', 17); fill(0.45, 0.5, 0.6); T(ML + 62, 42, 'DAM', 'F1', 13);
+    fill(0.1, 0.12, 0.2); T(300, 39, 'COMPLIANCE EVIDENCE PACK', 'F2', 13); fill(0.4, 0.45, 0.55); T(300, 54, `${fw.name}  -  ${tenantName}`, 'F1', 9);
+    fill(0.5, 0.55, 0.62); T(ML, 58, 'Database Activity Monitoring', 'F1', 8);
+    stroke(0.85, 0.87, 0.9); line(ML, 70, MR, 70, 1);
+    const fy = H - 40; stroke(0.9, 0.91, 0.93); line(ML, fy - 10, MR, fy - 10, 0.7); fill(0.55, 0.6, 0.68);
+    T(ML, fy, 'Confidential - TooVix DAM - system-generated compliance evidence pack', 'F1', 7.5);
+    T(ML, fy + 10, 'Generated ' + stamp + ' by ' + generatedBy, 'F1', 7.5);
+    T(MR - 68, fy, 'Page ' + n + ' of @@PAGES@@', 'F1', 7.5);
+  };
+  const startPage = () => { if (content) pages.push(content); content = ''; pageNo++; chrome(pageNo); y = 92; };
+  startPage();
+
+  // Summary
+  fill(0.35, 0.4, 0.5); T(ML, y, 'FRAMEWORK', 'F2', 9); y += 18;
+  fill(0.1, 0.12, 0.2); T(ML, y, fw.name, 'F2', 16); y += 22;
+  const pass = fw.controls.filter((c) => c.status === 'ok').length, gaps = fw.controls.length - pass;
+  const sc = fw.score >= 90 ? [0.13, 0.55, 0.33] : fw.score >= 80 ? [0.72, 0.45, 0.05] : [0.72, 0.11, 0.11];
+  fill(sc[0], sc[1], sc[2]); T(ML, y + 6, fw.score + '%', 'F2', 26);
+  fill(0.3, 0.34, 0.42); T(ML + 100, y, 'Control coverage', 'F1', 9);
+  fill(0.15, 0.17, 0.24); T(ML + 100, y + 16, `${pass} passing   -   ${gaps} gap(s)   -   ${fw.controls.length} controls`, 'F1', 10.5);
+  fill(0.5, 0.55, 0.62); T(ML + 100, y + 31, 'Posture: ' + (fw.status === 'strong' ? 'Strong' : 'Gaps present') + '    Assessed ' + stamp, 'F1', 9); y += 56;
+  fill(0.5, 0.55, 0.62); wrap('Derived from live DAM telemetry - activity capture, data classification, masking coverage and monitoring status. Each control cites its evidence source; per-event proof and signed evidence records are exportable from the linked screens.', 98).forEach((ln) => { T(ML, y, ln, 'F1', 8.5); y += 11; }); y += 10;
+
+  // Controls table
+  const tableHead = () => { fill(0.35, 0.4, 0.5); T(ML, y, 'CONTROLS', 'F2', 9); y += 14; fill(0.95, 0.96, 0.98); box(ML, y - 11, MR - ML, 16, true); fill(0.35, 0.4, 0.5); T(ML + 6, y, 'STATUS', 'F2', 8); T(ML + 62, y, 'CONTROL', 'F2', 8); T(ML + 448, y, 'REFERENCE', 'F2', 8); y += 17; };
+  tableHead();
+  for (const ctl of fw.controls) {
+    const ctlLines = wrap(ctl.control, 62);
+    const evLines = ctl.evidence && ctl.evidence.summary ? wrap('Evidence: ' + ctl.evidence.summary, 88) : [];
+    const rowH = Math.max(ctlLines.length * 11, 13) + evLines.length * 10 + 9;
+    if (y + rowH > H - 58) { startPage(); tableHead(); }
+    const ok = ctl.status === 'ok'; const pc = ok ? [0.13, 0.55, 0.33] : [0.72, 0.45, 0.05];
+    fill(pc[0], pc[1], pc[2]); T(ML + 6, y, ok ? 'PASS' : 'GAP', 'F2', 9);
+    fill(0.15, 0.17, 0.24); ctlLines.forEach((ln, i) => T(ML + 62, y + i * 11, ln, 'F1', 9.5));
+    fill(0.4, 0.45, 0.55); T(ML + 448, y, String(ctl.reference || ''), 'F3', 8);
+    let ry = y + ctlLines.length * 11 + 1;
+    if (evLines.length) { fill(0.45, 0.5, 0.58); evLines.forEach((ln, i) => T(ML + 62, ry + i * 10, ln, 'F1', 8)); ry += evLines.length * 10; }
+    y = ry + 9; stroke(0.92, 0.93, 0.95); line(ML, y - 6, MR, y - 6, 0.5);
+  }
+  pages.push(content);
+
+  const M = pages.length;
+  for (let i = 0; i < M; i++) pages[i] = pages[i].split('@@PAGES@@').join(String(M));
+  const objs = [];
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+  let idx = 6; const kids = [];
+  for (const pg of pages) {
+    const cNum = idx++, pNum = idx++;
+    objs[cNum] = `<< /Length ${Buffer.byteLength(pg, 'latin1')} >>\nstream\n${pg}endstream`;
+    objs[pNum] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R >> >> /Contents ${cNum} 0 R >>`;
+    kids.push(`${pNum} 0 R`);
+  }
+  objs[2] = `<< /Type /Pages /Kids [${kids.join(' ')}] /Count ${M} >>`;
+  let pdf = '%PDF-1.4\n'; const offsets = []; const maxObj = idx - 1;
+  for (let i = 1; i <= maxObj; i++) { offsets[i] = Buffer.byteLength(pdf, 'latin1'); pdf += `${i} 0 obj\n${objs[i]}\nendobj\n`; }
+  const xrefStart = Buffer.byteLength(pdf, 'latin1'); const n = maxObj + 1;
+  pdf += `xref\n0 ${n}\n0000000000 65535 f \n`;
+  for (let i = 1; i < n; i++) pdf += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+  pdf += `trailer\n<< /Size ${n} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  return Buffer.from(pdf, 'latin1');
+}
+app.get('/api/compliance/frameworks/:key/pdf', authRequired, async (req, res) => {
+  try {
+    const fw = buildFrameworks(await complianceMetrics()).find((f) => f.key === req.params.key);
+    if (!fw) return res.status(404).json({ error: 'Unknown framework' });
+    const pdf = buildCompliancePackPdf(fw, req.user.tenantName || 'Workspace', req.user.email || 'system');
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.pack.export', resourceType: 'framework', resourceId: fw.key, details: { score: fw.score } });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="evidence-pack-${fw.key}.pdf"`);
+    res.send(pdf);
+  } catch (e) { console.error('[Compliance] pack PDF failed:', e.message); res.status(500).json({ error: 'Could not generate evidence pack' }); }
+});
+
 // ── Invoice PDF ───────────────────────────────────────────
 // Self-contained PDF writer (standard-14 fonts, no embedding, no dependency) so an
 // invoice downloads as a real .pdf. Layout: header, billed-to + meta, line-item
