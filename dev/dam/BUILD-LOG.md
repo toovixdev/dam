@@ -2340,7 +2340,13 @@ Verified against prod schema: 4156/4156 signed checkpoints (hash-chain controls 
 policies, 16 classified objects; 9/17 instances lack a region (data-localization now a real gap),
 0 VA schedules + 0 JIT grants (those controls now honest gaps).
 
-**Still global, not per-tenant:** `complianceMetrics()` reads `dam_analytics.events` (shared
-plane) and the Postgres counts carry no `tenant_id` filter — only the *attestations* are
-per-tenant. Threading `tenantId`/`eventsDbFor` through the metrics is the separate tracked
-data-plane/tenant-isolation fix.
+**Now per-tenant (2026-07-26, same day):** `complianceMetrics(tenantId)` — every Postgres count
+filters `tenant_id=$1` and ClickHouse reads route via `eventsDbFor(tenantId)` + a `tenant_id`
+filter instead of the hardcoded shared `dam_analytics.events`. This fixed the dedicated-plane
+zeros: paid tenants (events in `tenant_<uuid>` planes) previously read the empty shared plane and
+scored every activity-based control as a false gap. Verified on prod — global 61 classified cols
+split 23/0/25/13 per tenant; dedicated planes hold 93/210583/3554 events vs 0 in the shared plane.
+The frameworks API + Evidence Pack PDF (both via `complianceFrameworks(tenantId)`) are now fully
+per-tenant. Remaining global: the `compliance_scores` cache (no `tenant_id`) feeding
+dashboard/fleet + the un-authRequired `/api/dashboard/compliance` — part of the separate dashboard
+tenant-scoping work.
