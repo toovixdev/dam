@@ -229,13 +229,16 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
 
   const instance = instances.find((i) => i.id === instId);
   const isPaas = !!instance?.is_paas;
-  // Discovery fingerprints Postgres as 'postgres', but the rest of the deploy logic keys on
-  // 'postgresql' (classification gate, default port, DB_NAME). Normalize so a PG instance
-  // registered via discovery isn't wrongly treated as unclassifiable / wrong-port.
+  // Engine names drift by source: discovery fingerprints Postgres as 'postgres' and Mongo as
+  // 'mongodb'/'mongo', while the rest of the deploy logic keys on canonical names. Normalize so
+  // an instance isn't wrongly treated as unclassifiable / wrong-port because of the label.
   const rawEngine = (instance?.engine || 'mysql').toLowerCase();
-  const instEngine = rawEngine === 'postgres' ? 'postgresql' : rawEngine;
-  const canClassify = instEngine === 'mysql' || instEngine === 'postgresql' || instEngine === 'mssql'; // in this build
-  const classifyNeedsDbName = instEngine === 'postgresql' || instEngine === 'mssql'; // PG/SQL Server information_schema is per-database
+  const instEngine = rawEngine === 'postgres' ? 'postgresql' : rawEngine === 'mongo' ? 'mongodb' : rawEngine;
+  // Classification is supported by the agent for these engines (see agent main.go classifiable).
+  const canClassify = ['mysql', 'postgresql', 'mssql', 'oracle', 'mongodb'].includes(instEngine);
+  // These need the target database named — information_schema (PG/SQL Server) or the database to
+  // sample (MongoDB). MySQL's is server-wide; Oracle uses ORACLE_SERVICE, so neither needs it.
+  const classifyNeedsDbName = ['postgresql', 'mssql', 'mongodb'].includes(instEngine);
   const has = (m) => modes.includes(m);
   // Selecting AgentLite clears the wire modes and vice-versa — see WIRE_MODES above for why.
   const toggle = (m) =>
@@ -299,7 +302,7 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
     const image = (res && res.agent_image) || 'registry.toovix.security/dam-agent:latest';
     const useClassify = classify && canClassify;
     if (useClassify && !dbUser.trim()) { toast('Enter the DB reader username for classification', 'err'); return; }
-    if (useClassify && classifyNeedsDbName && !dbName.trim()) { toast('Enter the database name to classify (PostgreSQL)', 'err'); return; }
+    if (useClassify && classifyNeedsDbName && !dbName.trim()) { toast(`Enter the database name to classify (${engineLabel})`, 'err'); return; }
     setInstructions({
       token, cp, image, modes: [...modes], platform,
       target: instance?.instance || instance?.name, engine: instEngine,
