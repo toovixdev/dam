@@ -385,6 +385,9 @@ services:
       AZURE_STORAGE_KEY: ${AZURE_STORAGE_KEY:-}
       AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
       AUDIT_SIGNING_KEY: ${AUDIT_SIGNING_KEY:-dev-audit-signing-key}
+      # Envelope-encrypts cloud-connector credentials + exec-cred passwords at rest (AES-256-GCM).
+      # 64-hex / 32-byte-base64 / passphrase. Unset → stored plaintext (dev only).
+      CREDENTIAL_ENCRYPTION_KEY: ${CREDENTIAL_ENCRYPTION_KEY:-}
     depends_on:
       dam-postgres:
         condition: service_healthy

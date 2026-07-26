@@ -607,6 +607,15 @@ async function runAuthMigration() {
     // no audit logs, so last_ingest_at alone would flap it to "unmonitored" every 15 min even though
     // the connector is healthy. This advances while the consumer is alive + subscribed.
     await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ`);
+    // Encrypt any legacy plaintext connector credentials now that a key is configured. Rows are
+    // already-encrypted when the JSONB has an 'enc' key; re-encrypt the rest (raw credential objects).
+    if (SECRET_KEY) {
+      const legacy = await client.query(`SELECT id, credential FROM cloud_connectors WHERE credential IS NOT NULL AND jsonb_typeof(credential) = 'object' AND NOT (credential ? 'enc')`);
+      for (const r of legacy.rows) {
+        await client.query('UPDATE cloud_connectors SET credential = $2 WHERE id = $1', [r.id, packCredential(r.credential)]);
+      }
+      if (legacy.rows.length) console.log(`[Secrets] encrypted ${legacy.rows.length} legacy connector credential(s) at rest`);
+    }
     // Reachability tracking: when a scan no longer sees a known candidate, we flag
     // it unreachable rather than re-discovering or silently keeping it as "new".
     await client.query(`ALTER TABLE discovery_candidates ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ`);
@@ -6158,7 +6167,7 @@ async function resolveExecCred(s) {
     const row = (await pgPool.query(
       'SELECT username, password FROM exec_credentials WHERE tenant_id = $1 AND host = $2 AND (port = $3 OR port IS NULL) ORDER BY port NULLS LAST LIMIT 1',
       [s.tenant_id, s.db_host, s.db_port || null])).rows[0];
-    if (row && row.username) return { user: row.username, password: row.password || '' };
+    if (row && row.username) return { user: row.username, password: decSecret(row.password || '') };
   } catch (e) { /* table may be absent on first boot */ }
   const fam = ENGINE_FAMILY[(s.engine || '').toLowerCase()];
   if (fam === 'mysql' && process.env.EXEC_MYSQL_USER) return { user: process.env.EXEC_MYSQL_USER, password: process.env.EXEC_MYSQL_PASS || '' };
@@ -6723,6 +6732,49 @@ app.put('/api/settings/financial-assumptions', authRequired, async (req, res) =>
   res.json(fa);
 });
 
+// ── Secret-at-rest encryption (AES-256-GCM) ───────────────────────────────────
+// Cloud-connector credentials (GCP/AWS/Azure/OCI API keys) and exec-cred passwords are
+// encrypted before they hit Postgres, with the key held OUTSIDE the DB (env), so a database
+// dump or a read-replica leak can't reveal them. Legacy plaintext rows are read transparently
+// and re-encrypted on boot. `CREDENTIAL_ENCRYPTION_KEY` = 64-hex, 32-byte base64, or a
+// passphrase (scrypt-derived). Unset → no-op (stores plaintext) so dev still boots.
+const SECRET_ENC_PREFIX = 'enc:v1:';
+const SECRET_KEY = (() => {
+  const raw = process.env.CREDENTIAL_ENCRYPTION_KEY || '';
+  if (!raw) return null;
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
+  const b = Buffer.from(raw, 'base64'); if (b.length === 32) return b;
+  return crypto.scryptSync(raw, 'toovix-cred-kek-v1', 32);
+})();
+function encSecret(plaintext) {
+  if (plaintext == null) return plaintext;
+  const s = String(plaintext);
+  if (!SECRET_KEY) return s; // no key configured → store as-is (dev)
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', SECRET_KEY, iv);
+  const ct = Buffer.concat([c.update(s, 'utf8'), c.final()]);
+  return SECRET_ENC_PREFIX + Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
+}
+function decSecret(stored) {
+  if (typeof stored !== 'string' || !stored.startsWith(SECRET_ENC_PREFIX)) return stored; // legacy plaintext
+  if (!SECRET_KEY) throw new Error('CREDENTIAL_ENCRYPTION_KEY not set but an encrypted secret is present');
+  const buf = Buffer.from(stored.slice(SECRET_ENC_PREFIX.length), 'base64');
+  const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), ct = buf.subarray(28);
+  const d = crypto.createDecipheriv('aes-256-gcm', SECRET_KEY, iv);
+  d.setAuthTag(tag);
+  return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
+}
+// cloud_connectors.credential is JSONB. Encrypted rows are stored as {"enc":"enc:v1:…"} (still
+// valid JSON); legacy rows are the raw credential object. packCredential produces the param to
+// store; unpackCredential returns the plaintext credential object either way.
+function packCredential(obj) { return JSON.stringify({ enc: encSecret(JSON.stringify(obj || {})) }); }
+function unpackCredential(stored) {
+  if (stored && typeof stored === 'object' && typeof stored.enc === 'string') {
+    try { return JSON.parse(decSecret(stored.enc)); } catch { return {}; }
+  }
+  return stored || {}; // legacy plaintext JSONB object
+}
+
 // ── Cloud environment (which cloud discovery adapters to run) ──────────────────
 const CLOUD_PROVIDERS = [
   { id: 'gcp', label: 'Google Cloud (Cloud SQL, AlloyDB)' },
@@ -7012,6 +7064,7 @@ async function runCloudDiscovery(tenantId, providers, jobId) {
     if (!conns.length) { errors.push(`${pid}: no connector configured`); continue; }
     for (const conn of conns) {
       try {
+        conn.credential = unpackCredential(conn.credential);
         const cands = await adapter(conn);
         for (const c of cands) if (await upsertCloudCandidate(tenantId, c, jobId)) found++;
         await pgPool.query(`UPDATE cloud_connectors SET last_run_at = now(), last_result = $2, status = 'ok' WHERE id = $1`, [conn.id, `${cands.length} instance(s)`]);
@@ -7079,7 +7132,7 @@ app.post('/api/discovery/connectors', authRequired, async (req, res) => {
      ON CONFLICT (tenant_id, provider, project) DO UPDATE SET identity = EXCLUDED.identity, credential = EXCLUDED.credential,
        subscription = COALESCE(EXCLUDED.subscription, cloud_connectors.subscription), status = 'configured'
      RETURNING id, provider, project, identity, subscription, status, created_at`,
-    [req.user.tenantId, provider, proj, identity, JSON.stringify(cred), sub]
+    [req.user.tenantId, provider, proj, identity, packCredential(cred), sub]
   )).rows[0];
   res.status(201).json(row);
 });
@@ -7089,6 +7142,7 @@ app.post('/api/discovery/connectors/:id/test', authRequired, async (req, res) =>
   const adapter = CLOUD_ADAPTERS[conn.provider];
   if (!adapter) return res.status(400).json({ error: `No adapter for ${conn.provider} yet` });
   try {
+    conn.credential = unpackCredential(conn.credential);
     const cands = await adapter(conn);
     await pgPool.query(`UPDATE cloud_connectors SET last_run_at = now(), last_result = $2, status = 'ok' WHERE id = $1`, [conn.id, `${cands.length} instance(s)`]);
     res.json({ ok: true, count: cands.length, sample: cands.slice(0, 5).map((c) => ({ name: c.endpoint, engine: c.engine, region: c.region })) });
