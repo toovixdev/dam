@@ -7834,48 +7834,57 @@ app.get('/api/classification/runs', authRequired, async (req, res) => {
 // ── Compliance Center ─────────────────────────────────────
 // Control status + framework scores computed from REAL state (classification,
 // masking, monitoring coverage) — scores move as you mask columns / add agents.
-async function complianceMetrics() {
+async function complianceMetrics(tenantId) {
+  // Tenant-scoped: Postgres filtered by tenant_id, ClickHouse routed to the tenant's data
+  // plane (eventsDbFor) AND filtered by tenant_id so the shared trial plane doesn't leak
+  // across tenants. tid is inlined into the CH SQL like every other events query (it's a
+  // server-issued UUID, never user text).
+  const T = tenantId;
+  const evDb = await eventsDbFor(tenantId);
+  const tid = String(tenantId || '').replace(/'/g, '');
+  const chCount = async (extra) => parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${tid}'${extra ? ' AND ' + extra : ''}`, 'TabSeparated')) || 0;
   const c = (await pgPool.query(`SELECT
       COUNT(*) FILTER (WHERE sensitivity IN ('high','critical')) sensitive,
       COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND (is_masked OR masked_at_rest)) masked_sensitive,
       COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND NOT (is_masked OR masked_at_rest)) unmasked_sensitive,
       COUNT(*) FILTER (WHERE 'pci'=ANY(tags) AND NOT (is_masked OR masked_at_rest)) pci_unmasked,
       COUNT(*) FILTER (WHERE ('pii'=ANY(tags) OR 'gdpr'=ANY(tags)) AND NOT (is_masked OR masked_at_rest)) pii_unmasked
-    FROM classified_columns`)).rows[0];
+    FROM classified_columns WHERE tenant_id = $1`, [T])).rows[0];
   const d = (await pgPool.query(`SELECT COUNT(*) total,
       COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)) unmonitored
-    FROM databases d`)).rows[0];
+    FROM databases d WHERE d.tenant_id = $1`, [T])).rows[0];
   const unmasked = (await pgPool.query(
     `SELECT d.name db, o.object_name obj, cc.column_name col, COALESCE(cc.tags[1],'sensitive') tag, cc.sensitivity
      FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id
-     WHERE cc.sensitivity IN ('high','critical') AND NOT (cc.is_masked OR cc.masked_at_rest) ORDER BY cc.sensitivity LIMIT 50`)).rows
+     WHERE cc.tenant_id = $1 AND cc.sensitivity IN ('high','critical') AND NOT (cc.is_masked OR cc.masked_at_rest) ORDER BY cc.sensitivity LIMIT 50`, [T])).rows
     .map((r) => ({ label: `${r.db}.${r.obj}.${r.col}`, tag: r.tag, sensitivity: r.sensitivity }));
-  const unmonList = (await pgPool.query(`SELECT name FROM databases d WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id) LIMIT 50`)).rows.map((r) => r.name);
-  // Extra control signals. Each is defensive (a missing table/column just yields 0), so an
-  // unmeasurable control degrades to a gap rather than crashing the whole posture.
-  const pg1 = async (sql) => { try { return (await pgPool.query(sql)).rows[0] || {}; } catch { return {}; } };
-  const chk  = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE signature IS NOT NULL AND signature<>'') signed FROM audit_checkpoints`);
-  const jit  = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE approved_by IS NOT NULL AND approved_by<>requester) sod FROM jit_grants`);
-  const appr = await pg1(`SELECT COUNT(*) FILTER (WHERE jsonb_array_length(COALESCE(chain,'[]'::jsonb))>=1) multi FROM approval_requests`);
-  const inst = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE region IS NULL OR region='') noregion, COUNT(DISTINCT region) regions FROM db_instances`);
-  const cls  = await pg1(`SELECT COUNT(*) n FROM classified_objects`);
-  const dsar = await pg1(`SELECT COUNT(*) n FROM dsar_requests`);
-  const pol  = await pg1(`SELECT COUNT(*) n FROM policies`);
+  const unmonList = (await pgPool.query(`SELECT name FROM databases d WHERE d.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id) LIMIT 50`, [T])).rows.map((r) => r.name);
+  // Extra control signals — all tenant-scoped. Each is defensive (a missing table/column just
+  // yields 0), so an unmeasurable control degrades to a gap rather than crashing the posture.
+  const pg1 = async (sql) => { try { return (await pgPool.query(sql, [T])).rows[0] || {}; } catch { return {}; } };
+  const chk  = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE signature IS NOT NULL AND signature<>'') signed FROM audit_checkpoints WHERE tenant_id=$1`);
+  const jit  = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE approved_by IS NOT NULL AND approved_by<>requester) sod FROM jit_grants WHERE tenant_id=$1`);
+  const appr = await pg1(`SELECT COUNT(*) FILTER (WHERE jsonb_array_length(COALESCE(chain,'[]'::jsonb))>=1) multi FROM approval_requests WHERE tenant_id=$1`);
+  const inst = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE region IS NULL OR region='') noregion, COUNT(DISTINCT region) regions FROM db_instances WHERE tenant_id=$1`);
+  const cls  = await pg1(`SELECT COUNT(*) n FROM classified_objects WHERE tenant_id=$1`);
+  const dsar = await pg1(`SELECT COUNT(*) n FROM dsar_requests WHERE tenant_id=$1`);
+  const pol  = await pg1(`SELECT COUNT(*) n FROM policies WHERE tenant_id=$1`);
   const sched = await pg1(`SELECT
       COUNT(*) FILTER (WHERE status='on' AND (report_type ILIKE '%vuln%' OR report_type ILIKE '%assess%' OR report_name ILIKE '%vuln%' OR report_name ILIKE '%assess%')) va,
       COUNT(*) FILTER (WHERE status='on' AND (report_type ILIKE '%incident%' OR report_name ILIKE '%incident%')) incident,
-      COUNT(*) FILTER (WHERE status='on') active FROM report_schedules`);
-  const qp   = await pg1(`SELECT auto_quarantine FROM quarantine_policy WHERE id=1`);
+      COUNT(*) FILTER (WHERE status='on') active FROM report_schedules WHERE tenant_id=$1`);
+  const qp   = { auto_quarantine: false };
+  try { qp.auto_quarantine = !!(await pgPool.query('SELECT auto_quarantine FROM quarantine_policy WHERE id=1')).rows[0]?.auto_quarantine; } catch { /* singleton, non-tenant */ }
   return {
     sensitive: +c.sensitive, maskedSensitive: +c.masked_sensitive, unmaskedSensitive: +c.unmasked_sensitive,
     pciUnmasked: +c.pci_unmasked, piiUnmasked: +c.pii_unmasked, dbTotal: +d.total, unmonitored: +d.unmonitored,
     unmaskedList: unmasked, unmonitoredList: unmonList,
-    pciAccess: parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE has(tags,'pci') AND timestamp>=now()-INTERVAL 90 DAY", 'TabSeparated')) || 0,
-    piiAccess: parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE hasAny(tags,['pii','gdpr']) AND timestamp>=now()-INTERVAL 90 DAY", 'TabSeparated')) || 0,
-    auditEvents: parseInt(await chSafe('SELECT count() FROM dam_analytics.events', 'TabSeparated')) || 0,
-    privEvents: parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE operation IN ('GRANT','DDL') AND timestamp>=now()-INTERVAL 90 DAY", 'TabSeparated')) || 0,
-    distinctPrincipals: parseInt(await chSafe('SELECT uniqExact(principal) FROM dam_analytics.events', 'TabSeparated')) || 0,
-    sharedAcctEvents: parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE lower(principal) IN ('root','admin','sa','postgres','system','mysql')", 'TabSeparated')) || 0,
+    pciAccess: await chCount("has(tags,'pci') AND timestamp>=now()-INTERVAL 90 DAY"),
+    piiAccess: await chCount("hasAny(tags,['pii','gdpr']) AND timestamp>=now()-INTERVAL 90 DAY"),
+    auditEvents: await chCount(''),
+    privEvents: await chCount("operation IN ('GRANT','DDL') AND timestamp>=now()-INTERVAL 90 DAY"),
+    distinctPrincipals: parseInt(await chSafe(`SELECT uniqExact(principal) FROM ${evDb}.events WHERE tenant_id='${tid}'`, 'TabSeparated')) || 0,
+    sharedAcctEvents: await chCount("lower(principal) IN ('root','admin','sa','postgres','system','mysql')"),
     chainCheckpoints: +(chk.n || 0), chainSigned: +(chk.signed || 0),
     jitTotal: +(jit.n || 0), jitSod: +(jit.sod || 0), approvalsMultiParty: +(appr.multi || 0),
     instTotal: +(inst.n || 0), instNoRegion: +(inst.noregion || 0), instRegions: +(inst.regions || 0),
@@ -7999,7 +8008,7 @@ function buildFrameworks(m, states = {}) {
 // Load a tenant's attestation states + build the live frameworks. Used by the frameworks API
 // and the Evidence Pack PDF so both reflect the same measured + attested posture.
 async function complianceFrameworks(tenantId) {
-  const m = await complianceMetrics();
+  const m = await complianceMetrics(tenantId);
   let states = {};
   try {
     const rows = (await pgPool.query('SELECT control_key, status, note, actor, updated_at FROM compliance_control_state WHERE tenant_id = $1', [tenantId])).rows;
