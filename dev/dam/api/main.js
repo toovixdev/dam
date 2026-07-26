@@ -955,6 +955,12 @@ async function runAuthMigration() {
       sign_hash     VARCHAR(64)
     )`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_comp_evidence_tenant ON compliance_evidence (tenant_id, generated_at DESC)`);
+    // Platform signing key for sealed evidence PDFs — the DAM signs each artifact so an
+    // auditor can verify authenticity OFFLINE (no login) with the public key.
+    await client.query(`CREATE TABLE IF NOT EXISTS compliance_signing_key (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      private_pem TEXT, public_pem TEXT, fingerprint VARCHAR(80), created_at TIMESTAMPTZ DEFAULT now()
+    )`);
 
     // Data-plane integrity: signed Merkle checkpoints over event windows (stored
     // here in the control plane, separate from ClickHouse, so deleting events
@@ -7939,12 +7945,13 @@ const fmtDate = (v) => (v ? new Date(v).toISOString().slice(0, 10) : '—');
 const catOf = (tags, personalTags) => (tags || []).filter((t) => personalTags.includes(t)).join(', ') || '—';
 
 const REPORTS = {
-  exec: async () => {
+  exec: async (user) => {
+    const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
     const fleet = await computeFleetRisk(pgPool);
     const dbs = (await pgPool.query(`SELECT COUNT(*) total, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)) monitored FROM databases d`)).rows[0];
     const al = (await pgPool.query(`SELECT COUNT(*) total, COUNT(*) FILTER (WHERE severity='critical') crit FROM alerts WHERE status='open'`)).rows[0];
     const cmp = (await pgPool.query(`SELECT COALESCE(ROUND(AVG(score)),0) avg FROM compliance_scores`)).rows[0];
-    const today = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE timestamp>=today()", 'TabSeparated')) || 0;
+    const today = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND timestamp>=today()`, 'TabSeparated')) || 0;
     const risky = (await pgPool.query(`SELECT name, COALESCE(risk_score,0) risk, monitoring_status FROM databases ORDER BY risk_score DESC NULLS LAST LIMIT 5`)).rows;
     const sev = (await pgPool.query(`SELECT severity, COUNT(*) c FROM alerts WHERE status='open' GROUP BY severity ORDER BY 2 DESC`)).rows;
     return {
@@ -7953,10 +7960,11 @@ const REPORTS = {
       tables: [tbl('Top risky databases', ['Database', 'Risk', 'Status'], risky.map((r) => [r.name, r.risk, r.monitoring_status])), tbl('Open alerts by severity', ['Severity', 'Count'], sev.map((r) => [r.severity, r.c]))],
     };
   },
-  sensitive: async () => {
+  sensitive: async (user) => {
+    const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
     const cols = (await pgPool.query(`SELECT COUNT(*) c FROM classified_columns`)).rows[0].c;
-    const reads = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE length(tags)>0 AND timestamp>=now()-INTERVAL 30 DAY", 'TabSeparated')) || 0;
-    const accessors = await chSafe("SELECT principal, count() cnt, sum(row_count) rows FROM dam_analytics.events WHERE length(tags)>0 AND timestamp>=now()-INTERVAL 30 DAY GROUP BY principal ORDER BY cnt DESC LIMIT 10");
+    const reads = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND length(tags)>0 AND timestamp>=now()-INTERVAL 30 DAY`, 'TabSeparated')) || 0;
+    const accessors = await chSafe(`SELECT principal, count() cnt, sum(row_count) rows FROM ${evDb}.events WHERE tenant_id='${esc}' AND length(tags)>0 AND timestamp>=now()-INTERVAL 30 DAY GROUP BY principal ORDER BY cnt DESC LIMIT 10`);
     const objs = (await pgPool.query(`SELECT d.name db, o.schema_name||'.'||o.object_name obj, o.sensitivity, o.column_count FROM classified_objects o JOIN databases d ON o.database_id=d.id ORDER BY CASE o.sensitivity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END LIMIT 10`)).rows;
     return {
       title: 'Sensitive-Data Access', period: 'Last 30 days',
@@ -7964,9 +7972,10 @@ const REPORTS = {
       tables: [tbl('Top accessors of sensitive data', ['Principal', 'Accesses', 'Rows'], accessors.map((a) => [a.principal, Number(a.cnt).toLocaleString(), Number(a.rows).toLocaleString()])), tbl('Most sensitive objects', ['Database', 'Object', 'Sensitivity', 'Columns'], objs.map((o) => [o.db, o.obj, o.sensitivity, o.column_count]))],
     };
   },
-  privileged: async () => {
-    const ev = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE operation IN ('GRANT','DDL') AND timestamp>=now()-INTERVAL 30 DAY", 'TabSeparated')) || 0;
-    const grants = await chSafe("SELECT timestamp, principal, database_name, operation FROM dam_analytics.events WHERE operation IN ('GRANT','DDL') ORDER BY timestamp DESC LIMIT 20");
+  privileged: async (user) => {
+    const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
+    const ev = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND operation IN ('GRANT','DDL') AND timestamp>=now()-INTERVAL 30 DAY`, 'TabSeparated')) || 0;
+    const grants = await chSafe(`SELECT timestamp, principal, database_name, operation FROM ${evDb}.events WHERE tenant_id='${esc}' AND operation IN ('GRANT','DDL') ORDER BY timestamp DESC LIMIT 20`);
     const alerts = (await pgPool.query(`SELECT created_at, principal, rule, severity FROM alerts WHERE rule ILIKE '%grant%' OR rule ILIKE '%privileg%' OR rule ILIKE '%ddl%' ORDER BY created_at DESC LIMIT 15`)).rows;
     return {
       title: 'Privileged User Activity', period: 'Last 30 days',
@@ -7974,10 +7983,11 @@ const REPORTS = {
       tables: [tbl('GRANT / DDL events', ['Time', 'Principal', 'Database', 'Op'], grants.map((g) => [g.timestamp, g.principal, g.database_name, g.operation])), tbl('Privilege-related alerts', ['Time', 'Principal', 'Rule', 'Severity'], alerts.map((a) => [new Date(a.created_at).toISOString().slice(0, 16).replace('T', ' '), a.principal, a.rule, a.severity]))],
     };
   },
-  pci: async () => {
+  pci: async (user) => {
+    const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
     const colsRows = (await pgPool.query(`SELECT d.name db, o.object_name obj, cc.column_name col, cc.sensitivity FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id WHERE 'pci' = ANY(cc.tags) ORDER BY cc.sensitivity LIMIT 50`)).rows;
-    const access = await chSafe("SELECT timestamp, principal, database_name, operation, row_count FROM dam_analytics.events WHERE has(tags,'pci') ORDER BY timestamp DESC LIMIT 20");
-    const accessCount = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE has(tags,'pci') AND timestamp>=now()-INTERVAL 30 DAY", 'TabSeparated')) || 0;
+    const access = await chSafe(`SELECT timestamp, principal, database_name, operation, row_count FROM ${evDb}.events WHERE tenant_id='${esc}' AND has(tags,'pci') ORDER BY timestamp DESC LIMIT 20`);
+    const accessCount = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND has(tags,'pci') AND timestamp>=now()-INTERVAL 30 DAY`, 'TabSeparated')) || 0;
     return {
       title: 'PCI-DSS Req 10 — Cardholder Data Access', period: 'Last 30 days',
       kpis: [kpi('PCI columns', colsRows.length), kpi('Cardholder-data accesses', accessCount.toLocaleString())],
@@ -9011,6 +9021,150 @@ app.delete('/api/branding', authRequired, adminOnly, async (req, res) => {
     await writeAudit({ tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'branding.reset', resourceType: 'branding', resourceId: null, details: {} });
     res.json({ ok: true });
   } catch (err) { console.error('[Branding] reset failed:', err.message); res.status(500).json({ error: 'Failed to reset branding' }); }
+});
+
+// ── Sealed + signed compliance evidence PDF ───────────────────────────────────
+// The DAM signs each evidence artifact (RSA-SHA256 over a canonical seal string) so an
+// auditor can verify authenticity OFFLINE with the published public key — no DAM login.
+let _signKey = null;
+async function signingKey() {
+  if (_signKey) return _signKey;
+  const row = (await pgPool.query('SELECT private_pem, public_pem, fingerprint FROM compliance_signing_key ORDER BY created_at LIMIT 1')).rows[0];
+  if (row) return (_signKey = { privatePem: row.private_pem, publicPem: row.public_pem, fingerprint: row.fingerprint });
+  let privatePem, publicPem;
+  if (process.env.COMPLIANCE_SIGN_KEY) {
+    privatePem = process.env.COMPLIANCE_SIGN_KEY;
+    publicPem = crypto.createPublicKey(privatePem).export({ type: 'spki', format: 'pem' });
+  } else {
+    const kp = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
+    privatePem = kp.privateKey.export({ type: 'pkcs8', format: 'pem' });
+    publicPem = kp.publicKey.export({ type: 'spki', format: 'pem' });
+  }
+  const fingerprint = crypto.createHash('sha256').update(publicPem).digest('hex').slice(0, 32);
+  await pgPool.query('INSERT INTO compliance_signing_key (private_pem, public_pem, fingerprint) VALUES ($1,$2,$3)', [privatePem, publicPem, fingerprint]);
+  return (_signKey = { privatePem, publicPem, fingerprint });
+}
+// The exact bytes that get signed — documented in the PDF + /verify-key so anyone can rebuild it.
+function evidenceCanonical(r) {
+  const iso = (d) => d ? new Date(d).toISOString() : '';
+  return ['TOOVIX-EVIDENCE-V1', `evidence_id=${r.id}`, `tenant=${r.tenant_id}`, `report=${r.catalog_id}`,
+    `framework=${r.framework}`, `control=${r.control}`, `period=${iso(r.period_from)}..${iso(r.period_to)}`,
+    `generated_by=${r.generated_by}`, `generated_at=${iso(r.generated_at)}`, `row_total=${r.row_total}`,
+    `content_hash=${r.content_hash}`, `status=${r.status}`, `reviewer=${r.reviewer || ''}`,
+    `reviewed_at=${iso(r.reviewed_at)}`, `sign_hash=${r.sign_hash || ''}`].join('\n');
+}
+function buildEvidencePdf(rec, sig, verifyUrl) {
+  const W = 595, H = 842, ML = 50, MR = 545;
+  let c = '';
+  const esc = (s) => String(s).replace(/[\\()]/g, (m) => '\\' + m);
+  const A = (s) => String(s == null ? '' : s).replace(/[^\x20-\x7E]/g, (ch) => (ch === '\n' || ch === '\t') ? ' ' : '');
+  const T = (x, top, s, f = 'F1', sz = 10) => { c += `BT /${f} ${sz} Tf ${x.toFixed(2)} ${(H - top).toFixed(2)} Td (${esc(A(s))}) Tj ET\n`; };
+  const fill = (r, g, b) => { c += `${r} ${g} ${b} rg\n`; };
+  const stroke = (r, g, b) => { c += `${r} ${g} ${b} RG\n`; };
+  const line = (x1, t1, x2, t2, w = 0.7) => { c += `${w} w ${x1} ${(H - t1).toFixed(2)} m ${x2} ${(H - t2).toFixed(2)} l S\n`; };
+  const box = (x, top, w, h, doFill) => { c += `${x} ${(H - (top + h)).toFixed(2)} ${w} ${h} re ${doFill ? 'f' : 'S'}\n`; };
+  const wrap = (s, n) => { const out = []; s = String(s || ''); for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n)); return out.length ? out : ['']; };
+  const iso = (d) => d ? new Date(d).toISOString().slice(0, 19).replace('T', ' ') + ' UTC' : '-';
+
+  fill(0.06, 0.09, 0.16); box(0, 0, W, 6, true);
+  fill(0.1, 0.12, 0.2); T(ML, 50, 'TooVix', 'F2', 20); fill(0.45, 0.5, 0.6); T(ML + 74, 50, 'DAM', 'F1', 15);
+  fill(0.1, 0.12, 0.2); T(320, 46, 'COMPLIANCE EVIDENCE', 'F2', 14); fill(0.5, 0.55, 0.62); T(320, 62, 'Sealed & digitally signed', 'F1', 9);
+  fill(0.5, 0.55, 0.62); T(ML, 66, 'Database Activity Monitoring', 'F1', 9);
+  stroke(0.85, 0.87, 0.9); line(ML, 80, MR, 80, 1);
+
+  let y = 104;
+  const kv = (label, val, f = 'F1') => { fill(0.5, 0.55, 0.62); T(ML, y, label, 'F1', 9); fill(0.12, 0.14, 0.22); T(ML + 130, y, val, f, 10); y += 15; };
+  fill(0.35, 0.4, 0.5); T(ML, y, 'REPORT', 'F2', 9); y += 15;
+  kv('Report', rec.report_name, 'F2');
+  kv('Framework / Control', `${rec.framework}  -  ${rec.control}`);
+  kv('Period', `${iso(rec.period_from)}  ->  ${iso(rec.period_to)}`);
+  kv('Generated by', `${rec.generated_by}  at ${iso(rec.generated_at)}`);
+  kv('Events matched', `${rec.row_total}  (snapshot rows: ${rec.row_returned})`);
+  y += 5;
+
+  fill(0.35, 0.4, 0.5); T(ML, y, 'ATTESTATION', 'F2', 9); y += 15;
+  const st = String(rec.status || 'open').toUpperCase();
+  const sc = rec.status === 'attested' ? [0.13, 0.55, 0.33] : rec.status === 'exception' ? [0.72, 0.11, 0.11] : rec.status === 'escalated' ? [0.72, 0.45, 0.05] : [0.4, 0.45, 0.55];
+  fill(0.5, 0.55, 0.62); T(ML, y, 'Decision', 'F1', 9); fill(sc[0], sc[1], sc[2]); T(ML + 130, y, st, 'F2', 11); y += 15;
+  kv('Reviewer', rec.reviewer || '(unsigned - status open)');
+  kv('Reviewed at', iso(rec.reviewed_at));
+  if (rec.reviewer_note) { fill(0.5, 0.55, 0.62); T(ML, y, 'Note', 'F1', 9); fill(0.12, 0.14, 0.22); wrap(rec.reviewer_note, 74).slice(0, 3).forEach((ln, i) => T(ML + 130, y + i * 11, ln, 'F1', 9)); y += Math.min(3, wrap(rec.reviewer_note, 74).length) * 11 + 4; }
+  y += 5;
+
+  fill(0.35, 0.4, 0.5); T(ML, y, 'INTEGRITY SEAL (SHA-256)', 'F2', 9); y += 14;
+  const mono = (label, val) => { fill(0.5, 0.55, 0.62); T(ML, y, label, 'F1', 8); fill(0.12, 0.14, 0.22); wrap(val, 64).forEach((ln, i) => T(ML + 95, y + i * 10, ln, 'F3', 8)); y += wrap(val, 64).length * 10 + 3; };
+  mono('content_hash', rec.content_hash || '-');
+  mono('sign_hash', rec.sign_hash || '(no sign-off yet)');
+  y += 5;
+
+  fill(0.35, 0.4, 0.5); T(ML, y, 'DIGITAL SIGNATURE', 'F2', 9); y += 14;
+  fill(0.5, 0.55, 0.62); T(ML, y, 'Algorithm', 'F1', 9); fill(0.12, 0.14, 0.22); T(ML + 95, y, `${sig.algorithm} (RSA-2048)`, 'F1', 9); y += 13;
+  fill(0.5, 0.55, 0.62); T(ML, y, 'Key fpr', 'F1', 9); fill(0.12, 0.14, 0.22); T(ML + 95, y, sig.keyFingerprint, 'F3', 8); y += 13;
+  fill(0.5, 0.55, 0.62); T(ML, y, 'Signature', 'F1', 8); fill(0.12, 0.14, 0.22); wrap(sig.signature, 80).forEach((ln, i) => T(ML + 95, y + i * 9, ln, 'F3', 7)); y += wrap(sig.signature, 80).length * 9 + 6;
+
+  fill(0.35, 0.4, 0.5); T(ML, y, 'EVIDENCE (sample)', 'F2', 9); y += 13;
+  const rows = Array.isArray(rec.result_json && rec.result_json.rows) ? rec.result_json.rows : [];
+  fill(0.95, 0.96, 0.98); box(ML, y - 10, MR - ML, 15, true); fill(0.35, 0.4, 0.5);
+  T(ML + 4, y, 'TIME (UTC)', 'F2', 8); T(ML + 116, y, 'PRINCIPAL', 'F2', 8); T(ML + 205, y, 'OBJECT', 'F2', 8); T(ML + 328, y, 'OP', 'F2', 8); T(ML + 372, y, 'ROWS', 'F2', 8); T(ML + 418, y, 'TAGS', 'F2', 8);
+  y += 14;
+  let shown = 0;
+  for (let i = 0; i < rows.length && y < H - 82; i++) {
+    const r = rows[i]; fill(0.15, 0.17, 0.24);
+    T(ML + 4, y, String(r.ts || '').slice(0, 19), 'F1', 8); T(ML + 116, y, String(r.principal || '').slice(0, 15), 'F1', 8);
+    T(ML + 205, y, String(r.object || '').slice(0, 21), 'F1', 8); T(ML + 328, y, String(r.operation || '').slice(0, 7), 'F1', 8);
+    T(ML + 372, y, String(r.rows || '0'), 'F1', 8); T(ML + 418, y, String(r.tags || '').slice(0, 21), 'F1', 8);
+    y += 12; shown++;
+  }
+  if (rows.length > shown) { fill(0.5, 0.55, 0.62); T(ML + 4, y, `... ${shown} of ${rec.row_total} shown. content_hash above seals the COMPLETE snapshot (full set via CSV export).`, 'F1', 8); }
+
+  const fy = H - 50;
+  stroke(0.9, 0.91, 0.93); line(ML, fy - 12, MR, fy - 12, 0.7); fill(0.5, 0.55, 0.62);
+  T(ML, fy, 'Verify offline: GET ' + verifyUrl + ' for the public key, then RSA-SHA256-verify this Signature over the canonical string', 'F1', 7);
+  T(ML, fy + 10, 'TOOVIX-EVIDENCE-V1 + LF-joined key=value lines (id,tenant,report,framework,control,period,generated_by/at,row_total,content_hash,status,reviewer,reviewed_at,sign_hash).', 'F1', 7);
+  T(ML, fy + 22, 'TooVix DAM - system-generated sealed artifact - ' + new Date().toISOString().slice(0, 16).replace('T', ' ') + ' UTC', 'F1', 7);
+
+  const objs = [];
+  objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+  objs[2] = '<< /Type /Pages /Kids [3 0 R] /Count 1 >>';
+  objs[3] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 5 0 R /F2 6 0 R /F3 7 0 R >> >> /Contents 4 0 R >>';
+  objs[4] = `<< /Length ${Buffer.byteLength(c, 'latin1')} >>\nstream\n${c}endstream`;
+  objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+  objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+  objs[7] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+  let pdf = '%PDF-1.4\n';
+  const offsets = [];
+  for (let i = 1; i < objs.length; i++) { offsets[i] = Buffer.byteLength(pdf, 'latin1'); pdf += `${i} 0 obj\n${objs[i]}\nendobj\n`; }
+  const xrefStart = Buffer.byteLength(pdf, 'latin1');
+  const n = objs.length;
+  pdf += `xref\n0 ${n}\n0000000000 65535 f \n`;
+  for (let i = 1; i < n; i++) pdf += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+  pdf += `trailer\n<< /Size ${n} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`;
+  return Buffer.from(pdf, 'latin1');
+}
+// Public (no auth) — an auditor uses this to verify a sealed PDF offline.
+app.get('/api/compliance/verify-key', async (req, res) => {
+  const k = await signingKey();
+  res.json({
+    algorithm: 'RSA-SHA256', key_fingerprint: k.fingerprint, public_key_pem: k.publicPem,
+    canonical_format: 'Line 1: TOOVIX-EVIDENCE-V1. Then LF-joined key=value lines: evidence_id, tenant, report, framework, control, period, generated_by, generated_at, row_total, content_hash, status, reviewer, reviewed_at, sign_hash.',
+    verify: 'Rebuild the canonical string, then: openssl dgst -sha256 -verify pub.pem -signature sig.bin canonical.txt',
+  });
+});
+// Download the sealed + signed evidence PDF (tenant-scoped).
+app.get('/api/compliance/evidence/:id/pdf', authRequired, async (req, res) => {
+  try {
+    const rec = (await pgPool.query('SELECT * FROM compliance_evidence WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
+    if (!rec) return res.status(404).json({ error: 'Not found' });
+    await signingKey();
+    const signature = crypto.createSign('RSA-SHA256').update(evidenceCanonical(rec)).sign(_signKey.privatePem, 'base64');
+    const cp = controlPlaneUrl();
+    const verifyUrl = (/^https?:\/\//.test(cp) ? cp : 'https://' + cp) + '/api/compliance/verify-key';
+    const pdf = buildEvidencePdf(rec, { algorithm: 'RSA-SHA256', keyFingerprint: _signKey.fingerprint, signature }, verifyUrl);
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.evidence.export_pdf', resourceType: 'evidence', resourceId: rec.id, details: { control: rec.control } });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="evidence-${rec.catalog_id}-${String(rec.id).slice(0, 8)}.pdf"`);
+    res.send(pdf);
+  } catch (e) { console.error('[Compliance] evidence PDF failed:', e.message); res.status(500).json({ error: 'Could not generate evidence PDF' }); }
 });
 
 // ── Invoice PDF ───────────────────────────────────────────

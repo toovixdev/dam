@@ -6,7 +6,7 @@ import KpiCard from '../components/KpiCard';
 import TabNav from '../components/shared/TabNav';
 import Modal from '../components/shared/Modal';
 import useApiData from '../hooks/useApiData';
-import { apiFetch, apiPost, getUser } from '../api/client';
+import { apiFetch, apiPost, getUser, getToken } from '../api/client';
 import { exportCsv } from '../exportCsv';
 import { toast } from '../components/shared/Toast';
 
@@ -85,6 +85,21 @@ export default function Attestations() {
       ['Time', 'Principal', 'Database', 'Object', 'Operation', 'Rows', 'Client IP', 'Tags', 'Statement'],
       rows.map((r) => [r.ts, r.principal, r.database_name, r.object, r.operation, r.rows, r.client_ip, r.tags, r.sql_preview]));
     toast(`Exported ${rows.length} evidence rows`, 'ok');
+  };
+
+  // Sealed + digitally-signed PDF — the artifact you hand an auditor (they verify offline,
+  // no DAM login). Authed binary download, so fetch → blob → trigger save.
+  const downloadPdf = async () => {
+    try {
+      const res = await fetch(`/api/compliance/evidence/${detail.id}/pdf`, { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!res.ok) return toast('Could not generate the signed PDF', 'err');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `evidence-${detail.catalog_id}-${detail.id.slice(0, 8)}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      toast('Downloaded sealed & signed PDF', 'ok');
+    } catch { toast('Could not generate the signed PDF', 'err'); }
   };
 
   const rj = detail?.result_json || {};
@@ -202,6 +217,7 @@ export default function Attestations() {
               <span style={{ color: detail.content_ok ? 'var(--green)' : 'var(--danger)' }}>{detail.content_ok ? '⛓ Seal intact' : '⚠ Seal broken'}</span>
               <code style={{ fontFamily: 'var(--mono, monospace)', color: 'var(--muted)', fontSize: 10.5 }}>sha256:{String(detail.content_hash).slice(0, 24)}…</code>
               <button className="btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={exportRows}>Export CSV</button>
+              <button className="btn-primary btn-sm" onClick={downloadPdf}>⤓ Signed PDF</button>
             </div>
 
             <div style={{ maxHeight: 300, overflow: 'auto', border: '1px solid var(--line)', borderRadius: 8 }}>
