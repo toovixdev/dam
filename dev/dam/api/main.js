@@ -8108,20 +8108,22 @@ const REPORTS = {
       ],
     };
   },
-  sox: async () => {
-    const ddl = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE operation='DDL' AND timestamp>=now()-INTERVAL 90 DAY", 'TabSeparated')) || 0;
-    const changes = await chSafe("SELECT timestamp, principal, database_name, substring(sql_text,1,60) sql FROM dam_analytics.events WHERE operation='DDL' ORDER BY timestamp DESC LIMIT 20");
-    const grants = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE operation='GRANT' AND timestamp>=now()-INTERVAL 90 DAY", 'TabSeparated')) || 0;
+  sox: async (user) => {
+    const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
+    const ddl = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND operation='DDL' AND timestamp>=now()-INTERVAL 90 DAY`, 'TabSeparated')) || 0;
+    const changes = await chSafe(`SELECT timestamp, principal, database_name, substring(sql_text,1,60) sql FROM ${evDb}.events WHERE tenant_id='${esc}' AND operation='DDL' ORDER BY timestamp DESC LIMIT 20`);
+    const grants = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND operation='GRANT' AND timestamp>=now()-INTERVAL 90 DAY`, 'TabSeparated')) || 0;
     return {
       title: 'SOX Controls — Quarterly', period: 'Last 90 days',
       kpis: [kpi('Schema changes (DDL)', ddl.toLocaleString()), kpi('Privilege grants', grants.toLocaleString())],
       tables: [tbl('Schema-change log (DDL)', ['Time', 'Principal', 'Database', 'Statement'], changes.map((c) => [c.timestamp, c.principal, c.database_name, c.sql]))],
     };
   },
-  audit: async () => {
-    const total = parseInt(await chSafe("SELECT count() FROM dam_analytics.events", 'TabSeparated')) || 0;
+  audit: async (user) => {
+    const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
+    const total = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}'`, 'TabSeparated')) || 0;
     const cp = (await pgPool.query(`SELECT COUNT(*) c FROM audit_trail`)).rows[0].c;
-    const recent = await chSafe("SELECT timestamp, principal, database_name, operation FROM dam_analytics.events ORDER BY timestamp DESC LIMIT 15");
+    const recent = await chSafe(`SELECT timestamp, principal, database_name, operation FROM ${evDb}.events WHERE tenant_id='${esc}' ORDER BY timestamp DESC LIMIT 15`);
     return {
       title: 'Audit Integrity — Evidence Pack', period: 'All time',
       kpis: [kpi('Activity events', total.toLocaleString()), kpi('Chain status', 'Verified'), kpi('Checkpoints', Math.max(1, Math.floor(total / 1000))), kpi('Control-plane events', cp)],
@@ -8138,8 +8140,9 @@ const REPORTS = {
       tables: [tbl('Database risk posture', ['Database', 'Risk', 'Status'], risky.map((r) => [r.name, r.risk, r.monitoring_status]))],
     };
   },
-  llm: async () => {
-    const prompts = parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE has(tags,'llm') AND timestamp>=now()-INTERVAL 30 DAY", 'TabSeparated')) || 0;
+  llm: async (user) => {
+    const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
+    const prompts = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND has(tags,'llm') AND timestamp>=now()-INTERVAL 30 DAY`, 'TabSeparated')) || 0;
     return {
       title: 'AI / LLM Data Exposure', period: 'Last 30 days',
       note: prompts ? undefined : 'No LLM gateway is enrolled, so no prompts have been captured. Route LLM traffic through the DAM gateway to monitor prompts touching sensitive data.',
