@@ -8261,7 +8261,13 @@ app.post('/api/compliance/catalog/:id/run', authRequired, async (req, res) => {
     // [] → the report showed a count but zero rows. The subquery keeps the WHERE on the real column.
     const rows = await chSafe(
       `SELECT toString(timestamp) AS ts, principal, database_name,
-        concat(schema_name, if(table_name != '', concat('.', table_name), '')) AS object,
+        coalesce(
+          nullIf(multiIf(schema_name != '' AND table_name != '', concat(schema_name, '.', table_name),
+                         table_name != '', table_name, schema_name != '', schema_name, ''), ''),
+          nullIf(extract(sql_text, '(?i)db[.]([A-Za-z_][A-Za-z0-9_]*)'), ''),
+          nullIf(extract(sql_text, '(?i)(?:from|into|update|join|table)[ \\t\\n\\r]+([A-Za-z_][A-Za-z0-9_.]*)'), ''),
+          database_name
+        ) AS object,
         operation, toString(row_count) AS rows, client_ip,
         arrayStringConcat(arraySort(tags), ',') AS tags, substring(sql_text, 1, 240) AS sql_preview
        FROM (SELECT * ${base}) ORDER BY timestamp DESC LIMIT 1000`);
