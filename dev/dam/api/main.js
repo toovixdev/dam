@@ -6777,7 +6777,119 @@ async function gcpEnumerate(connector) {
     };
   });
 }
-const CLOUD_ADAPTERS = { gcp: gcpEnumerate };
+// ── AWS: SigV4-signed RDS DescribeDBInstances (read-only IAM, e.g. AmazonRDSReadOnlyAccess) ──
+function awsEngine(e) {
+  const s = String(e || '').toLowerCase();
+  if (s.includes('postgres')) return { engine: 'postgresql', port: 5432 }; // incl. aurora-postgresql
+  if (s.includes('mysql') || s.includes('maria') || s.includes('aurora')) return { engine: 'mysql', port: 3306 };
+  if (s.includes('sqlserver')) return { engine: 'mssql', port: 1433 };
+  if (s.includes('oracle')) return { engine: 'oracle', port: 1521 };
+  return { engine: 'unknown', port: null };
+}
+function awsSigV4({ accessKeyId, secretAccessKey, sessionToken }, { region, service, host, query = '', payload = '' }) {
+  const crypto = require('crypto');
+  const amzDate = new Date().toISOString().replace(/[:-]|\.\d{3}/g, ''); // YYYYMMDDTHHMMSSZ
+  const dateStamp = amzDate.slice(0, 8);
+  const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+  const hmac = (k, s) => crypto.createHmac('sha256', k).update(s).digest();
+  const canonicalHeaders = `host:${host}\nx-amz-date:${amzDate}\n` + (sessionToken ? `x-amz-security-token:${sessionToken}\n` : '');
+  const signedHeaders = 'host;x-amz-date' + (sessionToken ? ';x-amz-security-token' : '');
+  const canonicalRequest = ['GET', '/', query, canonicalHeaders, signedHeaders, sha(payload)].join('\n');
+  const scope = `${dateStamp}/${region}/${service}/aws4_request`;
+  const stringToSign = ['AWS4-HMAC-SHA256', amzDate, scope, sha(canonicalRequest)].join('\n');
+  let k = hmac('AWS4' + secretAccessKey, dateStamp);
+  k = hmac(k, region); k = hmac(k, service); k = hmac(k, 'aws4_request');
+  const signature = crypto.createHmac('sha256', k).update(stringToSign).digest('hex');
+  const headers = { host, 'x-amz-date': amzDate, Authorization: `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}` };
+  if (sessionToken) headers['x-amz-security-token'] = sessionToken;
+  return headers;
+}
+async function awsEnumerate(connector) {
+  const c = connector.credential || {};
+  const accessKeyId = c.accessKeyId || c.access_key_id;
+  const secretAccessKey = c.secretAccessKey || c.secret_access_key;
+  const region = c.region || connector.project || 'us-east-1';
+  if (!accessKeyId || !secretAccessKey) throw new Error('AWS needs accessKeyId + secretAccessKey (a read-only IAM user, e.g. AmazonRDSReadOnlyAccess)');
+  const host = `rds.${region}.amazonaws.com`;
+  const query = 'Action=DescribeDBInstances&Version=2014-10-31';
+  const headers = awsSigV4({ accessKeyId, secretAccessKey, sessionToken: c.sessionToken }, { region, service: 'rds', host, query });
+  const resp = await fetch(`https://${host}/?${query}`, { headers });
+  const xml = await resp.text();
+  if (!resp.ok) { const m = /<Message>([^<]+)<\/Message>/.exec(xml); throw new Error(m ? m[1] : `RDS DescribeDBInstances failed (${resp.status})`); }
+  const out = [];
+  for (const block of xml.split('<DBInstance>').slice(1)) {
+    const g = (tag) => { const m = new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(block); return m ? m[1] : ''; };
+    const engineRaw = g('Engine');
+    const { engine, port } = awsEngine(engineRaw);
+    const addr = g('Address'); const id = g('DBInstanceIdentifier');
+    if (!addr && !id) continue;
+    out.push({
+      endpoint: addr || id, host: addr || id, port: parseInt(g('Port'), 10) || port, engine, version: g('EngineVersion'),
+      region, cloud_provider: 'aws', deployment_type: /aurora/i.test(engineRaw) ? 'aurora' : 'rds', source: 'cloud_api', confidence: 'high', signal: 'clean',
+    });
+  }
+  return out;
+}
+
+// ── Azure: client-credentials OAuth2 → ARM list (SQL servers + MySQL/PG flexible servers) ──
+async function azureToken(c) {
+  if (!c.tenantId || !c.clientId || !c.clientSecret) throw new Error('Azure needs tenantId + clientId + clientSecret (a read-only service principal — Reader role)');
+  const resp = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(c.tenantId)}/oauth2/v2.0/token`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'client_credentials', client_id: c.clientId, client_secret: c.clientSecret, scope: 'https://management.azure.com/.default' }),
+  });
+  const j = await resp.json().catch(() => ({}));
+  if (!j.access_token) throw new Error(j.error_description || j.error || 'Azure token exchange failed');
+  return j.access_token;
+}
+async function azureEnumerate(connector) {
+  const c = connector.credential || {};
+  const sub = c.subscriptionId || connector.project;
+  if (!sub) throw new Error('Azure needs a subscriptionId');
+  const token = await azureToken(c);
+  const arm = async (path) => {
+    const resp = await fetch(`https://management.azure.com${path}`, { headers: { Authorization: `Bearer ${token}` } });
+    const j = await resp.json().catch(() => ({}));
+    if (j.error) throw new Error(j.error.message || 'Azure ARM error');
+    return j.value || [];
+  };
+  const out = [];
+  for (const s of await arm(`/subscriptions/${sub}/providers/Microsoft.Sql/servers?api-version=2022-05-01-preview`)) {
+    const fqdn = s.properties?.fullyQualifiedDomainName || `${s.name}.database.windows.net`;
+    out.push({ endpoint: fqdn, host: fqdn, port: 1433, engine: 'mssql', version: null, region: s.location, cloud_provider: 'azure', deployment_type: 'azuresql', source: 'cloud_api', confidence: 'high', signal: 'clean' });
+  }
+  for (const [prov, eng, port, suffix] of [['Microsoft.DBforPostgreSQL/flexibleServers', 'postgresql', 5432, 'postgres.database.azure.com'], ['Microsoft.DBforMySQL/flexibleServers', 'mysql', 3306, 'mysql.database.azure.com']]) {
+    const list = await arm(`/subscriptions/${sub}/providers/${prov}?api-version=2023-06-01-preview`).catch(() => []);
+    for (const s of list) {
+      const fqdn = s.properties?.fullyQualifiedDomainName || `${s.name}.${suffix}`;
+      out.push({ endpoint: fqdn, host: fqdn, port, engine: eng, version: s.properties?.version || null, region: s.location, cloud_provider: 'azure', deployment_type: 'azuresql', source: 'cloud_api', confidence: 'high', signal: 'clean' });
+    }
+  }
+  return out;
+}
+
+// ── OCI: API-key request signing → list Autonomous Databases in a compartment ──
+async function ociEnumerate(connector) {
+  const c = connector.credential || {};
+  const privateKey = c.privateKey || c.private_key;
+  const compartmentId = c.compartmentId || c.compartment_id || c.tenancy;
+  if (!c.tenancy || !c.user || !c.fingerprint || !privateKey || !c.region) throw new Error('OCI needs tenancy, user, fingerprint, privateKey and region (a read-only API key)');
+  const host = `database.${c.region}.oraclecloud.com`;
+  const path = `/20160918/autonomousDatabases?compartmentId=${encodeURIComponent(compartmentId)}`;
+  const date = new Date().toUTCString();
+  const signingString = `(request-target): get ${path}\nhost: ${host}\ndate: ${date}`;
+  const sig = require('crypto').createSign('RSA-SHA256').update(signingString).sign(privateKey, 'base64');
+  const auth = `Signature version="1",keyId="${c.tenancy}/${c.user}/${c.fingerprint}",algorithm="rsa-sha256",headers="(request-target) host date",signature="${sig}"`;
+  const resp = await fetch(`https://${host}${path}`, { headers: { host, date, Authorization: auth } });
+  const j = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error((j && j.message) || `OCI list failed (${resp.status})`);
+  return (Array.isArray(j) ? j : []).map((db) => ({
+    endpoint: db.dbName || db.id, host: db.privateEndpointIp || db.dbName || db.id, port: 1522,
+    engine: 'oracle', version: db.dbVersion || null, region: c.region, cloud_provider: 'oci', deployment_type: 'oci', source: 'cloud_api', confidence: 'high', signal: 'clean',
+  }));
+}
+
+const CLOUD_ADAPTERS = { gcp: gcpEnumerate, aws: awsEnumerate, azure: azureEnumerate, oci: ociEnumerate };
 
 // Upsert a cloud-discovered candidate (skips endpoints already registered as instances).
 async function upsertCloudCandidate(tenantId, c, jobId) {
@@ -6829,16 +6941,42 @@ app.post('/api/discovery/connectors', authRequired, async (req, res) => {
   const { provider, project, subscription } = req.body || {};
   if (!CLOUD_PROVIDER_IDS.has(provider)) return res.status(400).json({ error: 'Unsupported provider' });
   let cred = req.body.credential;
-  if (typeof cred === 'string') { try { cred = JSON.parse(cred); } catch { return res.status(400).json({ error: 'Credential must be valid JSON (the service-account key file)' }); } }
-  const keyless = !!req.body.keyless || (cred && cred.mode === 'adc');
-  if (keyless) cred = { mode: 'adc' };
-  else if (!cred || typeof cred !== 'object' || !cred.private_key) return res.status(400).json({ error: 'Paste the read-only key JSON, or enable keyless (control-plane identity).' });
-  const identity = keyless ? 'control-plane identity (keyless)' : (cred.client_email || cred.clientId || null);
-  const proj = project || cred.project_id || null;
-  if (!proj) return res.status(400).json({ error: 'Project id is required' });
-  // Normalize a subscription to the full projects/P/subscriptions/S form.
+  if (typeof cred === 'string') { try { cred = JSON.parse(cred); } catch { cred = null; } }
+  cred = cred && typeof cred === 'object' ? cred : {};
+
+  // Provider-specific credential validation + identity/scope derivation. The stored
+  // `project` column is the enumeration scope: GCP project / AWS region / Azure
+  // subscription / OCI compartment. `credential` is JSONB and never returned to the UI.
+  let identity = null, proj = project || null, err = null;
+  if (provider === 'gcp') {
+    const keyless = !!req.body.keyless || cred.mode === 'adc';
+    if (keyless) cred = { mode: 'adc' };
+    else if (!cred.private_key) err = 'Paste the read-only key JSON, or enable keyless (control-plane identity).';
+    identity = keyless ? 'control-plane identity (keyless)' : (cred.client_email || null);
+    proj = proj || cred.project_id || null;
+    if (!err && !proj) err = 'Project id is required';
+  } else if (provider === 'aws') {
+    if (!cred.accessKeyId || !cred.secretAccessKey) err = 'AWS needs accessKeyId + secretAccessKey (a read-only IAM user, e.g. AmazonRDSReadOnlyAccess)';
+    else identity = `AWS key ${String(cred.accessKeyId).slice(0, 4)}…${String(cred.accessKeyId).slice(-4)}`;
+    proj = proj || cred.region || null;
+    if (!err && !proj) err = 'AWS region is required';
+  } else if (provider === 'azure') {
+    if (!cred.tenantId || !cred.clientId || !cred.clientSecret) err = 'Azure needs tenantId + clientId + clientSecret (a read-only service principal — Reader role)';
+    else identity = cred.clientId;
+    proj = proj || cred.subscriptionId || null;
+    if (!err && !proj) err = 'Azure subscriptionId is required';
+  } else if (provider === 'oci') {
+    if (!cred.tenancy || !cred.user || !cred.fingerprint || !(cred.privateKey || cred.private_key) || !cred.region) err = 'OCI needs tenancy, user, fingerprint, privateKey and region (a read-only API key)';
+    else identity = cred.user;
+    proj = proj || cred.compartmentId || cred.tenancy || null;
+  } else {
+    err = `Discovery adapter for ${provider} is not built yet`;
+  }
+  if (err) return res.status(400).json({ error: err });
+
+  // Agentless-ingest subscription is GCP Pub/Sub today; normalize to projects/P/subscriptions/S.
   let sub = (typeof subscription === 'string' && subscription.trim()) ? subscription.trim() : null;
-  if (sub && !sub.startsWith('projects/')) sub = `projects/${proj}/subscriptions/${sub}`;
+  if (sub && provider === 'gcp' && !sub.startsWith('projects/')) sub = `projects/${proj}/subscriptions/${sub}`;
   const row = (await pgPool.query(
     `INSERT INTO cloud_connectors (tenant_id, provider, project, identity, credential, subscription, status)
      VALUES ($1,$2,$3,$4,$5,$6,'configured')

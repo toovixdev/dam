@@ -509,24 +509,68 @@ gcloud iam service-accounts keys create sa.json \\
   --iam-account=toovix-dam-discovery@$PROJECT.iam.gserviceaccount.com
 cat sa.json   # paste the JSON contents into the field`;
 
+const AWS_SETUP = `# A READ-ONLY IAM user for RDS discovery:
+aws iam create-user --user-name toovix-dam-discovery
+aws iam attach-user-policy --user-name toovix-dam-discovery \\
+  --policy-arn arn:aws:iam::aws:policy/AmazonRDSReadOnlyAccess
+aws iam create-access-key --user-name toovix-dam-discovery
+# paste the AccessKeyId + SecretAccessKey below`;
+const AZURE_SETUP = `# A READ-ONLY service principal (Reader on the subscription):
+az ad sp create-for-rbac --name toovix-dam-discovery \\
+  --role Reader --scopes /subscriptions/<SUBSCRIPTION_ID>
+# → appId = client id · password = client secret · tenant = tenant id`;
+const OCI_SETUP = `# A READ-ONLY API key (grant a group: 'inspect autonomous-database-family in tenancy'):
+oci setup keys        # writes oci_api_key.pem + prints the fingerprint
+# upload the PUBLIC key to your OCI user, then paste the PRIVATE key + OCIDs + fingerprint below`;
+
 function AddConnector({ tenantClouds, cloudLabel, onClose, onSaved }) {
-  const clouds = tenantClouds?.length ? tenantClouds : ['gcp'];
+  const clouds = tenantClouds?.length ? tenantClouds : ['gcp', 'aws', 'azure', 'oci'];
   const [provider, setProvider] = useState(clouds[0]);
-  const [project, setProject] = useState('');
-  const [credential, setCredential] = useState('');
+  const [project, setProject] = useState('');       // GCP project id
+  const [gcpKey, setGcpKey] = useState('');          // GCP SA key JSON
   const [keyless, setKeyless] = useState(false);
   const [subscription, setSubscription] = useState('');
+  const [f, setF] = useState({});                    // provider-specific discrete fields
   const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF((p) => ({ ...p, [k]: e.target.value }));
+  const v = (k) => (f[k] || '').trim();
 
   const save = async () => {
-    if (!keyless && !credential.trim()) return toast('Paste the read-only credential (key JSON) or enable keyless', 'err');
-    if (keyless && !project.trim()) return toast('Project id is required for keyless', 'err');
+    let credential, projArg;
+    if (provider === 'gcp') {
+      if (!keyless && !gcpKey.trim()) return toast('Paste the SA key JSON, or enable keyless', 'err');
+      if (keyless && !project.trim()) return toast('Project id is required for keyless', 'err');
+      credential = keyless ? undefined : gcpKey;
+      projArg = project.trim() || undefined;
+    } else if (provider === 'aws') {
+      if (!v('accessKeyId') || !v('secretAccessKey') || !v('region')) return toast('Enter AWS access key, secret, and region', 'err');
+      credential = { accessKeyId: v('accessKeyId'), secretAccessKey: v('secretAccessKey'), region: v('region') };
+      projArg = v('region');
+    } else if (provider === 'azure') {
+      if (!v('tenantId') || !v('clientId') || !v('clientSecret') || !v('subscriptionId')) return toast('Enter Azure tenant, client id, secret, and subscription', 'err');
+      credential = { tenantId: v('tenantId'), clientId: v('clientId'), clientSecret: v('clientSecret'), subscriptionId: v('subscriptionId') };
+      projArg = v('subscriptionId');
+    } else if (provider === 'oci') {
+      if (!v('tenancy') || !v('user') || !v('fingerprint') || !v('region') || !(f.privateKey || '').trim()) return toast('Enter OCI tenancy, user, fingerprint, region, and the private key', 'err');
+      credential = { tenancy: v('tenancy'), user: v('user'), fingerprint: v('fingerprint'), region: v('region'), compartmentId: v('compartmentId') || undefined, privateKey: f.privateKey };
+      projArg = v('compartmentId') || v('tenancy');
+    }
     setBusy(true);
-    const res = await apiPost('/discovery/connectors', { provider, project: project.trim() || undefined, keyless, credential: keyless ? undefined : credential, subscription: subscription.trim() || undefined });
+    const res = await apiPost('/discovery/connectors', {
+      provider, project: projArg, keyless: provider === 'gcp' ? keyless : undefined,
+      credential, subscription: subscription.trim() || undefined,
+    });
     setBusy(false);
     if (res?.ok) { toast('Cloud connector saved', 'ok'); onSaved(); }
     else toast(res?.data?.error || 'Could not save connector', 'err');
   };
+
+  const field = (label, key, opts = {}) => (
+    <div className="form-field" style={{ flex: 1, minWidth: 180, margin: 0 }}>
+      <label>{label}</label>
+      <input className={opts.mono ? 'mono' : undefined} type={opts.password ? 'password' : 'text'} value={f[key] || ''} onChange={set(key)} placeholder={opts.placeholder} style={opts.mono ? { fontSize: 11.5 } : undefined} />
+    </div>
+  );
 
   return (
     <>
@@ -535,39 +579,68 @@ function AddConnector({ tenantClouds, cloudLabel, onClose, onSaved }) {
         It calls the provider's control-plane API to list managed databases — it never connects to the DB
         or your network. The credential is stored write-only (never shown again).
       </p>
-      <div className="form-row" style={{ display: 'flex', gap: 12 }}>
-        <div className="form-field" style={{ flex: 1 }}><label>Cloud</label>
-          <select value={provider} onChange={(e) => setProvider(e.target.value)}>
-            {clouds.map((id) => <option key={id} value={id}>{id.toUpperCase()} — {cloudLabel(id)}</option>)}
-          </select>
-        </div>
-        <div className="form-field" style={{ flex: 1 }}><label>Project / account id</label>
+      <div className="form-field"><label>Cloud</label>
+        <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+          {clouds.map((id) => <option key={id} value={id}>{id.toUpperCase()} — {cloudLabel(id)}</option>)}
+        </select>
+      </div>
+
+      {provider === 'gcp' && (<>
+        <div className="form-field"><label>Project id</label>
           <input value={project} onChange={(e) => setProject(e.target.value)} placeholder="my-gcp-project (optional — read from key)" />
         </div>
-      </div>
-      {provider === 'gcp' && (
         <label className="form-field" style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
           <input type="checkbox" checked={keyless} onChange={(e) => setKeyless(e.target.checked)} style={{ marginTop: 3 }} />
           <span style={{ fontSize: 12.5, lineHeight: 1.5 }}><b>Keyless</b> — use the control-plane's own GCP identity (no key to paste). Recommended, and required if your org disables service-account keys. Grant that identity <code>roles/cloudsql.viewer</code> on the project.</span>
         </label>
-      )}
-      {!keyless && provider === 'gcp' && (
-        <div className="form-field">
-          <label>How to create the read-only service account</label>
-          <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{GCP_SETUP}</pre>
+        {!keyless && (<>
+          <div className="form-field"><label>How to create the read-only service account</label>
+            <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{GCP_SETUP}</pre></div>
+          <div className="form-field"><label>Service-account key (JSON)</label>
+            <textarea className="mono" value={gcpKey} onChange={(e) => setGcpKey(e.target.value)} rows={6} style={{ width: '100%', fontSize: 11 }} placeholder='{ "type": "service_account", "project_id": "…", "client_email": "…", "private_key": "-----BEGIN PRIVATE KEY-----\\n…" }' /></div>
+        </>)}
+        <div className="form-field"><label>Agentless ingestion — Pub/Sub subscription <span className="muted">(optional)</span></label>
+          <input value={subscription} onChange={(e) => setSubscription(e.target.value)} placeholder="toovix-dam-audit-sub (or projects/…/subscriptions/…)" />
+          <span className="muted" style={{ fontSize: 11 }}>The subscription the DAM pulls managed-DB audit events from (Cloud Logging → Pub/Sub). Leave blank for discovery-only.</span></div>
+      </>)}
+
+      {provider === 'aws' && (<>
+        <div className="form-field"><label>Set up a read-only IAM user</label>
+          <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{AWS_SETUP}</pre></div>
+        <div className="form-row" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {field('Access key id', 'accessKeyId', { mono: true, placeholder: 'AKIA…' })}
+          {field('Secret access key', 'secretAccessKey', { mono: true, password: true, placeholder: '••••••••' })}
+          {field('Region', 'region', { placeholder: 'us-east-1' })}
         </div>
-      )}
-      {!keyless && (
-        <div className="form-field"><label>{provider === 'gcp' ? 'Service-account key (JSON)' : 'Read-only credential (JSON)'}</label>
-          <textarea className="mono" value={credential} onChange={(e) => setCredential(e.target.value)} rows={7} style={{ width: '100%', fontSize: 11 }} placeholder='{ "type": "service_account", "project_id": "…", "client_email": "…", "private_key": "-----BEGIN PRIVATE KEY-----\\n…" }' />
-          <span className="muted" style={{ fontSize: 11 }}>Paste the key file contents. Stored write-only; used read-only against the cloud API.</span>
+        <span className="muted" style={{ fontSize: 11 }}>RDS/Aurora is per-region — add one connector per region you use.</span>
+      </>)}
+
+      {provider === 'azure' && (<>
+        <div className="form-field"><label>Set up a read-only service principal</label>
+          <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{AZURE_SETUP}</pre></div>
+        <div className="form-row" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {field('Subscription id', 'subscriptionId', { mono: true, placeholder: '00000000-0000-…' })}
+          {field('Tenant id', 'tenantId', { mono: true, placeholder: '00000000-0000-…' })}
+          {field('Client (app) id', 'clientId', { mono: true, placeholder: '00000000-0000-…' })}
+          {field('Client secret', 'clientSecret', { mono: true, password: true, placeholder: '••••••••' })}
         </div>
-      )}
-      <div className="form-field"><label>Agentless ingestion — Pub/Sub subscription <span className="muted">(optional)</span></label>
-        <input value={subscription} onChange={(e) => setSubscription(e.target.value)} placeholder="toovix-dam-audit-sub (or projects/…/subscriptions/…)" />
-        <span className="muted" style={{ fontSize: 11 }}>The subscription the DAM pulls managed-DB audit events from (Cloud Logging → Pub/Sub). Leave blank for discovery-only.</span>
-      </div>
-      <div className="modal-footer" style={{ padding: '6px 0 0', justifyContent: 'flex-end', gap: 8 }}>
+      </>)}
+
+      {provider === 'oci' && (<>
+        <div className="form-field"><label>Set up a read-only API key</label>
+          <pre className="dep-cmd" style={{ whiteSpace: 'pre-wrap', margin: 0, fontSize: 11 }}>{OCI_SETUP}</pre></div>
+        <div className="form-row" style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          {field('Tenancy OCID', 'tenancy', { mono: true, placeholder: 'ocid1.tenancy.oc1…' })}
+          {field('User OCID', 'user', { mono: true, placeholder: 'ocid1.user.oc1…' })}
+          {field('Fingerprint', 'fingerprint', { mono: true, placeholder: 'aa:bb:cc:…' })}
+          {field('Region', 'region', { placeholder: 'us-phoenix-1' })}
+          {field('Compartment OCID', 'compartmentId', { mono: true, placeholder: 'ocid1.compartment.oc1… (optional — defaults to tenancy)' })}
+        </div>
+        <div className="form-field"><label>API private key (PEM)</label>
+          <textarea className="mono" value={f.privateKey || ''} onChange={set('privateKey')} rows={5} style={{ width: '100%', fontSize: 11 }} placeholder="-----BEGIN PRIVATE KEY-----&#10;…&#10;-----END PRIVATE KEY-----" /></div>
+      </>)}
+
+      <div className="modal-footer" style={{ padding: '10px 0 0', justifyContent: 'flex-end', gap: 8 }}>
         <button className="btn-secondary" onClick={onClose}>Cancel</button>
         <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Saving…' : 'Save connector'}</button>
       </div>
