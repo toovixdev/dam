@@ -107,7 +107,7 @@ export default function Masking() {
                     <td><span className={`badge ${c.sensitivity === 'critical' ? 'sev-critical' : 'sev-high'}`}>{c.sensitivity}</span></td>
                     <td className="muted">{c.masked ? methodFor(c.tag) : (c.masked_at_rest ? `at rest · ${c.mask_at_rest_method || 'redaction'}` : '—')}</td>
                     <td>{c.masked ? <span className="badge green">masked</span> : (c.masked_at_rest ? <span className="badge" style={{ background: 'var(--info-soft)', color: 'var(--info)' }} title="Already masked/redacted in the database — not a gap">masked at rest</span> : <span className="badge red">unmasked</span>)}</td>
-                    <td><button className={`switch ${c.masked ? 'on' : ''}`} aria-label="toggle masking" title={c.masked_at_rest && !c.masked ? 'Already masked at rest — dynamic masking optional' : 'Toggle dynamic masking'} disabled={!maskingEnabled || busyId === c.id} onClick={() => toggle(c)} /></td>
+                    <td><button className={`switch ${c.masked ? 'on' : ''}`} aria-label="toggle masking" title={c.masked_at_rest ? 'Already masked at rest — dynamic masking not needed' : 'Toggle dynamic masking'} disabled={!maskingEnabled || busyId === c.id || c.masked_at_rest} onClick={() => toggle(c)} /></td>
                   </tr>
                 ))}
               </tbody>

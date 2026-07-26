@@ -4531,7 +4531,7 @@ app.get('/api/agents/masking-policy', async (req, res) => {
     const rows = (await pgPool.query(
       `SELECT d.tenant_id, d.name db, o.object_name tbl, cc.column_name col, COALESCE(cc.tags[1],'sensitive') tag
        FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id
-       WHERE cc.is_masked = true`)).rows;
+       WHERE cc.is_masked = true AND NOT cc.masked_at_rest`)).rows;
     const columns = rows
       .filter(r => maskingEnabled.has(r.tenant_id)) // feature-flag gate
       .map(r => ({ db: r.db, table: r.tbl, column: r.col, method: MASK_METHOD[r.tag] || 'redact' }));
@@ -7873,6 +7873,13 @@ app.get('/api/compliance/masking', authRequired, async (req, res) => {
 });
 app.post('/api/classification/columns/:id/mask', authRequired, async (req, res) => {
   const masked = req.body && req.body.masked !== undefined ? !!req.body.masked : true;
+  // A column already masked at rest is protected — dynamic masking would be redundant
+  // double-masking, so we refuse to enable it (server-side guard; the UI also disables the toggle).
+  if (masked) {
+    const cur = (await pgPool.query('SELECT masked_at_rest FROM classified_columns WHERE id = $1', [req.params.id])).rows[0];
+    if (!cur) return res.status(404).json({ error: 'Column not found' });
+    if (cur.masked_at_rest) return res.status(409).json({ error: 'Column is already masked at rest — dynamic masking not needed' });
+  }
   const { rows } = await pgPool.query('UPDATE classified_columns SET is_masked = $2 WHERE id = $1 RETURNING id, is_masked', [req.params.id, masked]);
   if (!rows.length) return res.status(404).json({ error: 'Column not found' });
   res.json(rows[0]);
