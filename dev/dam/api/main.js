@@ -719,6 +719,11 @@ async function runAuthMigration() {
     // Columns now belong to an object; schema/table move up to the object.
     await client.query(`ALTER TABLE classified_columns ADD COLUMN IF NOT EXISTS object_id UUID REFERENCES classified_objects(id)`);
     await client.query(`ALTER TABLE classified_columns ADD COLUMN IF NOT EXISTS sensitivity VARCHAR(15)`);
+    // Detected during classification: the column's stored values already look masked/redacted at
+    // rest (static masking / tokenised / app-redacted). Distinct from is_masked (DAM dynamically
+    // masks it via the inline proxy). Either state counts as "protected" for coverage.
+    await client.query(`ALTER TABLE classified_columns ADD COLUMN IF NOT EXISTS masked_at_rest BOOLEAN DEFAULT false`);
+    await client.query(`ALTER TABLE classified_columns ADD COLUMN IF NOT EXISTS mask_at_rest_method VARCHAR(20)`);
     await client.query(`ALTER TABLE classified_columns DROP COLUMN IF EXISTS schema_name`);
     await client.query(`ALTER TABLE classified_columns DROP COLUMN IF EXISTS table_name`);
 
@@ -3127,7 +3132,7 @@ app.get('/api/admin/tenants/:id/health', async (req, res) => {
           AVG(EXTRACT(EPOCH FROM (resolved_at - created_at))) FILTER (WHERE resolved_at IS NOT NULL) AS avg_resp_s
         FROM alerts WHERE tenant_id = $1`, [id]),
       pgPool.query(`SELECT COUNT(*) AS c FROM alerts WHERE tenant_id = $1 AND created_at >= now() - interval '24 hours'`, [id]),
-      pgPool.query(`SELECT COUNT(*) AS cols, COUNT(*) FILTER (WHERE is_masked) AS masked,
+      pgPool.query(`SELECT COUNT(*) AS cols, COUNT(*) FILTER (WHERE is_masked OR masked_at_rest) AS masked,
           COUNT(*) FILTER (WHERE confidence < 0.85) AS pending, MAX(last_scanned_at) AS last_scan
         FROM classified_columns WHERE tenant_id = $1`, [id]),
       pgPool.query('SELECT type, status, last_sync_at FROM integrations WHERE tenant_id = $1', [id]),
@@ -7675,9 +7680,9 @@ app.post('/api/classification/scan-results', async (req, res) => {
       objCount++;
       for (const col of (obj.columns || [])) {
         await pgPool.query(
-          `INSERT INTO classified_columns (tenant_id, database_id, object_id, column_name, data_type, tags, confidence, detection_method, sensitivity, is_masked)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-          [dbRow.tenant_id, dbRow.id, o.rows[0].id, col.column_name, col.data_type || null, col.tags || [], col.confidence || 0, col.detection_method || 'none', col.sensitivity || 'low', !!col.is_masked]
+          `INSERT INTO classified_columns (tenant_id, database_id, object_id, column_name, data_type, tags, confidence, detection_method, sensitivity, is_masked, masked_at_rest, mask_at_rest_method)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+          [dbRow.tenant_id, dbRow.id, o.rows[0].id, col.column_name, col.data_type || null, col.tags || [], col.confidence || 0, col.detection_method || 'none', col.sensitivity || 'low', !!col.is_masked, !!col.is_masked_at_rest, col.mask_at_rest_method || null]
         );
         colCount++;
       }
@@ -7703,10 +7708,10 @@ app.get('/api/classification/runs', authRequired, async (req, res) => {
 async function complianceMetrics() {
   const c = (await pgPool.query(`SELECT
       COUNT(*) FILTER (WHERE sensitivity IN ('high','critical')) sensitive,
-      COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND is_masked) masked_sensitive,
-      COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND NOT is_masked) unmasked_sensitive,
-      COUNT(*) FILTER (WHERE 'pci'=ANY(tags) AND NOT is_masked) pci_unmasked,
-      COUNT(*) FILTER (WHERE ('pii'=ANY(tags) OR 'gdpr'=ANY(tags)) AND NOT is_masked) pii_unmasked
+      COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND (is_masked OR masked_at_rest)) masked_sensitive,
+      COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND NOT (is_masked OR masked_at_rest)) unmasked_sensitive,
+      COUNT(*) FILTER (WHERE 'pci'=ANY(tags) AND NOT (is_masked OR masked_at_rest)) pci_unmasked,
+      COUNT(*) FILTER (WHERE ('pii'=ANY(tags) OR 'gdpr'=ANY(tags)) AND NOT (is_masked OR masked_at_rest)) pii_unmasked
     FROM classified_columns`)).rows[0];
   const d = (await pgPool.query(`SELECT COUNT(*) total,
       COUNT(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)) unmonitored
@@ -7714,7 +7719,7 @@ async function complianceMetrics() {
   const unmasked = (await pgPool.query(
     `SELECT d.name db, o.object_name obj, cc.column_name col, COALESCE(cc.tags[1],'sensitive') tag, cc.sensitivity
      FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id
-     WHERE cc.sensitivity IN ('high','critical') AND cc.is_masked=false ORDER BY cc.sensitivity LIMIT 50`)).rows
+     WHERE cc.sensitivity IN ('high','critical') AND NOT (cc.is_masked OR cc.masked_at_rest) ORDER BY cc.sensitivity LIMIT 50`)).rows
     .map((r) => ({ label: `${r.db}.${r.obj}.${r.col}`, tag: r.tag, sensitivity: r.sensitivity }));
   const unmonList = (await pgPool.query(`SELECT name FROM databases d WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id) LIMIT 50`)).rows.map((r) => r.name);
   return {
@@ -7846,20 +7851,25 @@ app.get('/api/compliance/masking', authRequired, async (req, res) => {
   const T = req.user.tenantId;
   const cov = (await pgPool.query(`SELECT
       COUNT(*) FILTER (WHERE sensitivity IN ('high','critical')) sensitive,
-      COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND is_masked) masked FROM classified_columns WHERE tenant_id = $1`, [T])).rows[0];
+      COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND is_masked) masked,
+      COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND masked_at_rest AND NOT is_masked) masked_at_rest,
+      COUNT(*) FILTER (WHERE sensitivity IN ('high','critical') AND (is_masked OR masked_at_rest)) protected
+      FROM classified_columns WHERE tenant_id = $1`, [T])).rows[0];
+  // A column already masked at rest is protected, so it's not a gap to dynamically mask.
   const unmasked = (await pgPool.query(
     `SELECT cc.id, d.name db, o.object_name obj, cc.column_name col, COALESCE(cc.tags[1],'sensitive') tag, cc.sensitivity
      FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id
-     WHERE cc.tenant_id = $1 AND cc.sensitivity IN ('high','critical') AND cc.is_masked = false
+     WHERE cc.tenant_id = $1 AND cc.sensitivity IN ('high','critical') AND NOT (cc.is_masked OR cc.masked_at_rest)
      ORDER BY CASE cc.sensitivity WHEN 'critical' THEN 0 ELSE 1 END LIMIT 50`, [T])).rows;
   // Every sensitive column with its current masked state — drives the Masking table + toggles.
   const columns = (await pgPool.query(
-    `SELECT cc.id, d.name db, o.object_name obj, cc.column_name col, COALESCE(cc.tags[1],'sensitive') tag, cc.sensitivity, cc.is_masked AS masked
+    `SELECT cc.id, d.name db, o.object_name obj, cc.column_name col, COALESCE(cc.tags[1],'sensitive') tag, cc.sensitivity,
+            cc.is_masked AS masked, cc.masked_at_rest, cc.mask_at_rest_method
      FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id
      WHERE cc.tenant_id = $1 AND cc.sensitivity IN ('high','critical')
      ORDER BY CASE cc.sensitivity WHEN 'critical' THEN 0 ELSE 1 END, d.name, o.object_name, cc.column_name LIMIT 200`, [T])).rows;
-  const sensitive = +cov.sensitive, masked = +cov.masked;
-  res.json({ sensitive, masked, pct: sensitive ? Math.round((masked / sensitive) * 100) : 100, unmasked, columns });
+  const sensitive = +cov.sensitive, masked = +cov.masked, atRest = +cov.masked_at_rest, protectedN = +cov.protected;
+  res.json({ sensitive, masked, maskedAtRest: atRest, protected: protectedN, pct: sensitive ? Math.round((protectedN / sensitive) * 100) : 100, unmasked, columns });
 });
 app.post('/api/classification/columns/:id/mask', authRequired, async (req, res) => {
   const masked = req.body && req.body.masked !== undefined ? !!req.body.masked : true;
@@ -7898,8 +7908,8 @@ async function frameworkReportData(tenantId, personalTags) {
       LIMIT 60`, [tenantId, personalTags])).rows;
   const cc = (await pgPool.query(
     `SELECT COUNT(*) total,
-            COUNT(*) FILTER (WHERE is_masked) masked,
-            COUNT(*) FILTER (WHERE NOT is_masked) unmasked
+            COUNT(*) FILTER (WHERE is_masked OR masked_at_rest) masked,
+            COUNT(*) FILTER (WHERE NOT (is_masked OR masked_at_rest)) unmasked
        FROM classified_columns WHERE tenant_id = $1 AND tags && $2`, [tenantId, personalTags])).rows[0];
 
   // Monitoring coverage

@@ -57,6 +57,10 @@ type Config struct {
 	DBPass       string
 	DBName       string // postgres: the database to classify (information_schema is per-DB in PG)
 	ClassifyMins int
+	// classify: also sample a few stored values per sensitive column to detect data that is
+	// ALREADY masked/redacted at rest (so it isn't reported as a masking gap). Values are
+	// analysed locally — only the derived boolean+method are sent, never the sampled data.
+	SampleAtRest bool
 	// host mode: tag a read 'large-result' when the total response exceeds this many bytes.
 	// Tunable without a rebuild; 0 disables the tag. Independent of the eBPF capture window.
 	LargeResultBytes int64
@@ -134,6 +138,7 @@ func loadConfig() Config {
 		DBPass:    env("DB_PASSWORD", ""),
 		DBName:    env("DB_NAME", ""),
 		ClassifyMins: atoiDefault(env("CLASSIFY_INTERVAL_MIN", "30"), 30),
+		SampleAtRest: env("CLASSIFY_SAMPLE", "true") == "true",
 		LargeResultBytes: int64(atoiDefault(env("LARGE_RESULT_BYTES", "1048576"), 1048576)), // 1 MiB default
 		AuditLog:    env("AUDIT_LOG", ""),
 		AuditSource: env("AUDIT_SOURCE", ""),
@@ -851,6 +856,99 @@ func classifyCol(name string) (tag, sens string, ok bool) {
 	return "", "", false
 }
 
+// ── At-rest masking detection ─────────────────────────────────────────────────
+// Some columns are already masked/redacted in the database itself (static masking, tokenised
+// storage, or app-side redaction) — those should NOT count as dynamic-masking gaps. We sample a
+// few stored values per sensitive column and look for the tell-tale of a masked value.
+//
+// Signatures (deliberately conservative to avoid false positives on real data):
+//   • a run of 3+ hard fill chars  * # • ●            → ****1234, 4111********1111
+//   • a run of 4+ X (upper or lower)                  → XXX-XX-6789, xxxxxxxx
+//   • an explicit redaction marker                    → REDACTED, [MASKED], ***REDACTED***
+var reMaskFill = regexp.MustCompile(`[*#•●]{3,}`)
+var reMaskX = regexp.MustCompile(`(?i)x{4,}`)
+var reMaskMarker = regexp.MustCompile(`(?i)^\s*[\[*]*\s*(redacted|masked|restricted)\s*[\]*]*\s*$`)
+
+func looksMaskedValue(v string) (bool, string) {
+	if reMaskMarker.MatchString(v) {
+		return true, "marker"
+	}
+	if reMaskFill.MatchString(v) || reMaskX.MatchString(v) {
+		return true, "redaction"
+	}
+	return false, ""
+}
+
+// detectMaskedAtRest returns whether the sampled values are dominated by masked-looking values.
+// Needs a meaningful sample (>=8 non-empty) and >=80% hit rate before it will claim "masked".
+func detectMaskedAtRest(values []string) (bool, string) {
+	n, hit := 0, 0
+	method := ""
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+		n++
+		if ok, m := looksMaskedValue(v); ok {
+			hit++
+			if method == "" {
+				method = m
+			}
+		}
+	}
+	if n < 8 {
+		return false, ""
+	}
+	if float64(hit)/float64(n) >= 0.8 {
+		return true, method
+	}
+	return false, ""
+}
+
+// quoteIdent escapes an identifier for the given driver's quoting style.
+func quoteIdent(driver, id string) string {
+	switch driver {
+	case "mysql":
+		return "`" + strings.ReplaceAll(id, "`", "``") + "`"
+	case "sqlserver":
+		return "[" + strings.ReplaceAll(id, "]", "]]") + "]"
+	default: // postgres, oracle — ANSI double-quote
+		return `"` + strings.ReplaceAll(id, `"`, `""`) + `"`
+	}
+}
+
+// sampleColumnValues pulls up to 200 non-null values from a single column to feed the detector.
+// Read-only, capped, and the raw values never leave the agent.
+func sampleColumnValues(db *sql.DB, driver, schema, table, col string) []string {
+	qc, qs, qt := quoteIdent(driver, col), quoteIdent(driver, schema), quoteIdent(driver, table)
+	var q string
+	switch driver {
+	case "sqlserver":
+		q = fmt.Sprintf("SELECT TOP 200 %s FROM %s.%s WHERE %s IS NOT NULL", qc, qs, qt, qc)
+	case "oracle":
+		q = fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s IS NOT NULL AND ROWNUM <= 200", qc, qs, qt, qc)
+	default: // mysql, postgres
+		q = fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s IS NOT NULL LIMIT 200", qc, qs, qt, qc)
+	}
+	rows, err := db.Query(q)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	out := make([]string, 0, 200)
+	for rows.Next() {
+		var s sql.NullString
+		if err := rows.Scan(&s); err != nil {
+			continue
+		}
+		if s.Valid {
+			out = append(out, s.String)
+		}
+	}
+	return out
+}
+
 var sensRank = map[string]int{"low": 0, "medium": 1, "high": 2, "critical": 3}
 
 // scanTriggerLoop makes the Classification page's "Run Scan" button work: it polls the
@@ -1110,6 +1208,13 @@ func runClassificationScan(cfg Config) error {
 			log.Printf("classification: query %q failed: %v", t.dbLabel, err)
 			continue
 		}
+		// Collect sensitive columns to sample AFTER the schema cursor is closed — most drivers
+		// won't run a second query while these rows are still open on the same connection.
+		type maskSample struct {
+			cm            map[string]interface{}
+			schema, table, col string
+		}
+		var pending []maskSample
 		for rows.Next() {
 			var sch, tbl, col, dt string
 			if err := rows.Scan(&sch, &tbl, &col, &dt); err != nil {
@@ -1128,13 +1233,25 @@ func runClassificationScan(cfg Config) error {
 			}
 			o.total++
 			if tag, sens, ok := classifyCol(col); ok {
-				o.cols = append(o.cols, map[string]interface{}{
+				cm := map[string]interface{}{
 					"column_name": col, "data_type": dt, "tags": []string{tag},
-					"sensitivity": sens, "detection_method": "pattern", "confidence": 0.85, "is_masked": false,
-				})
+					"sensitivity": sens, "detection_method": "pattern", "confidence": 0.85,
+					"is_masked": false, "is_masked_at_rest": false,
+				}
+				o.cols = append(o.cols, cm)
+				if cfg.SampleAtRest {
+					pending = append(pending, maskSample{cm, sch, tbl, col})
+				}
 			}
 		}
 		rows.Close()
+		// Sample stored values per sensitive column and flag those already masked at rest.
+		for _, p := range pending {
+			if masked, method := detectMaskedAtRest(sampleColumnValues(db, t.driver, p.schema, p.table, p.col)); masked {
+				p.cm["is_masked_at_rest"] = true
+				p.cm["mask_at_rest_method"] = method
+			}
+		}
 		db.Close()
 	}
 

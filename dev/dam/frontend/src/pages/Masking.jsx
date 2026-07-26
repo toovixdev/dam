@@ -34,7 +34,8 @@ export default function Masking() {
   if (error || !data) return <Layout><div className="card" style={{ padding: 16, color: 'var(--danger)' }}>Error loading masking: {error || 'no data'}</div></Layout>;
 
   const columns = data.columns || [];
-  const gaps = columns.filter((c) => !c.masked);
+  // A column already masked at rest in the DB is protected — not a gap to dynamically mask.
+  const gaps = columns.filter((c) => !c.masked && !c.masked_at_rest);
 
   const toggle = async (c) => {
     setBusyId(c.id);
@@ -75,7 +76,8 @@ export default function Masking() {
       <section className="kpi-grid">
         <KpiCard icon="▦" iconBg="var(--info-soft)" iconColor="var(--info)" label="Sensitive columns" value={data.sensitive} detail="high / critical" />
         <KpiCard icon="◎" iconBg="var(--green-soft)" iconColor="var(--green)" label="Masked" value={data.masked} detail="query-time masking" />
-        <KpiCard icon="◐" iconBg={data.pct >= 80 ? 'var(--green-soft)' : 'var(--amber-soft)'} iconColor={data.pct >= 80 ? 'var(--green)' : 'var(--amber)'} label="Coverage" value={`${data.pct}%`} detail="of sensitive columns" />
+        <KpiCard icon="▢" iconBg="var(--info-soft)" iconColor="var(--info)" label="Masked at rest" value={data.maskedAtRest ?? 0} detail="already masked in DB" />
+        <KpiCard icon="◐" iconBg={data.pct >= 80 ? 'var(--green-soft)' : 'var(--amber-soft)'} iconColor={data.pct >= 80 ? 'var(--green)' : 'var(--amber)'} label="Coverage" value={`${data.pct}%`} detail="protected (dynamic + at rest)" />
         <KpiCard icon="⚠" iconBg="var(--danger-soft)" iconColor="var(--danger)" label="Unmasked" value={gaps.length} detail="gaps open" detailType={gaps.length > 0 ? 'down' : 'up'} />
       </section>
 
@@ -103,9 +105,9 @@ export default function Masking() {
                     <td className="mono" style={{ fontSize: 12 }}>{c.db}.{c.obj}.{c.col}</td>
                     <td><span className={`badge ${c.tag === 'pci' ? 'amber' : 'red'}`}>{c.tag}</span></td>
                     <td><span className={`badge ${c.sensitivity === 'critical' ? 'sev-critical' : 'sev-high'}`}>{c.sensitivity}</span></td>
-                    <td className="muted">{c.masked ? methodFor(c.tag) : '—'}</td>
-                    <td>{c.masked ? <span className="badge green">masked</span> : <span className="badge red">unmasked</span>}</td>
-                    <td><button className={`switch ${c.masked ? 'on' : ''}`} aria-label="toggle masking" disabled={!maskingEnabled || busyId === c.id} onClick={() => toggle(c)} /></td>
+                    <td className="muted">{c.masked ? methodFor(c.tag) : (c.masked_at_rest ? `at rest · ${c.mask_at_rest_method || 'redaction'}` : '—')}</td>
+                    <td>{c.masked ? <span className="badge green">masked</span> : (c.masked_at_rest ? <span className="badge" style={{ background: 'var(--info-soft)', color: 'var(--info)' }} title="Already masked/redacted in the database — not a gap">masked at rest</span> : <span className="badge red">unmasked</span>)}</td>
+                    <td><button className={`switch ${c.masked ? 'on' : ''}`} aria-label="toggle masking" title={c.masked_at_rest && !c.masked ? 'Already masked at rest — dynamic masking optional' : 'Toggle dynamic masking'} disabled={!maskingEnabled || busyId === c.id} onClick={() => toggle(c)} /></td>
                   </tr>
                 ))}
               </tbody>
