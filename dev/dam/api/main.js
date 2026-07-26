@@ -8217,12 +8217,18 @@ app.post('/api/compliance/catalog/:id/run', authRequired, async (req, res) => {
     const esc = chEsc(req.user.tenantId);
     const base = `FROM ${evDb}.events WHERE tenant_id = '${esc}' AND timestamp >= now() - INTERVAL ${days} DAY AND (${def.where()})`;
     const total = parseInt(await chSafe(`SELECT count() ${base}`, 'TabSeparated')) || 0;
+    // Filter in an INNER query, then derive display columns in the outer. Projecting
+    // `arrayStringConcat(arraySort(tags), ',') AS tags` in the same SELECT as a WHERE on
+    // `hasAny(tags, …)` lets the String alias SHADOW the Array `tags` column under ClickHouse's
+    // analyzer → "hasAny must be an array" → the whole row query errors → chSafe silently returns
+    // [] → the report showed a count but zero rows. The subquery keeps the WHERE on the real column.
     const rows = await chSafe(
       `SELECT toString(timestamp) AS ts, principal, database_name,
         concat(schema_name, if(table_name != '', concat('.', table_name), '')) AS object,
         operation, toString(row_count) AS rows, client_ip,
         arrayStringConcat(arraySort(tags), ',') AS tags, substring(sql_text, 1, 240) AS sql_preview
-       ${base} ORDER BY timestamp DESC LIMIT 1000`);
+       FROM (SELECT * ${base}) ORDER BY timestamp DESC LIMIT 1000`);
+    if (total > 0 && (!Array.isArray(rows) || rows.length === 0)) console.warn(`[Compliance] ${def.id}: count=${total} but 0 rows snapshotted — the row query may have failed silently`);
     const now = new Date();
     const from = new Date(now.getTime() - days * 86400000);
     const snapshot = {
