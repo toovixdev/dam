@@ -29,8 +29,20 @@ export default function Compliance() {
   const [selected, setSelected] = useState(null);
   const [expanded, setExpanded] = useState(null);
 
+  const attestControl = async (key, decision) => {
+    let note = '';
+    if (decision === 'exception') {
+      note = window.prompt('Reason for the exception (required):') || '';
+      if (!note.trim()) return;
+    }
+    const res = await apiPost(`/compliance/controls/${key}`, { decision, note });
+    if (res && res.ok) { toast(decision === 'clear' ? 'Attestation cleared' : `Control ${decision}`, 'ok'); refetchFw(); }
+    else toast((res && res.error) || 'Could not update control', 'err');
+  };
+
   const goEvidence = (link) => {
     if (!link) return;
+    if (link.to.startsWith('attest:')) { attestControl(link.to.slice(7), 'attested'); return; }
     if (link.to.startsWith('tab:')) setTab(link.to.slice(4));
     else navigate(link.to);
   };
@@ -103,7 +115,7 @@ export default function Compliance() {
                   <Fragment key={i}>
                     <tr style={{ cursor: c.evidence ? 'pointer' : 'default' }} onClick={() => c.evidence && setExpanded(expanded === i ? null : i)}>
                       <td><span className={`badge ${c.status === 'ok' ? 'green' : 'amber'} dot`}>{c.status === 'ok' ? 'pass' : 'gap'}</span></td>
-                      <td>{c.control}</td>
+                      <td>{c.control}{c.source && <span className="muted" style={{ fontSize: 11, marginLeft: 8 }} title={c.source === 'measured' ? 'Status computed live from telemetry' : 'Policy control — status from your attestation'}>· {c.source}</span>}</td>
                       <td className="mono" style={{ fontSize: 12 }}>{c.reference}</td>
                       <td>{c.evidence ? <span className="card-link">{expanded === i ? 'Hide ▴' : 'View ▾'}</span> : <span className="muted">—</span>}</td>
                     </tr>
@@ -117,7 +129,13 @@ export default function Compliance() {
                                 {c.evidence.items.map((it, k) => <li key={k}>{it}</li>)}
                               </ul>
                             )}
-                            {c.evidence.link && (
+                            {c.source === 'attested' ? (
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                <button className="btn-primary" style={{ padding: '4px 12px', fontSize: 12 }} onClick={(e) => { e.stopPropagation(); attestControl(c.key, 'attested'); }}>✓ Attest</button>
+                                <button className="btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }} onClick={(e) => { e.stopPropagation(); attestControl(c.key, 'exception'); }}>⚠ Log exception</button>
+                                {c.status === 'ok' && <button className="btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }} onClick={(e) => { e.stopPropagation(); attestControl(c.key, 'clear'); }}>Clear</button>}
+                              </div>
+                            ) : c.evidence.link && (
                               <button className="btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }} onClick={(e) => { e.stopPropagation(); goEvidence(c.evidence.link); }}>{c.evidence.link.label} →</button>
                             )}
                           </div>

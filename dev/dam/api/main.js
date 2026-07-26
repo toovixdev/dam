@@ -980,6 +980,20 @@ async function runAuthMigration() {
       private_pem TEXT, public_pem TEXT, fingerprint VARCHAR(80), created_at TIMESTAMPTZ DEFAULT now()
     )`);
 
+    // Per-tenant attestation state for compliance controls that CANNOT be measured from
+    // telemetry (policy/process controls — e.g. breach-notification runbook, at-rest
+    // encryption, NTP sync). Absence of a row = "not attested" = the control shows as a
+    // gap (the honest default). status: 'attested' (pass) | 'exception' (accepted-risk gap).
+    await client.query(`CREATE TABLE IF NOT EXISTS compliance_control_state (
+      tenant_id   UUID NOT NULL,
+      control_key VARCHAR(80) NOT NULL,
+      status      VARCHAR(20) NOT NULL DEFAULT 'attested',
+      note        VARCHAR(400),
+      actor       VARCHAR(200),
+      updated_at  TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (tenant_id, control_key)
+    )`);
+
     // Data-plane integrity: signed Merkle checkpoints over event windows (stored
     // here in the control plane, separate from ClickHouse, so deleting events
     // can't delete the proof they existed).
@@ -7837,6 +7851,21 @@ async function complianceMetrics() {
      WHERE cc.sensitivity IN ('high','critical') AND NOT (cc.is_masked OR cc.masked_at_rest) ORDER BY cc.sensitivity LIMIT 50`)).rows
     .map((r) => ({ label: `${r.db}.${r.obj}.${r.col}`, tag: r.tag, sensitivity: r.sensitivity }));
   const unmonList = (await pgPool.query(`SELECT name FROM databases d WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id) LIMIT 50`)).rows.map((r) => r.name);
+  // Extra control signals. Each is defensive (a missing table/column just yields 0), so an
+  // unmeasurable control degrades to a gap rather than crashing the whole posture.
+  const pg1 = async (sql) => { try { return (await pgPool.query(sql)).rows[0] || {}; } catch { return {}; } };
+  const chk  = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE signature IS NOT NULL AND signature<>'') signed FROM audit_checkpoints`);
+  const jit  = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE approved_by IS NOT NULL AND approved_by<>requester) sod FROM jit_grants`);
+  const appr = await pg1(`SELECT COUNT(*) FILTER (WHERE jsonb_array_length(COALESCE(chain,'[]'::jsonb))>=1) multi FROM approval_requests`);
+  const inst = await pg1(`SELECT COUNT(*) n, COUNT(*) FILTER (WHERE region IS NULL OR region='') noregion, COUNT(DISTINCT region) regions FROM db_instances`);
+  const cls  = await pg1(`SELECT COUNT(*) n FROM classified_objects`);
+  const dsar = await pg1(`SELECT COUNT(*) n FROM dsar_requests`);
+  const pol  = await pg1(`SELECT COUNT(*) n FROM policies`);
+  const sched = await pg1(`SELECT
+      COUNT(*) FILTER (WHERE status='on' AND (report_type ILIKE '%vuln%' OR report_type ILIKE '%assess%' OR report_name ILIKE '%vuln%' OR report_name ILIKE '%assess%')) va,
+      COUNT(*) FILTER (WHERE status='on' AND (report_type ILIKE '%incident%' OR report_name ILIKE '%incident%')) incident,
+      COUNT(*) FILTER (WHERE status='on') active FROM report_schedules`);
+  const qp   = await pg1(`SELECT auto_quarantine FROM quarantine_policy WHERE id=1`);
   return {
     sensitive: +c.sensitive, maskedSensitive: +c.masked_sensitive, unmaskedSensitive: +c.unmasked_sensitive,
     pciUnmasked: +c.pci_unmasked, piiUnmasked: +c.pii_unmasked, dbTotal: +d.total, unmonitored: +d.unmonitored,
@@ -7845,95 +7874,171 @@ async function complianceMetrics() {
     piiAccess: parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE hasAny(tags,['pii','gdpr']) AND timestamp>=now()-INTERVAL 90 DAY", 'TabSeparated')) || 0,
     auditEvents: parseInt(await chSafe('SELECT count() FROM dam_analytics.events', 'TabSeparated')) || 0,
     privEvents: parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE operation IN ('GRANT','DDL') AND timestamp>=now()-INTERVAL 90 DAY", 'TabSeparated')) || 0,
+    distinctPrincipals: parseInt(await chSafe('SELECT uniqExact(principal) FROM dam_analytics.events', 'TabSeparated')) || 0,
+    sharedAcctEvents: parseInt(await chSafe("SELECT count() FROM dam_analytics.events WHERE lower(principal) IN ('root','admin','sa','postgres','system','mysql')", 'TabSeparated')) || 0,
+    chainCheckpoints: +(chk.n || 0), chainSigned: +(chk.signed || 0),
+    jitTotal: +(jit.n || 0), jitSod: +(jit.sod || 0), approvalsMultiParty: +(appr.multi || 0),
+    instTotal: +(inst.n || 0), instNoRegion: +(inst.noregion || 0), instRegions: +(inst.regions || 0),
+    classifiedObjects: +(cls.n || 0), dsarTotal: +(dsar.n || 0), policiesActive: +(pol.n || 0),
+    schedVA: +(sched.va || 0), schedIncident: +(sched.incident || 0), schedActive: +(sched.active || 0),
+    quarantineOn: !!qp.auto_quarantine,
   };
 }
-function buildFrameworks(m) {
-  const W = (cond) => (cond ? 'warn' : 'ok');
+// Every control resolves its status from a REAL source — never a hardcoded literal:
+//  • measured  — computed live from telemetry (activity, hash-chain, masking, monitoring,
+//                 classification, privileged-access brokering, region, principals).
+//  • attested  — a policy/process control that has no telemetry to measure; its status comes
+//                 from the tenant's compliance_control_state (attested = pass, exception/absent
+//                 = gap). `states` is that per-tenant map, keyed by control_key.
+function buildFrameworks(m, states = {}) {
+  const fmtD = (ts) => { try { return new Date(ts).toISOString().slice(0, 10); } catch { return String(ts || ''); } };
   const sensItems = m.unmaskedList.map((u) => `${u.label} (${u.tag}, ${u.sensitivity})`);
   const pciItems = m.unmaskedList.filter((u) => u.tag === 'pci').map((u) => `${u.label} (${u.sensitivity})`);
   const piiItems = m.unmaskedList.filter((u) => ['pii', 'gdpr', 'email', 'name', 'dob', 'address'].includes(u.tag)).map((u) => `${u.label} (${u.tag})`);
-  // Reusable evidence snippets (real counts + links to the proof screen).
-  const E = {
-    audit: { summary: `${m.auditEvents.toLocaleString()} activity events captured · hash-chain verified`, link: { label: 'View Audit Trail', to: '/audit' } },
-    pciAccess: { summary: `${m.pciAccess.toLocaleString()} cardholder-data access events logged (90d)`, link: { label: 'View activity', to: '/audit' } },
-    piiAccess: { summary: `${m.piiAccess.toLocaleString()} personal-data access events logged (90d)`, link: { label: 'View activity', to: '/audit' } },
-    priv: { summary: `${m.privEvents.toLocaleString()} privileged (GRANT/DDL) operations captured (90d)`, link: { label: 'View activity', to: '/audit' } },
-    dsar: { summary: 'Data-subject request workflow configured', link: { label: 'Open DSAR', to: '/dsar' } },
-    classification: { summary: `${m.sensitive} sensitive columns classified & monitored`, link: { label: 'View Classification', to: '/classification' } },
-    manual: { summary: 'Satisfied by manual attestation / configuration', link: null },
-    retention: { summary: 'Retention limits not configured for all databases', link: { label: 'Configure retention', to: '/settings' } },
-    va: { summary: 'Awaiting vulnerability-assessment evidence', link: { label: 'VA report', to: '/reports' } },
-  };
+
+  // ── Measured signals (all derived from complianceMetrics) ──
+  const covered = m.dbTotal > 0 && m.unmonitored === 0;                 // every database has an agent
+  const logging = m.auditEvents > 0;                                    // activity actually captured
+  const chainOk = m.chainCheckpoints > 0 && m.chainSigned > 0;          // signed tamper-evident chain
+  const privMon = m.privEvents > 0;                                     // privileged ops captured
+  const classified = m.sensitive > 0 || m.classifiedObjects > 0;        // classification has run
+  const localized = m.instTotal > 0 && m.instNoRegion === 0;            // every asset has a residency region
+  const sod = m.jitSod > 0 || m.approvalsMultiParty > 0;               // maker-checker on privileged access
+  const jitGov = m.jitTotal > 0;                                        // privileged access brokered/reviewable
+  const uniqueIds = m.distinctPrincipals > 0 && m.sharedAcctEvents === 0; // no shared/generic accounts
+  const vaSched = m.schedVA > 0;                                        // recurring VA report scheduled
+  const policyOn = m.policiesActive > 0;                                // access-control policies defined
+
+  // ── Evidence snippets (honest — they describe the real measured state) ──
+  const evLog = { summary: logging ? `${m.auditEvents.toLocaleString()} activity events captured` : 'No activity captured yet — deploy an agent', link: { label: 'View Audit Trail', to: '/audit' } };
+  const evCovered = covered ? { summary: `All ${m.dbTotal} database(s) monitored`, link: { label: 'View Databases', to: '/databases' } } : { summary: `${m.unmonitored} of ${m.dbTotal} database(s) without monitoring`, items: m.unmonitoredList, link: { label: 'View Databases', to: '/databases' } };
+  const evChain = { summary: chainOk ? `${m.chainCheckpoints.toLocaleString()} signed audit checkpoints · tamper-evident chain` : (m.chainCheckpoints > 0 ? `${m.chainCheckpoints} checkpoint(s), none signed yet` : 'No signed audit checkpoints yet'), link: { label: 'View Audit Trail', to: '/audit' } };
+  const evPriv = { summary: privMon ? `${m.privEvents.toLocaleString()} privileged (GRANT/DDL) operations captured (90d)` : 'No privileged operations captured yet', link: { label: 'View activity', to: '/audit' } };
+  const evClass = { summary: classified ? `${m.sensitive} sensitive column(s) · ${m.classifiedObjects} object(s) classified` : 'No classification results yet — run a scan', link: { label: 'View Classification', to: '/classification' } };
+  const evPci = { summary: `${m.pciAccess.toLocaleString()} cardholder-data access events logged (90d)`, link: { label: 'View activity', to: '/audit' } };
+  const evPii = { summary: `${m.piiAccess.toLocaleString()} personal-data access events logged (90d)`, link: { label: 'View activity', to: '/audit' } };
+  const evLocal = { summary: localized ? `All ${m.instTotal} instance(s) have a data-residency region (${m.instRegions} region(s))` : (m.instTotal > 0 ? `${m.instNoRegion} of ${m.instTotal} instance(s) missing a residency region` : 'No database instances registered'), link: { label: 'View Databases', to: '/databases' } };
+  const evSod = { summary: sod ? `${m.jitSod} approved privileged grant(s) (approver ≠ requester) · ${m.approvalsMultiParty} multi-party approval(s)` : 'No brokered/approved privileged access recorded', link: { label: 'View Audit Trail', to: '/audit' } };
+  const evJit = { summary: jitGov ? `${m.jitTotal} privileged-access grant(s) brokered & reviewable` : 'No just-in-time privileged-access brokering recorded', link: { label: 'View Audit Trail', to: '/audit' } };
+  const evUnique = { summary: uniqueIds ? `${m.distinctPrincipals} distinct principal(s) · no shared/generic accounts` : (m.sharedAcctEvents > 0 ? `${m.sharedAcctEvents.toLocaleString()} event(s) from shared/generic accounts (root/admin/sa…)` : 'No principal activity captured yet'), link: { label: 'View activity', to: '/audit' } };
+  const evVa = { summary: vaSched ? 'Recurring vulnerability-assessment report scheduled' : 'No recurring VA report scheduled', link: { label: 'Reports', to: '/reports' } };
+  const evPolicy = { summary: policyOn ? `${m.policiesActive} access-control policy/policies active` : 'No access-control policies defined', link: { label: 'Reports', to: '/reports' } };
+  const evInv = { summary: `${m.classifiedObjects} object(s) across ${m.dbTotal} database(s) inventoried`, link: { label: 'View Classification', to: '/classification' } };
   const gapMask = (items, n) => ({ summary: `${n} sensitive column(s) exposed to non-privileged roles`, items, link: { label: 'Fix in Masking', to: 'tab:masking' } });
-  const gapMon = () => ({ summary: `${m.unmonitored} database(s) without monitoring`, items: m.unmonitoredList, link: { label: 'View Databases', to: '/databases' } });
+
+  // measured control → status straight from a boolean signal
+  const meas = (key, ok, control, reference, evidence) => ({ key, status: ok ? 'ok' : 'warn', control, reference, evidence: evidence || null, source: 'measured' });
+  // attested control → status from the tenant's attestation state (absent = gap, honestly)
+  const att = (key, control, reference, supporting) => {
+    const s = states[key];
+    const status = s && s.status === 'attested' ? 'ok' : 'warn';
+    const evidence = s
+      ? { summary: (s.status === 'attested' ? `Attested by ${s.actor || '—'} on ${fmtD(s.updated_at)}` : `Exception logged by ${s.actor || '—'} on ${fmtD(s.updated_at)}`) + (s.note ? ` — ${s.note}` : '') + (supporting ? ` · ${supporting}` : ''), link: { label: 'Manage control', to: `attest:${key}` } }
+      : { summary: `Not yet attested — assign an owner and sign off${supporting ? ` · ${supporting}` : ''}`, link: { label: 'Attest control', to: `attest:${key}` } };
+    return { key, status, control, reference, evidence, source: 'attested' };
+  };
 
   const defs = [
     { key: 'pci', name: 'PCI-DSS v4', controls: [
-      ['ok', 'Req 10 — log all access to cardholder data', 'PCI 10.2', E.pciAccess],
-      ['ok', 'Req 7 — least-privilege enforced', 'PCI 7.2', E.classification],
-      [W(m.pciUnmasked > 0), m.pciUnmasked > 0 ? `Req 3 — ${m.pciUnmasked} cardholder column(s) not masked/tokenized` : 'Req 3 — cardholder data masked/tokenized', 'PCI 3.4', m.pciUnmasked > 0 ? gapMask(pciItems, m.pciUnmasked) : E.classification],
-      ['ok', 'Req 10.5 — audit trail integrity', 'PCI 10.5', E.audit] ] },
+      meas('pci.req10', logging, 'Req 10 — log all access to cardholder data', 'PCI 10.2', evPci),
+      att('pci.req7', 'Req 7 — least-privilege access enforced', 'PCI 7.2', jitGov ? `${m.jitTotal} brokered grant(s)` : 'no brokering signal'),
+      meas('pci.req3', !(m.pciUnmasked > 0), m.pciUnmasked > 0 ? `Req 3 — ${m.pciUnmasked} cardholder column(s) not masked/tokenized` : 'Req 3 — cardholder data masked/tokenized', 'PCI 3.4', m.pciUnmasked > 0 ? gapMask(pciItems, m.pciUnmasked) : evClass),
+      meas('pci.req10_5', chainOk, 'Req 10.5 — audit trail integrity', 'PCI 10.5', evChain) ] },
     { key: 'gdpr', name: 'GDPR', controls: [
-      ['ok', 'Database activity logging for all critical systems', 'GDPR Art.30', E.audit],
-      ['ok', 'Privileged user monitoring', 'GDPR Art.32', E.priv],
-      ['ok', 'Data subject access request workflow live', 'GDPR Art.15', E.dsar],
-      [W(m.piiUnmasked > 0), m.piiUnmasked > 0 ? `${m.piiUnmasked} personal-data column(s) unmasked` : 'Personal data masked for non-privileged roles', 'GDPR Art.32', m.piiUnmasked > 0 ? gapMask(piiItems, m.piiUnmasked) : E.classification],
-      ['ok', 'Tamper-evident audit trail (hash-chain)', 'GDPR Art.5(2)', E.audit] ] },
+      meas('gdpr.art30', covered, 'Database activity logging for all critical systems', 'GDPR Art.30', evCovered),
+      meas('gdpr.priv', privMon, 'Privileged user monitoring', 'GDPR Art.32', evPriv),
+      att('gdpr.dsar', 'Data subject access request workflow live', 'GDPR Art.15', `${m.dsarTotal} request(s) handled`),
+      meas('gdpr.mask', !(m.piiUnmasked > 0), m.piiUnmasked > 0 ? `${m.piiUnmasked} personal-data column(s) unmasked` : 'Personal data masked for non-privileged roles', 'GDPR Art.32', m.piiUnmasked > 0 ? gapMask(piiItems, m.piiUnmasked) : evClass),
+      meas('gdpr.art5', chainOk, 'Tamper-evident audit trail (hash-chain)', 'GDPR Art.5(2)', evChain) ] },
     { key: 'dpdpa', name: 'DPDPA 2023', controls: [
-      ['ok', 'Consent & purpose limitation tracked', 'DPDPA §6', E.manual],
-      ['ok', 'Data principal access (DSAR) workflow live', 'DPDPA §11', E.dsar],
-      ['warn', 'Retention limits not set on 1 database', 'DPDPA §8(7)', E.retention],
-      [W(m.unmaskedSensitive > 0), m.unmaskedSensitive > 0 ? `${m.unmaskedSensitive} sensitive column(s) unmasked for non-privileged roles` : 'Sensitive columns masked for non-privileged roles', 'DPDPA §8(5)', m.unmaskedSensitive > 0 ? gapMask(sensItems, m.unmaskedSensitive) : E.classification],
-      ['ok', 'Breach notification runbook + 72h timer', 'DPDPA §8(6)', E.manual],
-      ['ok', 'PII access fully monitored + tamper-evident', 'DPDPA §8(4)', E.piiAccess] ] },
+      att('dpdpa.consent', 'Consent & purpose limitation tracked', 'DPDPA §6', null),
+      att('dpdpa.dsar', 'Data principal access (DSAR) workflow live', 'DPDPA §11', `${m.dsarTotal} request(s) handled`),
+      att('dpdpa.retention', 'Retention limits configured', 'DPDPA §8(7)', null),
+      meas('dpdpa.mask', !(m.unmaskedSensitive > 0), m.unmaskedSensitive > 0 ? `${m.unmaskedSensitive} sensitive column(s) unmasked for non-privileged roles` : 'Sensitive columns masked for non-privileged roles', 'DPDPA §8(5)', m.unmaskedSensitive > 0 ? gapMask(sensItems, m.unmaskedSensitive) : evClass),
+      att('dpdpa.breach', 'Breach notification runbook + 72h timer', 'DPDPA §8(6)', null),
+      meas('dpdpa.pii_mon', logging && chainOk, 'PII access fully monitored + tamper-evident', 'DPDPA §8(4)', evPii) ] },
     { key: 'rbi', name: 'RBI CSF', controls: [
-      [W(m.unmonitored > 0), m.unmonitored > 0 ? `Activity logging gap on ${m.unmonitored} database(s)` : 'Database activity logging for all critical systems', 'RBI Baseline 4', m.unmonitored > 0 ? gapMon() : E.audit],
-      ['ok', 'Privileged user monitoring', 'RBI Baseline 8', E.priv],
-      ['ok', 'Data localization per RBI mandate', 'RBI Storage 2018', E.manual],
-      ['warn', 'Quarterly VA evidence pending sign-off', 'RBI Baseline 11', E.va],
-      ['ok', 'Tamper-evident audit trail (hash-chain)', 'RBI Baseline 16', E.audit] ] },
+      meas('rbi.log', covered, covered ? 'Database activity logging for all critical systems' : `Activity logging gap on ${m.unmonitored} database(s)`, 'RBI Baseline 4', evCovered),
+      meas('rbi.priv', privMon, 'Privileged user monitoring', 'RBI Baseline 8', evPriv),
+      meas('rbi.localize', localized, 'Data localization per RBI mandate', 'RBI Storage 2018', evLocal),
+      meas('rbi.va', vaSched, vaSched ? 'Quarterly VA cadence scheduled' : 'No quarterly VA cadence scheduled', 'RBI Baseline 11', evVa),
+      meas('rbi.chain', chainOk, 'Tamper-evident audit trail (hash-chain)', 'RBI Baseline 16', evChain) ] },
     { key: 'certin', name: 'CERT-In', controls: [
-      ['ok', 'Logs retained 180 days rolling', 'CERT-In 2022', E.audit],
-      ['ok', 'Time sync (NTP) on all collectors', 'CERT-In 2022', E.manual],
-      ['ok', '6h incident reporting hook to ITSM', 'CERT-In 2022', E.manual] ] },
+      att('certin.retention', 'Logs retained 180 days rolling', 'CERT-In 2022', logging ? `${m.auditEvents.toLocaleString()} events on record` : 'no events yet'),
+      att('certin.ntp', 'Time sync (NTP) on all collectors', 'CERT-In 2022', null),
+      att('certin.incident', '6h incident reporting hook to ITSM', 'CERT-In 2022', null) ] },
     { key: 'hipaa', name: 'HIPAA', controls: [
-      ['ok', 'Audit controls on all ePHI databases', '164.312(b)', E.audit],
-      ['ok', 'Access controls — unique user IDs enforced', '164.312(a)(1)', E.manual],
-      [W(m.unmonitored > 0), m.unmonitored > 0 ? `Missing audit trail on ${m.unmonitored} database(s)` : 'Audit trail on all databases', '164.312(b)', m.unmonitored > 0 ? gapMon() : E.audit],
-      ['ok', 'Automatic log-off configured (15m idle)', '164.312(a)(2)(iii)', E.manual],
-      ['ok', 'Encryption in transit (TLS 1.3)', '164.312(e)(1)', E.manual],
-      ['ok', 'Integrity controls — hash-chain on PHI logs', '164.312(c)(1)', E.audit] ] },
+      meas('hipaa.audit', covered, 'Audit controls on all ePHI databases', '164.312(b)', evCovered),
+      meas('hipaa.uniqueids', uniqueIds, 'Access controls — unique user IDs enforced', '164.312(a)(1)', evUnique),
+      meas('hipaa.trail', chainOk, 'Integrity of the audit trail on all databases', '164.312(b)', evChain),
+      att('hipaa.logoff', 'Automatic log-off configured (15m idle)', '164.312(a)(2)(iii)', null),
+      att('hipaa.tls', 'Encryption in transit (TLS 1.3)', '164.312(e)(1)', null),
+      meas('hipaa.integrity', chainOk, 'Integrity controls — hash-chain on PHI logs', '164.312(c)(1)', evChain) ] },
     { key: 'sox', name: 'SOX', controls: [
-      ['ok', 'All financial DB changes logged with user identity', 'SOX 302', E.audit],
-      ['ok', 'Separation of duties enforced on financial systems', 'SOX 404', E.manual],
-      ['ok', 'Tamper-evident audit trail for financial data', 'SOX 802', E.audit],
-      ['ok', 'Privileged access reviews completed quarterly', 'SOX 404', E.priv],
-      ['warn', '1 service account has excessive privileges on GL', 'SOX 404', E.manual] ] },
+      meas('sox.302', logging, 'All financial DB changes logged with user identity', 'SOX 302', evLog),
+      meas('sox.sod', sod, 'Separation of duties enforced on financial systems', 'SOX 404', evSod),
+      meas('sox.802', chainOk, 'Tamper-evident audit trail for financial data', 'SOX 802', evChain),
+      meas('sox.review', jitGov, 'Privileged access reviews (brokered access)', 'SOX 404', evJit),
+      att('sox.svcacct', 'Service-account privilege review on the GL', 'SOX 404', null) ] },
     { key: 'iso27001', name: 'ISO 27001', controls: [
-      ['ok', 'Information asset inventory maintained', 'A.8.1.1', E.classification],
-      ['ok', 'Access control policy enforced per classification', 'A.9.1.1', E.manual],
-      ['warn', 'Vulnerability assessment schedule overdue', 'A.12.6.1', E.va],
-      [W(m.unmonitored > 0), m.unmonitored > 0 ? `Logging & monitoring gaps on ${m.unmonitored} database(s)` : 'Logging & monitoring on all databases', 'A.12.4.1', m.unmonitored > 0 ? gapMon() : E.audit],
-      ['ok', 'Cryptographic controls applied to sensitive data', 'A.10.1.1', E.manual],
-      ['warn', 'Incident management response time above SLA', 'A.16.1.4', E.manual],
-      ['ok', 'Supplier relationships — third-party access logged', 'A.15.1.1', E.audit] ] },
+      meas('iso.inventory', m.classifiedObjects > 0 || m.dbTotal > 0, 'Information asset inventory maintained', 'A.8.1.1', evInv),
+      meas('iso.policy', policyOn, 'Access control policy enforced per classification', 'A.9.1.1', evPolicy),
+      meas('iso.va', vaSched, vaSched ? 'Vulnerability assessment scheduled' : 'Vulnerability assessment schedule overdue', 'A.12.6.1', evVa),
+      meas('iso.log', covered, covered ? 'Logging & monitoring on all databases' : `Logging & monitoring gaps on ${m.unmonitored} database(s)`, 'A.12.4.1', evCovered),
+      att('iso.crypto', 'Cryptographic controls applied to sensitive data', 'A.10.1.1', null),
+      att('iso.incident', 'Incident management within SLA', 'A.16.1.4', null),
+      meas('iso.supplier', logging, 'Supplier relationships — third-party access logged', 'A.15.1.1', evLog) ] },
   ];
   return defs.map((f) => {
-    const controls = f.controls.map(([status, control, reference, evidence]) => ({ status, control, reference, evidence: evidence || null }));
+    const controls = f.controls;
     const pass = controls.filter((c) => c.status === 'ok').length;
     const score = Math.round((pass / controls.length) * 100);
     return { key: f.key, name: f.name, score, status: score >= 90 ? 'strong' : 'gaps', controls };
   });
 }
+// Load a tenant's attestation states + build the live frameworks. Used by the frameworks API
+// and the Evidence Pack PDF so both reflect the same measured + attested posture.
+async function complianceFrameworks(tenantId) {
+  const m = await complianceMetrics();
+  let states = {};
+  try {
+    const rows = (await pgPool.query('SELECT control_key, status, note, actor, updated_at FROM compliance_control_state WHERE tenant_id = $1', [tenantId])).rows;
+    for (const r of rows) states[r.control_key] = r;
+  } catch { states = {}; }
+  return buildFrameworks(m, states);
+}
 app.get('/api/compliance/frameworks', authRequired, async (req, res) => {
   try {
-    const m = await complianceMetrics();
-    const fw = buildFrameworks(m);
+    const fw = await complianceFrameworks(req.user.tenantId);
     // Keep compliance_scores (used by fleet risk + dashboard) in sync with the live computation.
     await pgPool.query('DELETE FROM compliance_scores');
     for (const f of fw) await pgPool.query('INSERT INTO compliance_scores (framework, score) VALUES ($1,$2)', [f.name, f.score]);
     res.json(fw);
   } catch (e) { res.status(500).json({ error: e.message }); }
+});
+// The policy/process controls that carry no telemetry — the only ones an operator can attest.
+// Measured controls reject attestation: their status comes from live data, not sign-off.
+const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'gdpr.dsar', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'sox.svcacct', 'iso.crypto', 'iso.incident']);
+app.post('/api/compliance/controls/:key', authRequired, async (req, res) => {
+  if (!EVIDENCE_ATTEST_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Only Compliance, Auditor, or Admin roles may attest controls' });
+  const key = req.params.key;
+  if (!ATTESTABLE_CONTROLS.has(key)) return res.status(400).json({ error: 'Not an attestable control — this control derives its status from live telemetry' });
+  const decision = String((req.body && req.body.decision) || '').toLowerCase();
+  if (!['attested', 'exception', 'clear'].includes(decision)) return res.status(400).json({ error: 'decision must be attested, exception, or clear' });
+  const note = ((req.body && req.body.note) || '').trim();
+  if (decision === 'exception' && !note) return res.status(400).json({ error: 'A note is required to log an exception' });
+  try {
+    if (decision === 'clear') {
+      await pgPool.query('DELETE FROM compliance_control_state WHERE tenant_id=$1 AND control_key=$2', [req.user.tenantId, key]);
+    } else {
+      await pgPool.query(
+        `INSERT INTO compliance_control_state (tenant_id, control_key, status, note, actor, updated_at) VALUES ($1,$2,$3,$4,$5, now())
+         ON CONFLICT (tenant_id, control_key) DO UPDATE SET status=EXCLUDED.status, note=EXCLUDED.note, actor=EXCLUDED.actor, updated_at=now()`,
+        [req.user.tenantId, key, decision, note || null, req.user.email]);
+    }
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.control.attest', resourceType: 'control', resourceId: key, details: { decision, note } });
+    res.json({ ok: true, control_key: key, status: decision === 'clear' ? null : decision });
+  } catch (e) { console.error('[Compliance] control attest failed:', e.message); res.status(500).json({ error: 'Could not update control' }); }
 });
 app.get('/api/compliance/sensitive-access', authRequired, async (req, res) => {
   const evDb = await eventsDbFor(req.user.tenantId);
@@ -9414,7 +9519,7 @@ function buildCompliancePackPdf(fw, tenantName, generatedBy) {
 }
 app.get('/api/compliance/frameworks/:key/pdf', authRequired, async (req, res) => {
   try {
-    const fw = buildFrameworks(await complianceMetrics()).find((f) => f.key === req.params.key);
+    const fw = (await complianceFrameworks(req.user.tenantId)).find((f) => f.key === req.params.key);
     if (!fw) return res.status(404).json({ error: 'Unknown framework' });
     const pdf = buildCompliancePackPdf(fw, req.user.tenantName || 'Workspace', req.user.email || 'system');
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.pack.export', resourceType: 'framework', resourceId: fw.key, details: { score: fw.score } });
