@@ -352,7 +352,10 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
       )}
       {isPaas ? (
         <div style={{ background: 'var(--amber-soft)', borderRadius: 10, padding: '12px 14px', fontSize: 12.5, lineHeight: 1.5 }}>
-          <b style={{ color: 'var(--amber)' }}>Managed / PaaS instance.</b> Host, Network and Inline Proxy can&apos;t be installed on a server you don&apos;t control. Use <b>Agentless</b> capture instead — a cloud audit stream (Pub/Sub · Kinesis · Event Hub), set up from the Discovery wizard. No install.
+          <b style={{ color: 'var(--amber)' }}>Managed / PaaS instance.</b> Host, Network and Inline Proxy can&apos;t be installed on a server you don&apos;t control. Use <b>Agentless</b> capture instead — a cloud audit stream (Pub/Sub · Kinesis · Event Hub). No install.
+          <div style={{ marginTop: 10 }}>
+            <a className="btn-primary" href="/discovery" style={{ display: 'inline-block', padding: '6px 14px', fontSize: 12.5, textDecoration: 'none' }}>Set up agentless capture →</a>
+          </div>
         </div>
       ) : (
         availableModes.map((m) => {

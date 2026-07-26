@@ -130,7 +130,9 @@ export default function Databases() {
                     <td><StatusBadge status={i.status} /></td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <button className="btn-secondary" style={{ padding: '4px 9px', fontSize: 12 }} onClick={() => setAddDbTo(i)}>＋ DB</button>{' '}
-                      <button className="btn-secondary" style={{ padding: '4px 9px', fontSize: 12 }} onClick={() => navigate(`/agents?deploy=1&instance=${i.id}`)} disabled={i.is_paas}>Deploy</button>{' '}
+                      {i.is_paas
+                        ? <button className="btn-secondary" style={{ padding: '4px 9px', fontSize: 12 }} title="Managed database — no agent to install. Capture is agentless (cloud audit stream); set it up under Discovery → Cloud connectors." onClick={() => navigate('/discovery')}>Agentless</button>
+                        : <button className="btn-secondary" style={{ padding: '4px 9px', fontSize: 12 }} onClick={() => navigate(`/agents?deploy=1&instance=${i.id}`)}>Deploy</button>}{' '}
                       <button className="btn-secondary" style={{ padding: '4px 9px', fontSize: 12, borderColor: 'var(--danger)', color: 'var(--danger)' }} onClick={() => setConfirm({ kind: 'instance', id: i.id, name: i.instance, extra: i.database_count })}>Delete</button>
                     </td>
                   </tr>
