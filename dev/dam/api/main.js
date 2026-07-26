@@ -603,6 +603,10 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS subscription VARCHAR(300)`);
     await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS ingest_status VARCHAR(20)`);
     await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS last_ingest_at TIMESTAMPTZ`);
+    // Liveness ping from dam-audit-consumer, independent of event volume. A quiet managed DB emits
+    // no audit logs, so last_ingest_at alone would flap it to "unmonitored" every 15 min even though
+    // the connector is healthy. This advances while the consumer is alive + subscribed.
+    await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ`);
     // Reachability tracking: when a scan no longer sees a known candidate, we flag
     // it unreachable rather than re-discovering or silently keeping it as "new".
     await client.query(`ALTER TABLE discovery_candidates ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ`);
@@ -4126,7 +4130,9 @@ const CAPTURE_LABEL = { host_ebpf: 'Host (eBPF)', network: 'Network', inline_pro
 // Cloud-agnostic "is this database monitored?" (for SQL queries where databases is aliased `d`):
 // an enrolled agent on its instance, OR an active agentless cloud connector (Pub/Sub / Kinesis /
 // Event Hub) for the same tenant + cloud provider.
-const MONITORED_SQL = `(EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id) OR EXISTS (SELECT 1 FROM cloud_connectors cc JOIN db_instances di ON di.id = d.instance_id WHERE cc.tenant_id = d.tenant_id AND cc.provider = di.cloud_provider AND cc.ingest_status = 'ok' AND cc.last_ingest_at > now() - INTERVAL '15 minutes'))`;
+// Agentless liveness = the consumer heartbeat OR a recent event (GREATEST ignores NULLs), so a
+// healthy-but-idle managed DB stays monitored while a genuinely-dead consumer still drops after 15m.
+const MONITORED_SQL = `(EXISTS (SELECT 1 FROM agents a WHERE a.instance_id = d.instance_id) OR EXISTS (SELECT 1 FROM cloud_connectors cc JOIN db_instances di ON di.id = d.instance_id WHERE cc.tenant_id = d.tenant_id AND cc.provider = di.cloud_provider AND cc.ingest_status = 'ok' AND GREATEST(cc.last_heartbeat_at, cc.last_ingest_at) > now() - INTERVAL '15 minutes'))`;
 // Agents attach to the **instance** (a host:port server), so they cover every database/schema
 // on it. Coverage/status is derived from the agents on a database's instance_id — OR, for
 // managed/PaaS DBs, from an active agentless cloud connector (Pub/Sub, Kinesis, Event Hub).
@@ -4137,7 +4143,7 @@ async function loadInstanceAgents() {
   const dbRows = await pgPool.query(`SELECT instance_id FROM databases WHERE instance_id IS NOT NULL`);
   // Agentless coverage is CLOUD-AGNOSTIC: any active cloud connector (gcp Pub/Sub, aws Kinesis,
   // azure Event Hub) marks its cloud's instances as monitored. Match on (tenant, cloud provider).
-  const connRows = await pgPool.query(`SELECT DISTINCT tenant_id, provider FROM cloud_connectors WHERE ingest_status = 'ok' AND last_ingest_at > now() - INTERVAL '15 minutes'`);
+  const connRows = await pgPool.query(`SELECT DISTINCT tenant_id, provider FROM cloud_connectors WHERE ingest_status = 'ok' AND GREATEST(last_heartbeat_at, last_ingest_at) > now() - INTERVAL '15 minutes'`);
   const activeCloud = new Set(connRows.rows.map((c) => `${c.tenant_id}:${c.provider}`));
   const instRows = await pgPool.query(`SELECT id, tenant_id, cloud_provider FROM db_instances`);
   const byInstance = {};
@@ -5020,6 +5026,24 @@ app.post('/api/agents/events', async (req, res) => {
     }
   }
   res.json({ ingested: evs.length });
+});
+
+// Lightweight liveness ping from dam-audit-consumer for an AGENTLESS source. Unlike an event
+// batch this writes NOTHING to ClickHouse events or the audit trail — it only advances the
+// connector's last_heartbeat_at, so an idle-but-connected managed DB stays "monitored" (a quiet
+// Cloud SQL / Azure SQL emits no audit logs, so last_ingest_at alone would flap it unmonitored).
+// Token-gated (per-tenant enroll token); provider says which connector to refresh.
+app.post('/api/agents/connector-heartbeat', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.body && req.body.token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const provider = String((req.body && req.body.provider) || '').toLowerCase();
+  if (!['gcp', 'aws', 'azure'].includes(provider)) return res.status(400).json({ error: 'provider required (gcp|aws|azure)' });
+  try {
+    const r = await pgPool.query(
+      `UPDATE cloud_connectors SET last_heartbeat_at = now() WHERE tenant_id = $1 AND provider = $2`,
+      [tenantId, provider]);
+    res.json({ ok: true, updated: r.rowCount });
+  } catch (e) { console.error('[events] connector heartbeat failed:', e.message); res.status(500).json({ error: 'heartbeat failed' }); }
 });
 
 // Audit configuration changed on a monitored database — surfaced as a critical alert.
@@ -6938,7 +6962,7 @@ async function runCloudDiscovery(tenantId, providers, jobId) {
 // ── Cloud connectors CRUD (credential is write-only) ──
 app.get('/api/discovery/connectors', authRequired, async (req, res) => {
   const rows = (await pgPool.query(
-    `SELECT id, provider, project, identity, status, last_run_at, last_result, subscription, ingest_status, last_ingest_at, created_at FROM cloud_connectors WHERE tenant_id = $1 ORDER BY created_at DESC`,
+    `SELECT id, provider, project, identity, status, last_run_at, last_result, subscription, ingest_status, last_ingest_at, last_heartbeat_at, created_at FROM cloud_connectors WHERE tenant_id = $1 ORDER BY created_at DESC`,
     [req.user.tenantId]
   )).rows;
   res.json(rows);

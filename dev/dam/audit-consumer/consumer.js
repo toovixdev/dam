@@ -11,7 +11,7 @@
  *   • GCP Pub/Sub   → PUBSUB_SUBSCRIPTION (+ CLOUDSQL_ENROLL_TOKEN for the sink path)
  *   • Azure EventHub→ EVENTHUB_CONNECTION_STRING (+ EVENTHUB_NAME/CONSUMER_GROUP, AZURESQL_ENROLL_TOKEN)
  */
-const { postEvents } = require('./ingest');
+const { postEvents, postConnectorHeartbeat } = require('./ingest');
 const adapters = require('./sources');
 
 const stats = { ingested: 0, failed: 0, skipped: 0 };
@@ -53,7 +53,24 @@ async function main() {
       log(`source ${s.name} failed to start: ${e.message}`);
     }
   }
-  setInterval(() => log(`ingested=${stats.ingested} failed=${stats.failed} skipped=${stats.skipped}`), 60000);
+
+  // Per-source liveness heartbeat, so an idle managed DB (no audit logs → no events) still shows
+  // "monitored" while this consumer is alive. Only sources with a resolvable enroll token qualify.
+  const heartbeatTargets = active
+    .filter((s) => s.provider && s.tokenEnv && process.env[s.tokenEnv])
+    .map((s) => ({ provider: s.provider, token: process.env[s.tokenEnv] }));
+  const sendHeartbeats = async () => {
+    for (const t of heartbeatTargets) {
+      try { await postConnectorHeartbeat(t); }
+      catch (e) { log(`heartbeat ${t.provider} failed: ${e.message}`); }
+    }
+  };
+  if (heartbeatTargets.length) { sendHeartbeats(); } // fire once at startup — don't wait a full minute
+
+  setInterval(() => {
+    log(`ingested=${stats.ingested} failed=${stats.failed} skipped=${stats.skipped}`);
+    sendHeartbeats();
+  }, 60000);
 
   const shutdown = async () => {
     log('shutting down');

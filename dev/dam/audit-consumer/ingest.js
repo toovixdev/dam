@@ -13,4 +13,16 @@ async function postEvents(body) {
   return res.json();
 }
 
-module.exports = { postEvents, CONTROL_PLANE };
+// Liveness ping: refreshes the cloud connector's heartbeat WITHOUT writing any events. Keeps an
+// idle-but-connected managed DB marked "monitored" (see /api/agents/connector-heartbeat).
+async function postConnectorHeartbeat({ token, provider }) {
+  const res = await fetch(`${CONTROL_PLANE}/api/agents/connector-heartbeat`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ token, provider }),
+  });
+  if (!res.ok) throw new Error(`heartbeat ${res.status}`);
+  return res.json();
+}
+
+module.exports = { postEvents, postConnectorHeartbeat, CONTROL_PLANE };

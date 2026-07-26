@@ -13,6 +13,9 @@ const N = require('./normalize');
 // ── GCP Pub/Sub (Cloud SQL agentless sink + AgentLite forwarder) ──────────────────────
 const pubsub = {
   name: 'gcp-pubsub',
+  // Connector this source keeps alive + the enroll token that resolves its tenant (for heartbeats).
+  provider: 'gcp',
+  tokenEnv: 'CLOUDSQL_ENROLL_TOKEN',
   enabled: (env) => !!env.PUBSUB_SUBSCRIPTION,
   async start(ctx) {
     const { PubSub } = require('@google-cloud/pubsub');
@@ -39,6 +42,8 @@ const pubsub = {
 // ── Azure Event Hub (Azure SQL Auditing → Event Hub) ──────────────────────────────────
 const eventhub = {
   name: 'azure-eventhub',
+  provider: 'azure',
+  tokenEnv: 'AZURESQL_ENROLL_TOKEN',
   enabled: (env) => !!env.EVENTHUB_CONNECTION_STRING,
   async start(ctx) {
     const { EventHubConsumerClient, earliestEventPosition, latestEventPosition } = require('@azure/event-hubs');
