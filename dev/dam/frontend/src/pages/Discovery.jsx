@@ -33,7 +33,7 @@ function countCustomPorts(spec) {
 }
 
 const ENGINE_LABEL = { postgres: 'PostgreSQL', mysql: 'MySQL', mariadb: 'MariaDB', oracle: 'Oracle', mssql: 'SQL Server', mongodb: 'MongoDB', redis: 'Redis', cassandra: 'Cassandra', db2: 'Db2' };
-const PAAS_DEPLOYMENTS = ['rds', 'aurora', 'azuresql', 'cloudsql', 'atlas', 'oci', 'cosmos'];
+const PAAS_DEPLOYMENTS = ['rds', 'aurora', 'redshift', 'azuresql', 'cloudsql', 'atlas', 'oci', 'cosmos'];
 
 // Map a backend discovery_candidates row to the shape this page renders.
 function mapCandidate(c) {

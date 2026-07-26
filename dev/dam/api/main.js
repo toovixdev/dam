@@ -4127,8 +4127,8 @@ app.post('/api/admin/approvals/:id/decision', async (req, res) => {
 });
 
 // ── Databases ─────────────────────────────────────────────
-const DEP_LABEL = { onprem: 'On-prem', iaas: 'IaaS', rds: 'RDS', azuresql: 'Azure DB', cloudsql: 'Cloud SQL', atlas: 'Atlas', oci: 'OCI', saas: 'SaaS' };
-const PAAS_DEPLOYMENTS = ['rds', 'azuresql', 'cloudsql', 'atlas', 'oci'];
+const DEP_LABEL = { onprem: 'On-prem', iaas: 'IaaS', rds: 'RDS', aurora: 'Aurora', redshift: 'Redshift', azuresql: 'Azure DB', cosmos: 'Cosmos DB', cloudsql: 'Cloud SQL', atlas: 'Atlas', oci: 'OCI', saas: 'SaaS' };
+const PAAS_DEPLOYMENTS = ['rds', 'aurora', 'redshift', 'azuresql', 'cosmos', 'cloudsql', 'atlas', 'oci'];
 // audit_pull is the wire agent_type the AgentLite forwarder reports; display it as "AgentLite"
 // (the mode name users select and read about) rather than the internal "Audit Pull".
 const CAPTURE_LABEL = { host_ebpf: 'Host (eBPF)', network: 'Network', inline_proxy: 'Inline Proxy', audit_pull: 'AgentLite', cloud_push: 'Cloud Push', agentless: 'Agentless' };
@@ -6839,30 +6839,48 @@ function awsSigV4({ accessKeyId, secretAccessKey, sessionToken }, { region, serv
   if (sessionToken) headers['x-amz-security-token'] = sessionToken;
   return headers;
 }
+// Small helper: SigV4-GET an AWS Query API and return the raw XML (throws on API error).
+async function awsQueryXml(creds, region, service, query) {
+  const host = `${service}.${region}.amazonaws.com`;
+  const headers = awsSigV4(creds, { region, service, host, query });
+  const resp = await fetch(`https://${host}/?${query}`, { headers });
+  const xml = await resp.text();
+  if (!resp.ok) { const m = /<Message>([^<]+)<\/Message>/.exec(xml); throw new Error(m ? m[1] : `${service} call failed (${resp.status})`); }
+  return xml;
+}
 async function awsEnumerate(connector) {
   const c = connector.credential || {};
   const accessKeyId = c.accessKeyId || c.access_key_id;
   const secretAccessKey = c.secretAccessKey || c.secret_access_key;
   const region = c.region || connector.project || 'us-east-1';
   if (!accessKeyId || !secretAccessKey) throw new Error('AWS needs accessKeyId + secretAccessKey (a read-only IAM user, e.g. AmazonRDSReadOnlyAccess)');
-  const host = `rds.${region}.amazonaws.com`;
-  const query = 'Action=DescribeDBInstances&Version=2014-10-31';
-  const headers = awsSigV4({ accessKeyId, secretAccessKey, sessionToken: c.sessionToken }, { region, service: 'rds', host, query });
-  const resp = await fetch(`https://${host}/?${query}`, { headers });
-  const xml = await resp.text();
-  if (!resp.ok) { const m = /<Message>([^<]+)<\/Message>/.exec(xml); throw new Error(m ? m[1] : `RDS DescribeDBInstances failed (${resp.status})`); }
+  const creds = { accessKeyId, secretAccessKey, sessionToken: c.sessionToken };
   const out = [];
-  for (const block of xml.split('<DBInstance>').slice(1)) {
-    const g = (tag) => { const m = new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(block); return m ? m[1] : ''; };
-    const engineRaw = g('Engine');
-    const { engine, port } = awsEngine(engineRaw);
-    const addr = g('Address'); const id = g('DBInstanceIdentifier');
-    if (!addr && !id) continue;
-    out.push({
-      endpoint: addr || id, host: addr || id, port: parseInt(g('Port'), 10) || port, engine, version: g('EngineVersion'),
-      region, cloud_provider: 'aws', deployment_type: /aurora/i.test(engineRaw) ? 'aurora' : 'rds', source: 'cloud_api', confidence: 'high', signal: 'clean',
-    });
-  }
+  const errors = [];
+  const g = (block, tag) => { const m = new RegExp(`<${tag}>([^<]*)</${tag}>`).exec(block); return m ? m[1] : ''; };
+  // RDS + Aurora (DescribeDBInstances also surfaces DocumentDB/Neptune engines)
+  try {
+    const xml = await awsQueryXml(creds, region, 'rds', 'Action=DescribeDBInstances&Version=2014-10-31');
+    for (const block of xml.split('<DBInstance>').slice(1)) {
+      const engineRaw = g(block, 'Engine');
+      const { engine, port } = awsEngine(engineRaw);
+      const addr = g(block, 'Address'); const id = g(block, 'DBInstanceIdentifier');
+      if (!addr && !id) continue;
+      out.push({ endpoint: addr || id, host: addr || id, port: parseInt(g(block, 'Port'), 10) || port, engine, version: g(block, 'EngineVersion'),
+        region, cloud_provider: 'aws', deployment_type: /aurora/i.test(engineRaw) ? 'aurora' : 'rds', source: 'cloud_api', confidence: 'high', signal: 'clean' });
+    }
+  } catch (e) { errors.push(`rds: ${e.message}`); }
+  // Redshift (data-warehouse clusters)
+  try {
+    const xml = await awsQueryXml(creds, region, 'redshift', 'Action=DescribeClusters&Version=2012-12-01');
+    for (const block of xml.split('<Cluster>').slice(1)) {
+      const addr = g(block, 'Address'); const id = g(block, 'ClusterIdentifier');
+      if (!addr && !id) continue;
+      out.push({ endpoint: addr || id, host: addr || id, port: parseInt(g(block, 'Port'), 10) || 5439, engine: 'redshift', version: g(block, 'ClusterVersion'),
+        region, cloud_provider: 'aws', deployment_type: 'redshift', source: 'cloud_api', confidence: 'high', signal: 'clean' });
+    }
+  } catch (e) { errors.push(`redshift: ${e.message}`); }
+  if (out.length === 0 && errors.length) throw new Error(errors.join(' | '));
   return out;
 }
 
@@ -6889,16 +6907,27 @@ async function azureEnumerate(connector) {
     return j.value || [];
   };
   const out = [];
-  for (const s of await arm(`/subscriptions/${sub}/providers/Microsoft.Sql/servers?api-version=2022-05-01-preview`)) {
+  // Azure SQL Database (SQL servers)
+  for (const s of await arm(`/subscriptions/${sub}/providers/Microsoft.Sql/servers?api-version=2022-05-01-preview`).catch(() => [])) {
     const fqdn = s.properties?.fullyQualifiedDomainName || `${s.name}.database.windows.net`;
     out.push({ endpoint: fqdn, host: fqdn, port: 1433, engine: 'mssql', version: null, region: s.location, cloud_provider: 'azure', deployment_type: 'azuresql', source: 'cloud_api', confidence: 'high', signal: 'clean' });
   }
+  // Azure Database for MySQL / PostgreSQL (flexible servers)
   for (const [prov, eng, port, suffix] of [['Microsoft.DBforPostgreSQL/flexibleServers', 'postgresql', 5432, 'postgres.database.azure.com'], ['Microsoft.DBforMySQL/flexibleServers', 'mysql', 3306, 'mysql.database.azure.com']]) {
     const list = await arm(`/subscriptions/${sub}/providers/${prov}?api-version=2023-06-01-preview`).catch(() => []);
     for (const s of list) {
       const fqdn = s.properties?.fullyQualifiedDomainName || `${s.name}.${suffix}`;
       out.push({ endpoint: fqdn, host: fqdn, port, engine: eng, version: s.properties?.version || null, region: s.location, cloud_provider: 'azure', deployment_type: 'azuresql', source: 'cloud_api', confidence: 'high', signal: 'clean' });
     }
+  }
+  // Cosmos DB (multi-model — SQL / Mongo / Cassandra / Gremlin / Table APIs)
+  for (const s of await arm(`/subscriptions/${sub}/providers/Microsoft.DocumentDB/databaseAccounts?api-version=2023-04-15`).catch(() => [])) {
+    const ep = s.properties?.documentEndpoint || '';
+    const hostn = ep ? ep.replace(/^https?:\/\//, '').replace(/[:/].*$/, '') : `${s.name}.documents.azure.com`;
+    // Surface the Cosmos API kind (mongo/sql/cassandra/…) so it's captured with the right engine.
+    const caps = (s.properties?.capabilities || []).map((x) => x.name);
+    const engine = caps.includes('EnableMongo') ? 'mongodb' : caps.includes('EnableCassandra') ? 'cassandra' : 'cosmos';
+    out.push({ endpoint: hostn, host: hostn, port: 443, engine, version: null, region: s.location, cloud_provider: 'azure', deployment_type: 'cosmos', source: 'cloud_api', confidence: 'high', signal: 'clean' });
   }
   return out;
 }

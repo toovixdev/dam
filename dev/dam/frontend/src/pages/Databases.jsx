@@ -221,7 +221,7 @@ export default function Databases() {
 }
 
 // Managed/PaaS deployment types that come from cloud-API discovery (not network scans).
-const PAAS_TYPES = ['rds', 'aurora', 'azuresql', 'cloudsql', 'atlas', 'oci', 'cosmos'];
+const PAAS_TYPES = ['rds', 'aurora', 'redshift', 'azuresql', 'cloudsql', 'atlas', 'oci', 'cosmos'];
 
 function RegisterInstanceForm({ onClose, onDone }) {
   const [mode, setMode] = useState('manual');
