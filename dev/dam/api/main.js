@@ -5042,7 +5042,7 @@ app.post('/api/agents/connector-heartbeat', async (req, res) => {
   const tenantId = await tenantFromEnrollToken(req.body && req.body.token);
   if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
   const provider = String((req.body && req.body.provider) || '').toLowerCase();
-  if (!['gcp', 'aws', 'azure'].includes(provider)) return res.status(400).json({ error: 'provider required (gcp|aws|azure)' });
+  if (!['gcp', 'aws', 'azure', 'oci'].includes(provider)) return res.status(400).json({ error: 'provider required (gcp|aws|azure|oci)' });
   try {
     const r = await pgPool.query(
       `UPDATE cloud_connectors SET last_heartbeat_at = now() WHERE tenant_id = $1 AND provider = $2`,
@@ -6903,25 +6903,57 @@ async function azureEnumerate(connector) {
   return out;
 }
 
-// ── OCI: API-key request signing → list Autonomous Databases in a compartment ──
+// ── OCI: API-key request signing → list managed databases in a compartment ──
+// One read-only API key (tenancy/user/fingerprint + PEM) signs GETs against the OCI REST API.
+// We enumerate all three managed-DB families the key can see, so "scanning" covers every OCI
+// PaaS database, not just Autonomous.
+async function ociSignedGet(cred, host, path) {
+  const date = new Date().toUTCString();
+  const signingString = `(request-target): get ${path}\nhost: ${host}\ndate: ${date}`;
+  const sig = crypto.createSign('RSA-SHA256').update(signingString).sign(cred.privateKey, 'base64');
+  const auth = `Signature version="1",keyId="${cred.tenancy}/${cred.user}/${cred.fingerprint}",algorithm="rsa-sha256",headers="(request-target) host date",signature="${sig}"`;
+  const resp = await fetch(`https://${host}${path}`, { headers: { host, date, Authorization: auth } });
+  const j = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error((j && j.message) || `OCI ${path.split('?')[0]} failed (${resp.status})`);
+  return Array.isArray(j) ? j : [];
+}
+
 async function ociEnumerate(connector) {
   const c = connector.credential || {};
   const privateKey = c.privateKey || c.private_key;
   const compartmentId = c.compartmentId || c.compartment_id || c.tenancy;
   if (!c.tenancy || !c.user || !c.fingerprint || !privateKey || !c.region) throw new Error('OCI needs tenancy, user, fingerprint, privateKey and region (a read-only API key)');
-  const host = `database.${c.region}.oraclecloud.com`;
-  const path = `/20160918/autonomousDatabases?compartmentId=${encodeURIComponent(compartmentId)}`;
-  const date = new Date().toUTCString();
-  const signingString = `(request-target): get ${path}\nhost: ${host}\ndate: ${date}`;
-  const sig = require('crypto').createSign('RSA-SHA256').update(signingString).sign(privateKey, 'base64');
-  const auth = `Signature version="1",keyId="${c.tenancy}/${c.user}/${c.fingerprint}",algorithm="rsa-sha256",headers="(request-target) host date",signature="${sig}"`;
-  const resp = await fetch(`https://${host}${path}`, { headers: { host, date, Authorization: auth } });
-  const j = await resp.json().catch(() => ({}));
-  if (!resp.ok) throw new Error((j && j.message) || `OCI list failed (${resp.status})`);
-  return (Array.isArray(j) ? j : []).map((db) => ({
-    endpoint: db.dbName || db.id, host: db.privateEndpointIp || db.dbName || db.id, port: 1522,
-    engine: 'oracle', version: db.dbVersion || null, region: c.region, cloud_provider: 'oci', deployment_type: 'oci', source: 'cloud_api', confidence: 'high', signal: 'clean',
-  }));
+  const cred = { tenancy: c.tenancy, user: c.user, fingerprint: c.fingerprint, privateKey };
+  const dbHost = `database.${c.region}.oraclecloud.com`;         // Autonomous DB + Base Database (DB Systems)
+  const myHost = `mysql.${c.region}.ocp.oraclecloud.com`;        // MySQL HeatWave Database Service
+  const cid = encodeURIComponent(compartmentId);
+  const out = [];
+  const errors = [];
+  // Autonomous Database
+  try {
+    for (const db of await ociSignedGet(cred, dbHost, `/20160918/autonomousDatabases?compartmentId=${cid}`)) {
+      out.push({ endpoint: db.dbName || db.id, host: db.privateEndpointIp || db.dbName || db.id, port: 1522,
+        engine: 'oracle', version: db.dbVersion || null, region: c.region, cloud_provider: 'oci', deployment_type: 'oci', source: 'cloud_api', confidence: 'high', signal: 'clean' });
+    }
+  } catch (e) { errors.push(`autonomous: ${e.message}`); }
+  // Base Database Service (Oracle DB on VM/BM — "DB Systems")
+  try {
+    for (const s of await ociSignedGet(cred, dbHost, `/20160918/dbSystems?compartmentId=${cid}`)) {
+      out.push({ endpoint: s.displayName || s.hostname || s.id, host: s.hostname || s.id, port: 1521,
+        engine: 'oracle', version: s.version || null, region: c.region, cloud_provider: 'oci', deployment_type: 'oci', source: 'cloud_api', confidence: 'high', signal: 'clean' });
+    }
+  } catch (e) { errors.push(`dbSystems: ${e.message}`); }
+  // MySQL HeatWave Database Service
+  try {
+    for (const s of await ociSignedGet(cred, myHost, `/20190415/dbSystems?compartmentId=${cid}`)) {
+      const ep = (Array.isArray(s.endpoints) && s.endpoints[0]) || {};
+      out.push({ endpoint: s.displayName || s.id, host: ep.ipAddress || s.ipAddress || s.id, port: ep.port || 3306,
+        engine: 'mysql', version: s.mysqlVersion || null, region: c.region, cloud_provider: 'oci', deployment_type: 'oci', source: 'cloud_api', confidence: 'high', signal: 'clean' });
+    }
+  } catch (e) { errors.push(`mysqlHeatWave: ${e.message}`); }
+  // Only fail the test if EVERY family errored (bad key / no permissions); partial perms still return.
+  if (out.length === 0 && errors.length) throw new Error(errors.join(' | '));
+  return out;
 }
 
 const CLOUD_ADAPTERS = { gcp: gcpEnumerate, aws: awsEnumerate, azure: azureEnumerate, oci: ociEnumerate };
