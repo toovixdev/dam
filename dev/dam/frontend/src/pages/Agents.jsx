@@ -272,7 +272,10 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
   // coverage this instance is still MISSING — offering to redeploy what already runs is noise.
   useEffect(() => {
     setModes(() => {
-      if (!isFullStack) return deployedModes.has('agentless') ? [] : ['agentless'];
+      // Single-mode engines (Mongo/Oracle/SQL Server) only have AgentLite — always keep it
+      // selected so the screen never looks inert. If it's already deployed the action is a
+      // reconfigure/redeploy (e.g. adding classification), shown by the tile's 'redeploy' badge.
+      if (!isFullStack) return ['agentless'];
       const wanted = ['network', 'host'].filter((m) => !deployedModes.has(m));
       return wanted.length ? wanted : [];
     });
