@@ -863,10 +863,11 @@ func classifyCol(name string) (tag, sens string, ok bool) {
 //
 // Signatures (deliberately conservative to avoid false positives on real data):
 //   • a run of 3+ hard fill chars  * # • ●            → ****1234, 4111********1111
-//   • a run of 4+ X (upper or lower)                  → XXX-XX-6789, xxxxxxxx
+//   • a run of 3+ X (upper or lower)                  → XXX-XX-6789, xxxxxxxx
 //   • an explicit redaction marker                    → REDACTED, [MASKED], ***REDACTED***
+// The >=80% column threshold + sensitive-only scope keep the 3-run X rule from mis-flagging names.
 var reMaskFill = regexp.MustCompile(`[*#•●]{3,}`)
-var reMaskX = regexp.MustCompile(`(?i)x{4,}`)
+var reMaskX = regexp.MustCompile(`(?i)x{3,}`)
 var reMaskMarker = regexp.MustCompile(`(?i)^\s*[\[*]*\s*(redacted|masked|restricted)\s*[\]*]*\s*$`)
 
 func looksMaskedValue(v string) (bool, string) {
