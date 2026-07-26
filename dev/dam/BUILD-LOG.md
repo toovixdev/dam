@@ -2314,3 +2314,33 @@ buy — documented proof a human reviewed DB activity (PCI 10.6, SOX control att
 **Deferred (next increments):** a real scheduler/worker to auto-run + email evidence on a cadence
 (`report_schedules` is still storage-only, no runner); entitlement / access-recertification reports;
 a per-framework control→evidence mapping surface; server-side PDF export of a sealed artifact.
+
+## Compliance posture — static controls converted to real (2026-07-26)
+
+The Compliance Center score was a real ratio (passing ÷ total per framework) but **35 of 41
+controls were hardcoded** (30 always-`ok`, 5 always-`warn`); only 6 moved with data (masking ×3,
+monitoring ×3). Converted every control to a real source — **0 literals remain**:
+
+- **27 measured** from live telemetry via expanded `complianceMetrics()`: signed audit
+  checkpoints (hash-chain integrity), monitoring coverage, activity/privileged-op capture,
+  classification/asset inventory, masking coverage, instance data-residency region,
+  JIT-grant + approval-chain separation-of-duties, distinct-vs-shared principals, active
+  policies, scheduled VA reports. All new queries are defensive (`pg1` try/catch) so a missing
+  table/column degrades a control to a gap rather than 500-ing the page.
+- **14 attestation-backed** policy/process controls with no telemetry (TLS-in-transit, at-rest
+  crypto, NTP sync, breach runbook, consent tracking, retention, incident SLA/reporting,
+  service-account review, least-privilege, DSAR-live): status comes from the new per-tenant
+  `compliance_control_state` table — `attested`=pass, `exception`/absent=gap (honest default).
+- `buildFrameworks(m, states)` + `complianceFrameworks(tenantId)` feed both the frameworks API
+  and the Evidence Pack PDF. New `POST /api/compliance/controls/:key` (role-gated to
+  `EVIDENCE_ATTEST_ROLES`, audit-logged) attests/exceptions/clears. Frontend shows a
+  measured/attested tag per control + Attest / Log exception / Clear.
+
+Verified against prod schema: 4156/4156 signed checkpoints (hash-chain controls pass), 46
+policies, 16 classified objects; 9/17 instances lack a region (data-localization now a real gap),
+0 VA schedules + 0 JIT grants (those controls now honest gaps).
+
+**Still global, not per-tenant:** `complianceMetrics()` reads `dam_analytics.events` (shared
+plane) and the Postgres counts carry no `tenant_id` filter — only the *attestations* are
+per-tenant. Threading `tenantId`/`eventsDbFor` through the metrics is the separate tracked
+data-plane/tenant-isolation fix.
