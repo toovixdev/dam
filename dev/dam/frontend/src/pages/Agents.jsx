@@ -638,6 +638,30 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     env.push('CLASSIFY_INTERVAL_MIN=30');
   }
 
+  // AgentLite only TAILS the DB's native audit log — the database must be producing it.
+  // Per-engine "turn auditing ON, writing to AUDIT_LOG" steps, shown as a prerequisite.
+  const auditEnable = !agentless ? '' :
+    (eng === 'mysql' || eng === 'mariadb')
+      ? `#   MySQL/MariaDB — log statements to that file (runtime; also persist in my.cnf):
+#     SET GLOBAL general_log_file='${auditLog}'; SET GLOBAL general_log='ON';`
+    : (eng === 'postgresql')
+      ? `#   PostgreSQL — log every statement to that file (no pgAudit needed). In postgresql.conf:
+#     logging_collector=on   log_directory='/var/log/postgresql'   log_filename='pgaudit.log'
+#     log_rotation_age=0   log_rotation_size=0   log_truncate_on_rotation=off
+#     log_statement='all'   log_line_prefix='%m [%p] %q%u@%d '
+#     then:  sudo systemctl restart postgresql`
+    : (eng === 'oracle')
+      ? `#   Oracle — enable Unified Audit / FGA policies; the collector reads UNIFIED_AUDIT_TRAIL over SQL*Net (no local file).`
+    : (eng === 'mssql')
+      ? `#   SQL Server — create an Extended Events session (${mssqlSource === 'xevents' ? 'ToovixXE' : 'SQL Server Audit'}); the poller reads it over TDS (no local file).`
+    : (eng === 'mongodb')
+      ? `#   MongoDB — enable the profiler (db.setProfilingLevel(2)); the poller reads system.profile over the wire (no local file).`
+    : '';
+  // Same hint as a standalone prerequisite block for the non-docker (package/binary) installs.
+  const auditPrereq = agentless && auditEnable
+    ? `# AgentLite prerequisite — the DB must be WRITING its audit log to ${auditLog || 'its native audit trail'} first:\n${auditEnable}\n\n`
+    : '';
+
   if (format === 'docker') {
     // Each mode has a different runtime envelope:
     //   network — AF_PACKET raw sniff → host net + NET_RAW/NET_ADMIN, run as root.
@@ -653,9 +677,7 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     const envLines = env.map((e) => `  -e ${e}`);
     const prereq = agentless
       ? `# Prerequisite: Docker on the DB host. AgentLite tails the DB's native audit log, so the
-#   database's own auditing must be ON, writing to ${auditLog}.${(eng === 'mysql' || eng === 'mariadb') ? `
-#   MySQL/MariaDB — enable the general query log to that file:
-#     SET GLOBAL general_log_file='${auditLog}'; SET GLOBAL general_log='ON';` : ''}
+#   database's own auditing must be ON, writing to ${auditLog || 'its native audit trail'}.${auditEnable ? '\n' + auditEnable : ''}
 `
       : `# Prerequisite: Docker must be installed on the VM / bare-metal host.
 #   Debian/Ubuntu:  curl -fsSL https://get.docker.com | sudo sh
@@ -699,7 +721,7 @@ helm install dam-${m} toovix/dam-agent \\
   if (format === 'package') {
     // Templated unit: one .deb serves every mode. Each mode gets its own agent-<mode>.env, so
     // host/network/proxy coexist on the same host without colliding.
-    return `${warn}# Debian/Ubuntu (.deb) — RHEL/Rocky: sudo dnf install ./dam-agent-<ver>.x86_64.rpm
+    return `${warn}${auditPrereq}# Debian/Ubuntu (.deb) — RHEL/Rocky: sudo dnf install ./dam-agent-<ver>.x86_64.rpm
 curl -fsSL ${cp}/api/download/dam-agent_amd64.deb -o dam-agent.deb
 sudo dpkg -i dam-agent.deb   # installs the binary + the dam-agent@.service template (once)
 
@@ -712,7 +734,7 @@ journalctl -u dam-agent@${m} -f`;
   }
 
   // Default: static binary (eBPF embedded, no Docker, no deps) — installed via a systemd template.
-  return `${warn}# 1) Download the static binary (eBPF embedded, no deps). 'install' replaces it safely
+  return `${warn}${auditPrereq}# 1) Download the static binary (eBPF embedded, no deps). 'install' replaces it safely
 #    even if an agent is already running (avoids "text file busy").
 curl -fsSL ${cp}/api/download/dam-agent-linux-amd64 -o /tmp/dam-agent
 sudo install -D -m 0755 /tmp/dam-agent /usr/local/bin/dam-agent && rm -f /tmp/dam-agent

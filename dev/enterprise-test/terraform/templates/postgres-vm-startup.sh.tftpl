@@ -13,6 +13,21 @@ PGCONF="/etc/postgresql/$${PGVER}/main"
 # subnet + the app tier to auth with a password.
 echo "listen_addresses = '*'" >> "$${PGCONF}/postgresql.conf"
 echo "host all all ${subnet_cidr} md5" >> "$${PGCONF}/pg_hba.conf"
+
+# ── Audit logging for the DAM AgentLite audit-forward path. Log every statement to a
+#    STABLE file the agent tails (/var/log/postgresql/pgaudit.log), in the exact prefix
+#    format its parser expects. No pgAudit extension needed — standard statement logging. ──
+cat >> "$${PGCONF}/postgresql.conf" <<'EOPGLOG'
+logging_collector = on
+log_directory = '/var/log/postgresql'
+log_filename = 'pgaudit.log'
+log_rotation_age = 0
+log_rotation_size = 0
+log_truncate_on_rotation = off
+log_statement = 'all'
+log_line_prefix = '%m [%p] %q%u@%d '
+EOPGLOG
+
 systemctl enable postgresql
 systemctl restart postgresql
 for i in $(seq 1 30); do sudo -u postgres pg_isready -q && break; sleep 2; done
