@@ -229,7 +229,11 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
 
   const instance = instances.find((i) => i.id === instId);
   const isPaas = !!instance?.is_paas;
-  const instEngine = instance?.engine || 'mysql';
+  // Discovery fingerprints Postgres as 'postgres', but the rest of the deploy logic keys on
+  // 'postgresql' (classification gate, default port, DB_NAME). Normalize so a PG instance
+  // registered via discovery isn't wrongly treated as unclassifiable / wrong-port.
+  const rawEngine = (instance?.engine || 'mysql').toLowerCase();
+  const instEngine = rawEngine === 'postgres' ? 'postgresql' : rawEngine;
   const canClassify = instEngine === 'mysql' || instEngine === 'postgresql' || instEngine === 'mssql'; // in this build
   const classifyNeedsDbName = instEngine === 'postgresql' || instEngine === 'mssql'; // PG/SQL Server information_schema is per-database
   const has = (m) => modes.includes(m);
@@ -298,7 +302,7 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
     if (useClassify && classifyNeedsDbName && !dbName.trim()) { toast('Enter the database name to classify (PostgreSQL)', 'err'); return; }
     setInstructions({
       token, cp, image, modes: [...modes], platform,
-      target: instance?.instance || instance?.name, engine: instance?.engine,
+      target: instance?.instance || instance?.name, engine: instEngine,
       classify: useClassify, dbUser: dbUser.trim(), dbPass: dbPass.trim(), dbName: dbName.trim(),
       pubsub, auditTopic: auditTopic.trim() || 'toovix-dam-audit', gcpProject: gcpProject.trim(),
       mssqlSource,
