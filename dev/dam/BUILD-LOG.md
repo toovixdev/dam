@@ -2347,6 +2347,12 @@ zeros: paid tenants (events in `tenant_<uuid>` planes) previously read the empty
 scored every activity-based control as a false gap. Verified on prod — global 61 classified cols
 split 23/0/25/13 per tenant; dedicated planes hold 93/210583/3554 events vs 0 in the shared plane.
 The frameworks API + Evidence Pack PDF (both via `complianceFrameworks(tenantId)`) are now fully
-per-tenant. Remaining global: the `compliance_scores` cache (no `tenant_id`) feeding
-dashboard/fleet + the un-authRequired `/api/dashboard/compliance` — part of the separate dashboard
-tenant-scoping work.
+per-tenant.
+
+**And the cache too (2026-07-27):** `compliance_scores` gained a `tenant_id` column +
+self-warming `complianceScoresFor(tenantId)` (computes live from `complianceFrameworks` on a cache
+miss). The frameworks-endpoint writer scopes DELETE/INSERT by tenant; the dashboard/fleet readers
+(admin tenant-health, `REPORTS.exec`, `computeFleetRisk`) are scoped; and `/api/dashboard/compliance`
+is now `authRequired` + per-tenant (its hardcoded fallback scores dropped). 8 legacy global rows
+purged. The entire Compliance Center — controls, scores, evidence, PDF, dashboard widgets — is now
+fully per-tenant.
