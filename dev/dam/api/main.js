@@ -607,7 +607,7 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ`);
     // Encrypt any legacy plaintext connector credentials now that a key is configured. Rows are
     // already-encrypted when the JSONB has an 'enc' key; re-encrypt the rest (raw credential objects).
-    if (SECRET_KEY) {
+    if (secrets.hasKey) {
       const legacy = await client.query(`SELECT id, credential FROM cloud_connectors WHERE credential IS NOT NULL AND jsonb_typeof(credential) = 'object' AND NOT (credential ? 'enc')`);
       for (const r of legacy.rows) {
         await client.query('UPDATE cloud_connectors SET credential = $2 WHERE id = $1', [r.id, packCredential(r.credential)]);
@@ -4656,7 +4656,7 @@ app.post('/api/access/jit', authRequired, async (req, res) => {
   // (that is what makes separation-of-duties real, not spoofable text).
   const requester = req.user.email;
   try {
-    const b = (await pgPool.query('SELECT * FROM jit_brokers WHERE id=$1', [brokerId])).rows[0];
+    const b = (await pgPool.query('SELECT * FROM jit_brokers WHERE id=$1 AND tenant_id=$2', [brokerId, req.user.tenantId])).rows[0];
     if (!b) return res.status(404).json({ error: 'Broker not found' });
     if (b.status !== 'healthy') return res.status(409).json({ error: `Broker is '${b.status}' — run a health check before requesting JIT on this database` });
     const scope = (b.allowed_scopes || []).find((s) => s.id === scopeId);
@@ -4795,7 +4795,8 @@ app.post('/api/access/jit/brokers', authRequired, adminOnly, async (req, res) =>
 
 app.delete('/api/access/jit/brokers/:id', authRequired, adminOnly, async (req, res) => {
   try {
-    await pgPool.query('DELETE FROM jit_brokers WHERE id=$1', [req.params.id]);
+    const del = await pgPool.query('DELETE FROM jit_brokers WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId]);
+    if (!del.rowCount) return res.status(404).json({ error: 'Broker not found' });
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'jit.broker.remove', resourceType: 'jit_broker', resourceId: req.params.id, details: {} });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: 'Failed to remove broker' }); }
@@ -4804,7 +4805,7 @@ app.delete('/api/access/jit/brokers/:id', authRequired, adminOnly, async (req, r
 // Health check: prove Vault can mint a scoped user, that it CONNECTS, and that it
 // is NOT over-privileged (out-of-scope check), then revoke the probe lease.
 app.post('/api/access/jit/brokers/:id/health', authRequired, adminOnly, async (req, res) => {
-  const b = (await pgPool.query('SELECT * FROM jit_brokers WHERE id=$1', [req.params.id])).rows[0];
+  const b = (await pgPool.query('SELECT * FROM jit_brokers WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId])).rows[0];
   if (!b) return res.status(404).json({ error: 'Broker not found' });
   const detail = { checked_at: new Date().toISOString(), vault: false, mint: false, connect: false, in_scope: false, notes: [] };
   let lease = null, healthy = false;
@@ -4887,11 +4888,11 @@ app.post('/api/access/jit/:id/provision', authRequired, async (req, res) => {
   if (!signature) return res.status(400).json({ error: 'A signed approval (signature) is required — approve via the Approval Signer first' });
   const approver = (req.user.email || '').toLowerCase().trim();   // verified identity, not spoofable
   try {
-    const g = (await pgPool.query('SELECT * FROM jit_grants WHERE id=$1', [req.params.id])).rows[0];
+    const g = (await pgPool.query('SELECT * FROM jit_grants WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId])).rows[0];
     if (!g) return res.status(404).json({ error: 'Grant not found' });
     if (g.status !== 'pending') return res.status(409).json({ error: `Grant is '${g.status}', not pending` });
 
-    const b = (await pgPool.query('SELECT * FROM jit_brokers WHERE id=$1', [g.broker_id])).rows[0];
+    const b = (await pgPool.query('SELECT * FROM jit_brokers WHERE id=$1 AND tenant_id=$2', [g.broker_id, req.user.tenantId])).rows[0];
     if (!b || b.status !== 'healthy') return res.status(409).json({ error: 'Broker is not healthy' });
 
     // (c) Separation of duties — on the VERIFIED logged-in identity, by email AND user id.
@@ -4954,11 +4955,11 @@ app.post('/api/access/jit/:id/provision', authRequired, async (req, res) => {
 app.post('/api/access/jit/:id/revoke', authRequired, async (req, res) => {
   const me = (req.user.email || '').toLowerCase().trim();
   try {
-    const g = (await pgPool.query('SELECT * FROM jit_grants WHERE id=$1', [req.params.id])).rows[0];
+    const g = (await pgPool.query('SELECT * FROM jit_grants WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId])).rows[0];
     if (!g) return res.status(404).json({ error: 'Grant not found' });
     if (!['pending', 'active'].includes(g.status)) return res.status(409).json({ error: `Grant is already '${g.status}'` });
 
-    const b = g.broker_id ? (await pgPool.query('SELECT owners, label FROM jit_brokers WHERE id=$1', [g.broker_id])).rows[0] : null;
+    const b = g.broker_id ? (await pgPool.query('SELECT owners, label FROM jit_brokers WHERE id=$1 AND tenant_id=$2', [g.broker_id, req.user.tenantId])).rows[0] : null;
     const owners = (b?.owners || []).map((o) => String(o).toLowerCase());
     const isRequester = me === (g.requester || '').toLowerCase().trim();
     const isOwnerOrAdmin = owners.includes(me) || req.user.role === 'tenant_admin';
@@ -6745,48 +6746,9 @@ app.put('/api/settings/financial-assumptions', authRequired, async (req, res) =>
   res.json(fa);
 });
 
-// ── Secret-at-rest encryption (AES-256-GCM) ───────────────────────────────────
-// Cloud-connector credentials (GCP/AWS/Azure/OCI API keys) and exec-cred passwords are
-// encrypted before they hit Postgres, with the key held OUTSIDE the DB (env), so a database
-// dump or a read-replica leak can't reveal them. Legacy plaintext rows are read transparently
-// and re-encrypted on boot. `CREDENTIAL_ENCRYPTION_KEY` = 64-hex, 32-byte base64, or a
-// passphrase (scrypt-derived). Unset → no-op (stores plaintext) so dev still boots.
-const SECRET_ENC_PREFIX = 'enc:v1:';
-const SECRET_KEY = (() => {
-  const raw = process.env.CREDENTIAL_ENCRYPTION_KEY || '';
-  if (!raw) return null;
-  if (/^[0-9a-fA-F]{64}$/.test(raw)) return Buffer.from(raw, 'hex');
-  const b = Buffer.from(raw, 'base64'); if (b.length === 32) return b;
-  return crypto.scryptSync(raw, 'toovix-cred-kek-v1', 32);
-})();
-function encSecret(plaintext) {
-  if (plaintext == null) return plaintext;
-  const s = String(plaintext);
-  if (!SECRET_KEY) return s; // no key configured → store as-is (dev)
-  const iv = crypto.randomBytes(12);
-  const c = crypto.createCipheriv('aes-256-gcm', SECRET_KEY, iv);
-  const ct = Buffer.concat([c.update(s, 'utf8'), c.final()]);
-  return SECRET_ENC_PREFIX + Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
-}
-function decSecret(stored) {
-  if (typeof stored !== 'string' || !stored.startsWith(SECRET_ENC_PREFIX)) return stored; // legacy plaintext
-  if (!SECRET_KEY) throw new Error('CREDENTIAL_ENCRYPTION_KEY not set but an encrypted secret is present');
-  const buf = Buffer.from(stored.slice(SECRET_ENC_PREFIX.length), 'base64');
-  const iv = buf.subarray(0, 12), tag = buf.subarray(12, 28), ct = buf.subarray(28);
-  const d = crypto.createDecipheriv('aes-256-gcm', SECRET_KEY, iv);
-  d.setAuthTag(tag);
-  return Buffer.concat([d.update(ct), d.final()]).toString('utf8');
-}
-// cloud_connectors.credential is JSONB. Encrypted rows are stored as {"enc":"enc:v1:…"} (still
-// valid JSON); legacy rows are the raw credential object. packCredential produces the param to
-// store; unpackCredential returns the plaintext credential object either way.
-function packCredential(obj) { return JSON.stringify({ enc: encSecret(JSON.stringify(obj || {})) }); }
-function unpackCredential(stored) {
-  if (stored && typeof stored === 'object' && typeof stored.enc === 'string') {
-    try { return JSON.parse(decSecret(stored.enc)); } catch { return {}; }
-  }
-  return stored || {}; // legacy plaintext JSONB object
-}
+// ── Secret-at-rest encryption (AES-256-GCM) — see secrets.js (extracted for unit testing) ──
+const secrets = require('./secrets');
+const { encSecret, decSecret, packCredential, unpackCredential } = secrets;
 
 // ── Cloud environment (which cloud discovery adapters to run) ──────────────────
 const CLOUD_PROVIDERS = [
