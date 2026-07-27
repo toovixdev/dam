@@ -426,12 +426,10 @@ async function runAuthMigration() {
     await client.query(`CREATE TABLE IF NOT EXISTS compliance_scores (
       id SERIAL PRIMARY KEY, framework VARCHAR(40) NOT NULL, score INT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT now()
     )`);
-    const cmpCheck = await client.query(`SELECT COUNT(*) as cnt FROM compliance_scores`);
-    if (parseInt(cmpCheck.rows[0].cnt) === 0) {
-      await client.query(`INSERT INTO compliance_scores (framework, score) VALUES
-        ('PCI-DSS 4.0', 91), ('GDPR', 86), ('SOX', 93), ('HIPAA', 88), ('DPDPA', 82), ('RBI CSF', 91), ('ISO 27001', 79)`);
-      console.log('[Auth] Seeded compliance scores');
-    }
+    // Per-tenant cache of framework scores (fed by complianceScoresFor). Legacy global rows
+    // (tenant_id NULL) are ignored by the now tenant-filtered readers.
+    await client.query(`ALTER TABLE compliance_scores ADD COLUMN IF NOT EXISTS tenant_id UUID`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_compliance_scores_tenant ON compliance_scores(tenant_id)`);
 
     // Seed alerts if none exist
     const alertCheck = await client.query(`SELECT COUNT(*) as cnt FROM alerts`);
@@ -3143,6 +3141,7 @@ app.get('/api/admin/tenants/:id/health', async (req, res) => {
     if (!tr.rows.length) return res.status(404).json({ error: 'Not found' });
     const tenant = tr.rows[0];
 
+    await complianceScoresFor(id); // warm this tenant's cache so the health pane shows real scores
     const [agentRows, dbAgg, alertAgg, alert24, classAgg, integRows, comp, openAlerts] = await Promise.all([
       pgPool.query('SELECT id, host, agent_type, status, last_heartbeat FROM agents WHERE tenant_id = $1', [id]),
       pgPool.query(`SELECT
@@ -3159,7 +3158,7 @@ app.get('/api/admin/tenants/:id/health', async (req, res) => {
           COUNT(*) FILTER (WHERE confidence < 0.85) AS pending, MAX(last_scanned_at) AS last_scan
         FROM classified_columns WHERE tenant_id = $1`, [id]),
       pgPool.query('SELECT type, status, last_sync_at FROM integrations WHERE tenant_id = $1', [id]),
-      pgPool.query('SELECT COUNT(*) AS frameworks, AVG(score) AS pass_rate, COUNT(*) FILTER (WHERE score < 85) AS gaps FROM compliance_scores'),
+      pgPool.query('SELECT COUNT(*) AS frameworks, AVG(score) AS pass_rate, COUNT(*) FILTER (WHERE score < 85) AS gaps FROM compliance_scores WHERE tenant_id = $1', [id]),
       pgPool.query(`SELECT severity, summary, created_at FROM alerts WHERE tenant_id = $1 AND status = 'open' ORDER BY created_at DESC LIMIT 8`, [id]),
     ]);
 
@@ -8016,12 +8015,26 @@ async function complianceFrameworks(tenantId) {
   } catch { states = {}; }
   return buildFrameworks(m, states);
 }
+// Refresh a tenant's cached framework scores from the live per-tenant computation.
+async function refreshComplianceScores(tenantId, fw) {
+  const frameworks = fw || (await complianceFrameworks(tenantId));
+  await pgPool.query('DELETE FROM compliance_scores WHERE tenant_id = $1', [tenantId]);
+  for (const f of frameworks) await pgPool.query('INSERT INTO compliance_scores (tenant_id, framework, score) VALUES ($1,$2,$3)', [tenantId, f.name, f.score]);
+  return frameworks.map((f) => ({ framework: f.name, score: f.score }));
+}
+// Per-tenant framework scores for the dashboard/fleet widgets — reads the tenant's cache and
+// self-warms from the live computation on a cache miss (so a dashboard load before the user has
+// opened the Compliance Center still shows real, tenant-scoped scores rather than nothing).
+async function complianceScoresFor(tenantId) {
+  let rows = (await pgPool.query('SELECT framework, score FROM compliance_scores WHERE tenant_id = $1 ORDER BY framework', [tenantId])).rows;
+  if (!rows.length) { try { rows = await refreshComplianceScores(tenantId); } catch { rows = []; } }
+  return rows;
+}
 app.get('/api/compliance/frameworks', authRequired, async (req, res) => {
   try {
     const fw = await complianceFrameworks(req.user.tenantId);
-    // Keep compliance_scores (used by fleet risk + dashboard) in sync with the live computation.
-    await pgPool.query('DELETE FROM compliance_scores');
-    for (const f of fw) await pgPool.query('INSERT INTO compliance_scores (framework, score) VALUES ($1,$2)', [f.name, f.score]);
+    // Keep this tenant's compliance_scores cache (fleet risk + dashboard) in sync with the live computation.
+    await refreshComplianceScores(req.user.tenantId, fw);
     res.json(fw);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -8220,7 +8233,8 @@ const REPORTS = {
     const fleet = await computeFleetRisk(pgPool);
     const dbs = (await pgPool.query(`SELECT COUNT(*) total, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)) monitored FROM databases d`)).rows[0];
     const al = (await pgPool.query(`SELECT COUNT(*) total, COUNT(*) FILTER (WHERE severity='critical') crit FROM alerts WHERE status='open'`)).rows[0];
-    const cmp = (await pgPool.query(`SELECT COALESCE(ROUND(AVG(score)),0) avg FROM compliance_scores`)).rows[0];
+    const cmpScores = await complianceScoresFor(user.tenantId);
+    const cmp = { avg: cmpScores.length ? Math.round(cmpScores.reduce((s, r) => s + r.score, 0) / cmpScores.length) : 0 };
     const today = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND timestamp>=today()`, 'TabSeparated')) || 0;
     const risky = (await pgPool.query(`SELECT name, COALESCE(risk_score,0) risk, monitoring_status FROM databases ORDER BY risk_score DESC NULLS LAST LIMIT 5`)).rows;
     const sev = (await pgPool.query(`SELECT severity, COUNT(*) c FROM alerts WHERE status='open' GROUP BY severity ORDER BY 2 DESC`)).rows;
@@ -9953,7 +9967,7 @@ async function computeFleetRisk(pgPool, T) {
   );
   let complianceGaps = 0;
   try {
-    const cmp = await pgPool.query(`SELECT COUNT(*) as cnt FROM compliance_scores WHERE score < 85`);
+    const cmp = await pgPool.query(`SELECT COUNT(*) as cnt FROM compliance_scores WHERE score < 85 AND tenant_id = $1`, [T]);
     complianceGaps = parseInt(cmp.rows[0].cnt);
   } catch(e) {}
   let unmaskedPct = 0;
@@ -10122,17 +10136,11 @@ app.get('/api/dashboard/sensitive-daily', authRequired, async (req, res) => {
   } catch(e) { res.json([]); }
 });
 
-app.get('/api/dashboard/compliance', async (req, res) => {
+app.get('/api/dashboard/compliance', authRequired, async (req, res) => {
   try {
-    const { rows } = await pgPool.query(`SELECT * FROM compliance_scores ORDER BY framework`);
-    if (rows.length > 0) return res.json(rows);
-  } catch(e) {}
-  res.json([
-    { framework: 'PCI-DSS 4.0', score: 91 }, { framework: 'GDPR', score: 86 },
-    { framework: 'SOX', score: 93 }, { framework: 'HIPAA', score: 88 },
-    { framework: 'DPDPA', score: 82 }, { framework: 'RBI CSF', score: 91 },
-    { framework: 'ISO 27001', score: 79 },
-  ]);
+    const rows = await complianceScoresFor(req.user.tenantId);
+    return res.json(rows);
+  } catch (e) { res.json([]); }
 });
 
 app.get('/api/dashboard/coverage', authRequired, async (req, res) => {
