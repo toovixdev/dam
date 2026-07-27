@@ -8230,14 +8230,14 @@ const catOf = (tags, personalTags) => (tags || []).filter((t) => personalTags.in
 const REPORTS = {
   exec: async (user) => {
     const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
-    const fleet = await computeFleetRisk(pgPool);
-    const dbs = (await pgPool.query(`SELECT COUNT(*) total, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)) monitored FROM databases d`)).rows[0];
-    const al = (await pgPool.query(`SELECT COUNT(*) total, COUNT(*) FILTER (WHERE severity='critical') crit FROM alerts WHERE status='open'`)).rows[0];
-    const cmpScores = await complianceScoresFor(user.tenantId);
+    const cmpScores = await complianceScoresFor(user.tenantId); // also warms this tenant's score cache
+    const fleet = await computeFleetRisk(pgPool, user.tenantId);
+    const dbs = (await pgPool.query(`SELECT COUNT(*) total, COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)) monitored FROM databases d WHERE d.tenant_id = $1`, [user.tenantId])).rows[0];
+    const al = (await pgPool.query(`SELECT COUNT(*) total, COUNT(*) FILTER (WHERE severity='critical') crit FROM alerts WHERE status='open' AND tenant_id = $1`, [user.tenantId])).rows[0];
     const cmp = { avg: cmpScores.length ? Math.round(cmpScores.reduce((s, r) => s + r.score, 0) / cmpScores.length) : 0 };
     const today = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND timestamp>=today()`, 'TabSeparated')) || 0;
-    const risky = (await pgPool.query(`SELECT name, COALESCE(risk_score,0) risk, monitoring_status FROM databases ORDER BY risk_score DESC NULLS LAST LIMIT 5`)).rows;
-    const sev = (await pgPool.query(`SELECT severity, COUNT(*) c FROM alerts WHERE status='open' GROUP BY severity ORDER BY 2 DESC`)).rows;
+    const risky = (await pgPool.query(`SELECT name, COALESCE(risk_score,0) risk, monitoring_status FROM databases WHERE tenant_id = $1 ORDER BY risk_score DESC NULLS LAST LIMIT 5`, [user.tenantId])).rows;
+    const sev = (await pgPool.query(`SELECT severity, COUNT(*) c FROM alerts WHERE status='open' AND tenant_id = $1 GROUP BY severity ORDER BY 2 DESC`, [user.tenantId])).rows;
     return {
       title: 'Executive Summary', period: 'Current posture',
       kpis: [kpi('Fleet risk', `${fleet.score}/100`), kpi('Databases', `${dbs.monitored}/${dbs.total}`, 'monitored'), kpi('Open alerts', al.total, `${al.crit} critical`), kpi('Compliance', `${cmp.avg}%`), kpi('Events today', today.toLocaleString())],
@@ -8246,10 +8246,10 @@ const REPORTS = {
   },
   sensitive: async (user) => {
     const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
-    const cols = (await pgPool.query(`SELECT COUNT(*) c FROM classified_columns`)).rows[0].c;
+    const cols = (await pgPool.query(`SELECT COUNT(*) c FROM classified_columns WHERE tenant_id = $1`, [user.tenantId])).rows[0].c;
     const reads = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND length(tags)>0 AND timestamp>=now()-INTERVAL 30 DAY`, 'TabSeparated')) || 0;
     const accessors = await chSafe(`SELECT principal, count() cnt, sum(row_count) rows FROM ${evDb}.events WHERE tenant_id='${esc}' AND length(tags)>0 AND timestamp>=now()-INTERVAL 30 DAY GROUP BY principal ORDER BY cnt DESC LIMIT 10`);
-    const objs = (await pgPool.query(`SELECT d.name db, o.schema_name||'.'||o.object_name obj, o.sensitivity, o.column_count FROM classified_objects o JOIN databases d ON o.database_id=d.id ORDER BY CASE o.sensitivity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END LIMIT 10`)).rows;
+    const objs = (await pgPool.query(`SELECT d.name db, o.schema_name||'.'||o.object_name obj, o.sensitivity, o.column_count FROM classified_objects o JOIN databases d ON o.database_id=d.id WHERE o.tenant_id = $1 ORDER BY CASE o.sensitivity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END LIMIT 10`, [user.tenantId])).rows;
     return {
       title: 'Sensitive-Data Access', period: 'Last 30 days',
       kpis: [kpi('Sensitive columns', cols), kpi('Sensitive accesses', reads.toLocaleString()), kpi('Distinct accessors', accessors.length)],
@@ -8260,7 +8260,7 @@ const REPORTS = {
     const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
     const ev = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND operation IN ('GRANT','DDL') AND timestamp>=now()-INTERVAL 30 DAY`, 'TabSeparated')) || 0;
     const grants = await chSafe(`SELECT timestamp, principal, database_name, operation FROM ${evDb}.events WHERE tenant_id='${esc}' AND operation IN ('GRANT','DDL') ORDER BY timestamp DESC LIMIT 20`);
-    const alerts = (await pgPool.query(`SELECT created_at, principal, rule, severity FROM alerts WHERE rule ILIKE '%grant%' OR rule ILIKE '%privileg%' OR rule ILIKE '%ddl%' ORDER BY created_at DESC LIMIT 15`)).rows;
+    const alerts = (await pgPool.query(`SELECT created_at, principal, rule, severity FROM alerts WHERE tenant_id = $1 AND (rule ILIKE '%grant%' OR rule ILIKE '%privileg%' OR rule ILIKE '%ddl%') ORDER BY created_at DESC LIMIT 15`, [user.tenantId])).rows;
     return {
       title: 'Privileged User Activity', period: 'Last 30 days',
       kpis: [kpi('Privileged ops', ev.toLocaleString()), kpi('Privileged alerts', alerts.length)],
@@ -8269,7 +8269,7 @@ const REPORTS = {
   },
   pci: async (user) => {
     const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
-    const colsRows = (await pgPool.query(`SELECT d.name db, o.object_name obj, cc.column_name col, cc.sensitivity FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id WHERE 'pci' = ANY(cc.tags) ORDER BY cc.sensitivity LIMIT 50`)).rows;
+    const colsRows = (await pgPool.query(`SELECT d.name db, o.object_name obj, cc.column_name col, cc.sensitivity FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id WHERE cc.tenant_id = $1 AND 'pci' = ANY(cc.tags) ORDER BY cc.sensitivity LIMIT 50`, [user.tenantId])).rows;
     const access = await chSafe(`SELECT timestamp, principal, database_name, operation, row_count FROM ${evDb}.events WHERE tenant_id='${esc}' AND has(tags,'pci') ORDER BY timestamp DESC LIMIT 20`);
     const accessCount = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}' AND has(tags,'pci') AND timestamp>=now()-INTERVAL 30 DAY`, 'TabSeparated')) || 0;
     return {
@@ -8406,7 +8406,7 @@ const REPORTS = {
   audit: async (user) => {
     const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
     const total = parseInt(await chSafe(`SELECT count() FROM ${evDb}.events WHERE tenant_id='${esc}'`, 'TabSeparated')) || 0;
-    const cp = (await pgPool.query(`SELECT COUNT(*) c FROM audit_trail`)).rows[0].c;
+    const cp = (await pgPool.query(`SELECT COUNT(*) c FROM audit_trail WHERE tenant_id = $1`, [user.tenantId])).rows[0].c;
     const recent = await chSafe(`SELECT timestamp, principal, database_name, operation FROM ${evDb}.events WHERE tenant_id='${esc}' ORDER BY timestamp DESC LIMIT 15`);
     return {
       title: 'Audit Integrity — Evidence Pack', period: 'All time',
@@ -8414,9 +8414,9 @@ const REPORTS = {
       tables: [tbl('Recent activity (sample)', ['Time', 'Principal', 'Database', 'Op'], recent.map((r) => [r.timestamp, r.principal, r.database_name, r.operation]))],
     };
   },
-  va: async () => {
-    const risky = (await pgPool.query(`SELECT name, COALESCE(risk_score,0) risk, monitoring_status FROM databases ORDER BY risk_score DESC NULLS LAST LIMIT 10`)).rows;
-    const unmon = (await pgPool.query(`SELECT COUNT(*) c FROM databases d WHERE NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)`)).rows[0].c;
+  va: async (user) => {
+    const risky = (await pgPool.query(`SELECT name, COALESCE(risk_score,0) risk, monitoring_status FROM databases WHERE tenant_id = $1 ORDER BY risk_score DESC NULLS LAST LIMIT 10`, [user.tenantId])).rows;
+    const unmon = (await pgPool.query(`SELECT COUNT(*) c FROM databases d WHERE d.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)`, [user.tenantId])).rows[0].c;
     return {
       title: 'Vulnerability Assessment — Findings', period: 'Current',
       note: 'No dedicated VA scanner is enrolled yet; this summary derives risk posture from monitored databases. Enroll a VA scanner for CIS/STIG findings.',
