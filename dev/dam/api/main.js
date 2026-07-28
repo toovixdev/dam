@@ -2524,15 +2524,29 @@ async function adminPlaneMap() {
 }
 async function adminEventsByTenant(whereClause) {
   const map = {};
+  const W = whereClause ? `WHERE ${whereClause}` : '';
   try {
     const planes = await adminPlaneMap();
     for (const [db, ids] of Object.entries(planes)) {
       const idSet = new Set(ids);
-      const rows = await chSafe(`SELECT tenant_id, count() AS cnt FROM ${db}.events WHERE ${whereClause} GROUP BY tenant_id`);
+      const rows = await chSafe(`SELECT tenant_id, count() AS cnt FROM ${db}.events ${W} GROUP BY tenant_id`);
       if (Array.isArray(rows)) rows.forEach((r) => { if (idSet.has(r.tenant_id)) map[r.tenant_id] = (map[r.tenant_id] || 0) + parseInt(r.cnt); });
     }
   } catch { /* CH not ready */ }
   return map;
+}
+// Fleet-wide scalar: total event count across every plane (optional WHERE clause).
+async function adminEventsCount(whereClause) {
+  const W = whereClause ? `WHERE ${whereClause}` : '';
+  let total = 0;
+  try { for (const db of Object.keys(await adminPlaneMap())) total += parseInt(await chSafe(`SELECT count() FROM ${db}.events ${W}`, 'TabSeparated')) || 0; } catch { /* CH not ready */ }
+  return total;
+}
+// Fleet-wide latest event timestamp (unix seconds) across every plane — 0 if none.
+async function adminEventsMaxTs() {
+  let max = 0;
+  try { for (const db of Object.keys(await adminPlaneMap())) { const ts = parseInt(await chSafe(`SELECT toUnixTimestamp(max(timestamp)) FROM ${db}.events`, 'TabSeparated')) || 0; if (ts > max) max = ts; } } catch { /* CH not ready */ }
+  return max;
 }
 async function adminEventsTimeline() {
   const buckets = {}; // unix-hour -> count
@@ -3002,12 +3016,7 @@ function quotaStatus(maxPct) {
 
 // Total events per tenant (all-time) → storage estimate.
 async function eventsTotalByTenant() {
-  const map = {};
-  try {
-    const ev = await chQuery('SELECT tenant_id, count() AS cnt FROM dam_analytics.events GROUP BY tenant_id');
-    ev.forEach(r => { map[r.tenant_id] = parseInt(r.cnt); });
-  } catch { /* ClickHouse not ready */ }
-  return map;
+  return adminEventsByTenant(); // all-time, summed across each tenant's data plane
 }
 
 async function buildQuotaRows() {
@@ -3332,9 +3341,9 @@ async function gatherInfra() {
   const dataBytes = parseInt(await chOne("SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database='dam_analytics'")) || 0;
   const dataRows = parseInt(await chOne("SELECT sum(rows) FROM system.parts WHERE active AND database='dam_analytics'")) || 0;
   const queriesHr = parseInt(await chOne("SELECT count() FROM system.query_log WHERE event_time >= now()-3600")) || 0;
-  const last60 = parseInt(await chOne("SELECT count() FROM dam_analytics.events WHERE timestamp >= now()-60")) || 0;
+  const last60 = await adminEventsCount('timestamp >= now()-60'); // across all data planes
   const eps = +(last60 / 60).toFixed(2);
-  const lastTs = parseInt(await chOne("SELECT toUnixTimestamp(max(timestamp)) FROM dam_analytics.events")) || 0;
+  const lastTs = await adminEventsMaxTs(); // latest ingest across all data planes
   const ingestLagS = lastTs ? Math.max(0, Math.floor(Date.now() / 1000 - lastTs)) : null;
 
   // Postgres + agents + recent events (collector liveness)
@@ -3411,11 +3420,8 @@ app.get('/api/admin/infra/noisy', async (req, res) => {
   try {
     const tenants = (await pgPool.query(`SELECT t.id, t.name, t.slug, t.tier, t.data_region,
         (SELECT COUNT(*) FROM databases d WHERE d.tenant_id = t.id) AS dbs FROM tenants t`)).rows;
-    let byTenant = {}, totalHr = 0;
-    try {
-      const rows = await chQuery("SELECT tenant_id, count() AS c FROM dam_analytics.events WHERE timestamp >= now()-3600 GROUP BY tenant_id");
-      rows.forEach(r => { byTenant[r.tenant_id] = parseInt(r.c); totalHr += parseInt(r.c); });
-    } catch { /* ch down */ }
+    const byTenant = await adminEventsByTenant('timestamp >= now()-3600'); // last hour, across data planes
+    const totalHr = Object.values(byTenant).reduce((s, n) => s + n, 0);
     const diskTotalRows = parseInt(await chOne("SELECT sum(rows) FROM system.parts WHERE active AND database='dam_analytics'")) || 1;
 
     const shaped = tenants.map(t => {
@@ -3462,7 +3468,7 @@ app.get('/api/admin/infra/capacity', async (req, res) => {
     const dataBytes = parseInt(await chOne("SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database='dam_analytics'")) || 0;
 
     // Growth: bytes/day ≈ today's events × bytes/event. Forecast days to 90%.
-    const evToday = parseInt(await chOne("SELECT count() FROM dam_analytics.events WHERE timestamp >= today()")) || 0;
+    const evToday = await adminEventsCount('timestamp >= today()'); // across all data planes
     const totalRows = parseInt(await chOne("SELECT sum(rows) FROM system.parts WHERE active AND database='dam_analytics'")) || 1;
     const bytesPerRow = dataBytes / totalRows || 32;
     const bytesPerDay = evToday * bytesPerRow;
@@ -3620,12 +3626,11 @@ async function tenantBillingUsage(t, rowsByTenant, totalRows, globalHotBytes, gl
 
 async function computeInvoices() {
   const tenants = (await pgPool.query('SELECT id, name, slug, tier, status, data_region, created_at FROM tenants ORDER BY created_at')).rows;
-  const totalRows = parseInt(await chSafe("SELECT count() FROM dam_analytics.events", 'TabSeparated')) || 0;
+  const rowsByTenant = await adminEventsByTenant(); // all-time per tenant, across data planes
+  const totalRows = Object.values(rowsByTenant).reduce((s, n) => s + n, 0);
   const globalHotBytes = parseInt(await chSafe("SELECT sum(bytes_on_disk) FROM system.parts WHERE database = 'dam_analytics' AND active", 'TabSeparated')) || 0;
   let globalCold = { bytes: 0, objects: 0 };
   try { if (archive && archive.usage) globalCold = await archive.usage(); } catch { /* archive offline */ }
-  const rowsByTenant = {};
-  try { (await chQuery("SELECT tenant_id, count() AS c FROM dam_analytics.events GROUP BY tenant_id")).forEach(r => { rowsByTenant[r.tenant_id] = parseInt(r.c); }); } catch { /* ch down */ }
 
   const out = [];
   for (const t of tenants) {
