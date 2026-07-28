@@ -2508,6 +2508,43 @@ app.get('/api/admin/auth/me', (req, res) => {
 // ── Admin · Platform (Super-Admin console) ─────────────────
 // Read-only aggregation across existing tables + ClickHouse, plus the isolated
 // platform_alerts / platform_meta tables. Nothing here mutates main-app data.
+// ── Fleet-wide event aggregation across per-tenant data planes ───────────────
+// Events live in each tenant's own ClickHouse DB (eventsDbFor) — a dedicated plane for
+// paid tenants, the shared dam_analytics for trial. Reading dam_analytics alone misses
+// every dedicated-plane tenant (that's why admin event counts read 0). These helpers
+// resolve each distinct plane once and combine. Best-effort: a plane error is skipped.
+async function adminPlaneMap() {
+  const tenants = (await pgPool.query('SELECT id FROM tenants')).rows;
+  const planes = {}; // planeDb -> [tenantId,…]
+  for (const t of tenants) {
+    const db = await eventsDbFor(t.id);
+    (planes[db] = planes[db] || []).push(t.id);
+  }
+  return planes;
+}
+async function adminEventsByTenant(whereClause) {
+  const map = {};
+  try {
+    const planes = await adminPlaneMap();
+    for (const [db, ids] of Object.entries(planes)) {
+      const idSet = new Set(ids);
+      const rows = await chSafe(`SELECT tenant_id, count() AS cnt FROM ${db}.events WHERE ${whereClause} GROUP BY tenant_id`);
+      if (Array.isArray(rows)) rows.forEach((r) => { if (idSet.has(r.tenant_id)) map[r.tenant_id] = (map[r.tenant_id] || 0) + parseInt(r.cnt); });
+    }
+  } catch { /* CH not ready */ }
+  return map;
+}
+async function adminEventsTimeline() {
+  const buckets = {}; // unix-hour -> count
+  try {
+    const planes = await adminPlaneMap();
+    for (const db of Object.keys(planes)) {
+      const rows = await chSafe(`SELECT toUnixTimestamp(toStartOfHour(timestamp)) AS hour, count() AS cnt FROM ${db}.events WHERE timestamp >= now() - INTERVAL 24 HOUR GROUP BY hour`);
+      if (Array.isArray(rows)) rows.forEach((r) => { buckets[r.hour] = (buckets[r.hour] || 0) + parseInt(r.cnt); });
+    }
+  } catch { /* CH not ready */ }
+  return Object.entries(buckets).map(([hour, cnt]) => ({ hour: parseInt(hour), cnt })).sort((a, b) => a.hour - b.hour);
+}
 app.get('/api/admin/platform/overview', async (req, res) => {
   try {
     const [tenantAgg, dbAgg, agentAgg, regionRows, tenantDbs, metaRows, alertRows, integrityRow] = await Promise.all([
@@ -2531,14 +2568,9 @@ app.get('/api/admin/platform/overview', async (req, res) => {
       pgPool.query(`SELECT COUNT(*) AS broken FROM audit_trail WHERE row_hash IS NULL`),
     ]);
 
-    // Events today + per-tenant volume from ClickHouse (best-effort — never fail the page).
-    let eventsToday = 0;
-    const eventsByTenant = {};
-    try {
-      eventsToday = parseInt(await chQuery("SELECT count() FROM dam_analytics.events WHERE timestamp >= today()", 'TabSeparated')) || 0;
-      const rows = await chQuery("SELECT tenant_id, count() AS cnt FROM dam_analytics.events WHERE timestamp >= today() GROUP BY tenant_id");
-      rows.forEach(r => { eventsByTenant[r.tenant_id] = parseInt(r.cnt); });
-    } catch { /* ClickHouse not ready */ }
+    // Events today + per-tenant volume, summed across every tenant's data plane.
+    const eventsByTenant = await adminEventsByTenant('timestamp >= today()');
+    const eventsToday = Object.values(eventsByTenant).reduce((s, n) => s + n, 0);
 
     const meta = Object.fromEntries(metaRows.rows.map(r => [r.key, r.value]));
     const topTenants = tenantDbs.rows
@@ -2577,15 +2609,7 @@ app.get('/api/admin/platform/overview', async (req, res) => {
 });
 
 app.get('/api/admin/platform/events-timeline', async (req, res) => {
-  try {
-    const rows = await chQuery(`SELECT toUnixTimestamp(toStartOfHour(timestamp)) AS hour, count() AS cnt
-                                FROM dam_analytics.events
-                                WHERE timestamp >= now() - INTERVAL 24 HOUR
-                                GROUP BY hour ORDER BY hour`);
-    res.json(rows.map(r => ({ hour: parseInt(r.hour), cnt: parseInt(r.cnt) })));
-  } catch {
-    res.json([]);
-  }
+  res.json(await adminEventsTimeline());
 });
 
 // ── Admin · Tenants (Super-Admin console) ──────────────────
@@ -2645,12 +2669,7 @@ const TENANT_AGG = `
   ) u ON true`;
 
 async function eventsByTenantToday() {
-  const map = {};
-  try {
-    const ev = await chQuery("SELECT tenant_id, count() AS cnt FROM dam_analytics.events WHERE timestamp >= today() GROUP BY tenant_id");
-    ev.forEach(r => { map[r.tenant_id] = parseInt(r.cnt); });
-  } catch { /* ClickHouse not ready */ }
-  return map;
+  return adminEventsByTenant('timestamp >= today()'); // summed across each tenant's data plane
 }
 
 app.get('/api/admin/tenants/summary', async (req, res) => {
