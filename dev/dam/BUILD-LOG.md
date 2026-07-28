@@ -2356,3 +2356,30 @@ miss). The frameworks-endpoint writer scopes DELETE/INSERT by tenant; the dashbo
 is now `authRequired` + per-tenant (its hardcoded fallback scores dropped). 8 legacy global rows
 purged. The entire Compliance Center — controls, scores, evidence, PDF, dashboard widgets — is now
 fully per-tenant.
+
+## Secrets encrypted at rest — full pass (2026-07-28)
+
+Audit found most stored secrets were **plaintext in Postgres** (`dam_control`); only
+`cloud_connectors.credential` was encrypted, and the one key (`CREDENTIAL_ENCRYPTION_KEY`)
+is an env var on the same host. Applied the existing `secrets.js` AES-256-GCM helpers to
+everything:
+
+- **Batch 1:** `compliance_signing_key.private_pem` (RSA signing key) + `platform_smtp.password`.
+  Verified on prod: the signing key decrypts to a valid RSA key that signs.
+- **Batch 2:** all `integrations.config` secrets — tenant SMTP password, SSO client secrets
+  (Okta/Google), alert-connector secrets (Slack/Teams/Splunk/PagerDuty/Datadog/webhook), LLM
+  API key. Field-aware `enc/decIntegrationConfig(type,cfg)` encrypts only the secret fields
+  (connectors declare `fields[].secret`; the rest via `INTEGRATION_SECRET_FIELDS`). Encrypt on
+  WRITE at the 5 config stores; decrypt only at USE points (dispatchAlert + connector test,
+  loadSmtpConfig + smtp test, oktaEffective/googleEffective as the SSO choke point,
+  assistantConfigFor). `/api/integrations` now masks secrets (was leaking plaintext).
+
+Safety: `decSecret` passes legacy plaintext through, so readers work mid-migration; carry-forward
+and the idempotent boot backfill (`migrateEncryptSecrets`) use `encSecret(decSecret(x))` to avoid
+double-encryption. **Azure SSO is env-based, so meridian-fg's login is untouched.** Verified prod:
+backfill ran, email password round-trips, login endpoint 200.
+
+Remaining plaintext is *outside* the control plane: agent-side `dam_svc` DB passwords on customer
+hosts (agent env files). This pass is the prerequisite for **BYOK** — every secret is now encrypted
+under one key; BYOK swaps that key's source (env → customer KMS, Vault Transit first). See
+`docs/va-scanner-design.md` sibling for the BYOK design in the chat history.
