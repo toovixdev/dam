@@ -8,6 +8,7 @@ WORKDIR /src
 COPY go.mod ./
 COPY *.go ./
 COPY *.c ./
+COPY maskdetect/ ./maskdetect/
 # Resolve the module graph first (tidy only needs import paths, not the generated symbols),
 # so `go run bpf2go` has a consistent go.mod/go.sum.
 RUN go mod tidy

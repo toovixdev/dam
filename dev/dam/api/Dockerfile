@@ -8,6 +8,7 @@ WORKDIR /src
 COPY agent/go.mod ./
 COPY agent/*.go ./
 COPY agent/*.c ./
+COPY agent/maskdetect/ ./maskdetect/
 RUN go mod tidy
 RUN go generate ./...
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o /out/dam-agent-linux-amd64 .
