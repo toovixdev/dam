@@ -29,7 +29,7 @@ FROM node:20-alpine
 WORKDIR /app
 COPY api/package.json ./
 RUN npm install --production
-COPY api/main.js api/archive.js api/compliance-catalog.js ./
+COPY api/main.js api/archive.js api/compliance-catalog.js api/secrets.js ./
 # Customer-installable agent artifacts, served by the control plane at /api/download.
 COPY --from=agent /out/dam-agent-linux-amd64 /app/artifacts/dam-agent-linux-amd64
 COPY --from=pkg /out/dam-agent_0.1.0_amd64.deb /app/artifacts/dam-agent_amd64.deb
