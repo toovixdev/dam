@@ -176,7 +176,7 @@ let _platformMailer = null;
 async function loadPlatformSmtp() {
   try {
     const row = (await pgPool.query('SELECT host, port, secure, username, password, from_addr FROM platform_smtp WHERE id = 1')).rows[0];
-    platformSmtpConfig = row && row.host ? row : null;
+    platformSmtpConfig = row && row.host ? { ...row, password: row.password ? decSecret(row.password) : row.password } : null;
   } catch (e) { platformSmtpConfig = null; }
   _platformMailer = null;
 }
@@ -2851,7 +2851,7 @@ app.put('/api/admin/platform/smtp', async (req, res) => {
     const pass = (password && String(password).trim()) ? String(password).trim() : (existing ? existing.password : null);
     await pgPool.query(
       `UPDATE platform_smtp SET host=$1, port=$2, secure=$3, username=$4, password=$5, from_addr=$6, updated_at=now(), updated_by=$7 WHERE id=1`,
-      [String(host).trim(), parseInt(port) || 587, !!secure, (username || '').trim() || null, pass, (from || '').trim() || null, actor || 'Platform Ops']);
+      [String(host).trim(), parseInt(port) || 587, !!secure, (username || '').trim() || null, pass != null ? encSecret(decSecret(pass)) : null, (from || '').trim() || null, actor || 'Platform Ops']);
     await loadPlatformSmtp();
     try { await logPlatformAudit({ actor: actor || 'Platform Ops', action: 'platform.smtp.update', resource: 'platform/smtp', ip: req.ip, details: `host ${host}` }); } catch (e) { /* best-effort */ }
     res.json({ ok: true });
@@ -2866,7 +2866,7 @@ app.post('/api/admin/platform/smtp/test', async (req, res) => {
     let smtp;
     if (b.host) {
       const existing = (await pgPool.query('SELECT password FROM platform_smtp WHERE id=1')).rows[0];
-      const pass = (b.password && String(b.password).trim()) ? String(b.password).trim() : (existing ? existing.password : '');
+      const pass = (b.password && String(b.password).trim()) ? String(b.password).trim() : (existing ? decSecret(existing.password) : '');
       const tUser = (b.username || '').trim();
       const tFrom = (b.from || '').trim() || (/@/.test(tUser) ? tUser : platformFrom());
       smtp = { host: String(b.host).trim(), port: parseInt(b.port) || 587, secure: !!b.secure, user: tUser || undefined, pass: pass || undefined, from: tFrom };
@@ -6774,6 +6774,26 @@ app.put('/api/settings/financial-assumptions', authRequired, async (req, res) =>
 const secrets = require('./secrets');
 const { encSecret, decSecret, packCredential, unpackCredential } = secrets;
 
+// One-time, idempotent at-rest encryption backfill: encrypt any secret still stored in
+// plaintext (values without the enc: prefix). decSecret passes plaintext through unchanged,
+// so readers work whether a value is migrated yet or not. Runs every boot but only rewrites
+// not-yet-encrypted rows, so it's cheap and safe to leave in.
+async function migrateEncryptSecrets() {
+  const isEnc = (v) => typeof v === 'string' && v.startsWith(secrets.SECRET_ENC_PREFIX);
+  try {
+    for (const k of (await pgPool.query('SELECT id, private_pem FROM compliance_signing_key')).rows) {
+      if (k.private_pem && !isEnc(k.private_pem)) {
+        await pgPool.query('UPDATE compliance_signing_key SET private_pem=$2 WHERE id=$1', [k.id, encSecret(k.private_pem)]);
+      }
+    }
+    const smtp = (await pgPool.query('SELECT password FROM platform_smtp WHERE id=1')).rows[0];
+    if (smtp && smtp.password && !isEnc(smtp.password)) {
+      await pgPool.query('UPDATE platform_smtp SET password=$1 WHERE id=1', [encSecret(smtp.password)]);
+    }
+    console.log('[Secrets] at-rest encryption backfill complete (signing key, platform SMTP)');
+  } catch (e) { console.error('[Secrets] encryption backfill failed:', e.message); }
+}
+
 // ── Cloud environment (which cloud discovery adapters to run) ──────────────────
 const CLOUD_PROVIDERS = [
   { id: 'gcp', label: 'Google Cloud (Cloud SQL, AlloyDB)' },
@@ -9351,7 +9371,7 @@ let _signKey = null;
 async function signingKey() {
   if (_signKey) return _signKey;
   const row = (await pgPool.query('SELECT private_pem, public_pem, fingerprint FROM compliance_signing_key ORDER BY created_at LIMIT 1')).rows[0];
-  if (row) return (_signKey = { privatePem: row.private_pem, publicPem: row.public_pem, fingerprint: row.fingerprint });
+  if (row) return (_signKey = { privatePem: decSecret(row.private_pem), publicPem: row.public_pem, fingerprint: row.fingerprint });
   let privatePem, publicPem;
   if (process.env.COMPLIANCE_SIGN_KEY) {
     privatePem = process.env.COMPLIANCE_SIGN_KEY;
@@ -9362,7 +9382,7 @@ async function signingKey() {
     publicPem = kp.publicKey.export({ type: 'spki', format: 'pem' });
   }
   const fingerprint = crypto.createHash('sha256').update(publicPem).digest('hex').slice(0, 32);
-  await pgPool.query('INSERT INTO compliance_signing_key (private_pem, public_pem, fingerprint) VALUES ($1,$2,$3)', [privatePem, publicPem, fingerprint]);
+  await pgPool.query('INSERT INTO compliance_signing_key (private_pem, public_pem, fingerprint) VALUES ($1,$2,$3)', [encSecret(privatePem), publicPem, fingerprint]);
   return (_signKey = { privatePem, publicPem, fingerprint });
 }
 // The exact bytes that get signed — documented in the PDF + /verify-key so anyone can rebuild it.
@@ -10883,6 +10903,7 @@ server.listen(PORT, '0.0.0.0', async () => {
   try {
     await runAuthMigration();
     await runAdminMigration();
+    await migrateEncryptSecrets();
     await loadBillingRates();
     await loadSmtpConfig();
     await loadPlatformSmtp();
