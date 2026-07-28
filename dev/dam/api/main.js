@@ -111,7 +111,7 @@ async function loadSmtpConfig() {
     const row = (await pgPool.query(
       "SELECT config FROM integrations WHERE type = 'email' AND status = 'active' ORDER BY last_sync_at DESC NULLS LAST, id DESC LIMIT 1"
     )).rows[0];
-    smtpDbConfig = row && row.config && row.config.host ? row.config : null;
+    smtpDbConfig = row && row.config && row.config.host ? decIntegrationConfig('email', row.config) : null;
   } catch (e) {
     smtpDbConfig = null; // table may not exist yet at first boot — env still works
   }
@@ -1808,7 +1808,7 @@ const SSO_PROVIDERS = {
 };
 // Merge a tenant's stored Google config with the env fallback → the effective client.
 function googleEffective(cfg) {
-  cfg = cfg || {};
+  cfg = decIntegrationConfig('sso_google', cfg || {});
   const clientId = (cfg.client_id || GOOGLE_CLIENT_ID || '').trim();
   const clientSecret = cfg.client_secret || GOOGLE_CLIENT_SECRET || '';
   if (!clientId || !clientSecret) return null;
@@ -1820,7 +1820,7 @@ async function googleConfigFor(tenantId) {
 }
 // Merge a tenant's stored Okta config with the env fallback → the effective client.
 function oktaEffective(cfg) {
-  cfg = cfg || {};
+  cfg = decIntegrationConfig('sso_okta', cfg || {});
   const domain = (cfg.domain || OKTA_DOMAIN || '').trim();
   const clientId = (cfg.client_id || OKTA_CLIENT_ID || '').trim();
   const clientSecret = cfg.client_secret || OKTA_CLIENT_SECRET || '';
@@ -5566,7 +5566,7 @@ async function dispatchAlert(a) {
   try {
     const rows = (await pgPool.query('SELECT type, config FROM integrations WHERE type = ANY($1) AND status = $2', [ALERT_TYPES, 'active'])).rows;
     for (const row of rows) {
-      const connector = CONNECTORS[row.type], cfg = row.config || {};
+      const connector = CONNECTORS[row.type], cfg = decIntegrationConfig(row.type, row.config || {});
       if (!connector) continue;
       if ((SEV_ORDER[a.severity] ?? 0) < (SEV_ORDER[cfg.min_severity] ?? 2)) continue;
       try {
@@ -5586,7 +5586,7 @@ app.get('/api/integrations', authRequired, async (req, res) => {
   const rows = (await pgPool.query('SELECT id, name, type, status, config, last_sync_at FROM integrations WHERE tenant_id = $1', [req.user.tenantId])).rows;
   res.json(rows.map(r => ({
     id: r.id, name: r.name, type: r.type, status: r.status, lastSyncAt: r.last_sync_at,
-    config: CONNECTORS[r.type] ? maskConnectorConfig(CONNECTORS[r.type], r.config) : r.config,
+    config: CONNECTORS[r.type] ? maskConnectorConfig(CONNECTORS[r.type], decIntegrationConfig(r.type, r.config)) : maskIntegrationConfig(r.type, r.config),
   })));
 });
 
@@ -5650,8 +5650,9 @@ app.put('/api/integrations/smtp', authRequired, async (req, res) => {
     if (!fromHeader) fromHeader = SMTP_FROM;
     const config = { host: cleanHost, port: portNum, secure: !!secure, user: cleanUser, pass: password || '', from: fromHeader };
     const status = enabled ? 'active' : 'inactive';
-    if (existing) await pgPool.query('UPDATE integrations SET config = $2, status = $3, last_sync_at = now() WHERE id = $1', [existing.id, config, status]);
-    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status, last_sync_at) VALUES ($1,'Email (SMTP)','email',$2,$3, now())", [req.user.tenantId, config, status]);
+    const encCfg = encIntegrationConfig('email', config);
+    if (existing) await pgPool.query('UPDATE integrations SET config = $2, status = $3, last_sync_at = now() WHERE id = $1', [existing.id, encCfg, status]);
+    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status, last_sync_at) VALUES ($1,'Email (SMTP)','email',$2,$3, now())", [req.user.tenantId, encCfg, status]);
     await loadSmtpConfig(); // refresh the live mailer
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'integration.configure', resourceType: 'integration', resourceId: null, details: { type: 'email', host: cleanHost, port: portNum, secure: !!secure, status } });
     res.json({ ok: true, status, configured: true });
@@ -5674,7 +5675,7 @@ app.post('/api/integrations/smtp/test', authRequired, async (req, res) => {
       let password = b.pass;
       if (password === undefined || password === null || password === '') {
         const e = (await pgPool.query("SELECT config FROM integrations WHERE tenant_id = $1 AND type = 'email'", [req.user.tenantId])).rows[0];
-        password = e && e.config ? e.config.pass : '';
+        password = e && e.config ? decSecret(e.config.pass) : '';
       }
       const tUser = (b.user || '').trim();
       // From defaults to the authenticated mailbox (providers reject other senders).
@@ -5771,8 +5772,9 @@ app.put('/api/integrations/sso/okta/config', authRequired, adminOnly, async (req
     const prev = (existing && existing.config) || {};
     const clientSecret = (secretIn !== undefined && secretIn !== null && String(secretIn).trim() !== '') ? String(secretIn).trim() : (prev.client_secret || '');
     const config = { domain, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, issuer: `https://${domain}/oauth2/default` };
-    if (existing) await pgPool.query('UPDATE integrations SET config = $2 WHERE id = $1', [existing.id, config]);
-    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,'Okta SSO','sso_okta',$2,'inactive')", [req.user.tenantId, config]);
+    const encCfg = encIntegrationConfig('sso_okta', config);
+    if (existing) await pgPool.query('UPDATE integrations SET config = $2 WHERE id = $1', [existing.id, encCfg]);
+    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,'Okta SSO','sso_okta',$2,'inactive')", [req.user.tenantId, encCfg]);
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'sso.okta.configure', resourceType: 'integration', resourceId: null, details: { domain, hasSecret: !!clientSecret } });
     res.json({ ok: true });
   } catch (err) { console.error('[SSO] okta config save failed:', err.message); res.status(500).json({ error: 'Failed to save Okta config' }); }
@@ -5789,8 +5791,9 @@ app.put('/api/integrations/sso/google/config', authRequired, adminOnly, async (r
     const prev = (existing && existing.config) || {};
     const clientSecret = (secretIn !== undefined && secretIn !== null && String(secretIn).trim() !== '') ? String(secretIn).trim() : (prev.client_secret || '');
     const config = { client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri };
-    if (existing) await pgPool.query('UPDATE integrations SET config = $2 WHERE id = $1', [existing.id, config]);
-    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,'Google SSO','sso_google',$2,'inactive')", [req.user.tenantId, config]);
+    const encCfg = encIntegrationConfig('sso_google', config);
+    if (existing) await pgPool.query('UPDATE integrations SET config = $2 WHERE id = $1', [existing.id, encCfg]);
+    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,'Google SSO','sso_google',$2,'inactive')", [req.user.tenantId, encCfg]);
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'sso.google.configure', resourceType: 'integration', resourceId: null, details: { hasSecret: !!clientSecret } });
     res.json({ ok: true });
   } catch (err) { console.error('[SSO] google config save failed:', err.message); res.status(500).json({ error: 'Failed to save Google config' }); }
@@ -5837,8 +5840,9 @@ app.put('/api/integrations/:type', authRequired, async (req, res) => {
     }
     if (connector.kind === 'alert') config.min_severity = minSeverity;
     const status = enabled ? 'active' : 'inactive';
-    if (existing) await pgPool.query('UPDATE integrations SET config = $2, status = $3 WHERE id = $1', [existing.id, config, status]);
-    else await pgPool.query('INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,$2,$3,$4,$5)', [req.user.tenantId, connector.name, type, config, status]);
+    const encCfg = encIntegrationConfig(type, config);
+    if (existing) await pgPool.query('UPDATE integrations SET config = $2, status = $3 WHERE id = $1', [existing.id, encCfg, status]);
+    else await pgPool.query('INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,$2,$3,$4,$5)', [req.user.tenantId, connector.name, type, encCfg, status]);
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'integration.configure', resourceType: 'integration', resourceId: null, details: { type, status, min_severity: connector.kind === 'alert' ? minSeverity : null } });
     res.json({ ok: true, status, minSeverity, configured: true });
   } catch (err) {
@@ -5855,7 +5859,7 @@ app.post('/api/integrations/:type/test', authRequired, async (req, res) => {
   if (!connector) return res.status(400).json({ error: 'Unknown integration type' });
   try {
     const existing = (await pgPool.query('SELECT config FROM integrations WHERE tenant_id = $1 AND type = $2', [req.user.tenantId, type])).rows[0];
-    const config = buildConnectorConfig(connector, (req.body && req.body.fields) || {}, existing && existing.config);
+    const config = decIntegrationConfig(type, buildConnectorConfig(connector, (req.body && req.body.fields) || {}, existing && existing.config));
     const missing = missingRequired(connector, config);
     if (missing.length) return res.status(400).json({ error: `Enter ${missing.join(', ')} first` });
     const r = await connector.send(config, sampleAlert());
@@ -6778,6 +6782,36 @@ const { encSecret, decSecret, packCredential, unpackCredential } = secrets;
 // plaintext (values without the enc: prefix). decSecret passes plaintext through unchanged,
 // so readers work whether a value is migrated yet or not. Runs every boot but only rewrites
 // not-yet-encrypted rows, so it's cheap and safe to leave in.
+// Which fields inside integrations.config are secrets, per integration type. Alert
+// connectors declare it themselves (fields[].secret); the rest are listed here.
+const INTEGRATION_SECRET_FIELDS = { email: ['pass'], sso_okta: ['client_secret'], sso_google: ['client_secret'], llm: ['api_key'] };
+function integrationSecretFields(type) {
+  if (INTEGRATION_SECRET_FIELDS[type]) return INTEGRATION_SECRET_FIELDS[type];
+  const c = CONNECTORS[type];
+  return c && Array.isArray(c.fields) ? c.fields.filter((f) => f.secret).map((f) => f.key) : [];
+}
+// Encrypt (idempotent) / decrypt only the secret fields of an integration config, leaving
+// the rest (host, client_id, domain, …) readable. Apply enc on WRITE, dec at the USE point.
+function encIntegrationConfig(type, cfg) {
+  if (!cfg || typeof cfg !== 'object') return cfg;
+  const out = { ...cfg };
+  for (const k of integrationSecretFields(type)) if (out[k]) out[k] = encSecret(decSecret(String(out[k])));
+  return out;
+}
+function decIntegrationConfig(type, cfg) {
+  if (!cfg || typeof cfg !== 'object') return cfg;
+  const out = { ...cfg };
+  for (const k of integrationSecretFields(type)) if (out[k]) out[k] = decSecret(String(out[k]));
+  return out;
+}
+// Replace secret fields with a set/unset marker for API responses — never return the secret
+// itself (encrypted or not). Secrets are write-only: a blank on save keeps the stored value.
+function maskIntegrationConfig(type, cfg) {
+  if (!cfg || typeof cfg !== 'object') return cfg;
+  const out = { ...cfg };
+  for (const k of integrationSecretFields(type)) if (out[k]) out[k] = '••••••';
+  return out;
+}
 async function migrateEncryptSecrets() {
   const isEnc = (v) => typeof v === 'string' && v.startsWith(secrets.SECRET_ENC_PREFIX);
   try {
@@ -6790,7 +6824,15 @@ async function migrateEncryptSecrets() {
     if (smtp && smtp.password && !isEnc(smtp.password)) {
       await pgPool.query('UPDATE platform_smtp SET password=$1 WHERE id=1', [encSecret(smtp.password)]);
     }
-    console.log('[Secrets] at-rest encryption backfill complete (signing key, platform SMTP)');
+    // integrations.config secret fields (email/SSO/Slack/Teams/LLM/…)
+    for (const r of (await pgPool.query('SELECT id, type, config FROM integrations WHERE config IS NOT NULL')).rows) {
+      const cfg = r.config; let changed = false;
+      for (const k of integrationSecretFields(r.type)) {
+        if (cfg && cfg[k] && !isEnc(cfg[k])) { cfg[k] = encSecret(cfg[k]); changed = true; }
+      }
+      if (changed) await pgPool.query('UPDATE integrations SET config=$2 WHERE id=$1', [r.id, cfg]);
+    }
+    console.log('[Secrets] at-rest encryption backfill complete (signing key, SMTP, integrations)');
   } catch (e) { console.error('[Secrets] encryption backfill failed:', e.message); }
 }
 
@@ -10477,7 +10519,7 @@ async function assistantConfigFor(tenantId) {
   const row = (await pgPool.query("SELECT config, status FROM integrations WHERE tenant_id = $1 AND type = 'llm'", [tenantId])).rows[0];
   const c = row && row.config;
   if (!row || row.status !== 'active' || !c || !c.provider || !c.api_key || !ASSISTANT_PROVIDERS[c.provider]) return null;
-  return { provider: c.provider, apiKey: c.api_key, model: c.model || ASSISTANT_PROVIDERS[c.provider].defaultModel };
+  return { provider: c.provider, apiKey: decSecret(c.api_key), model: c.model || ASSISTANT_PROVIDERS[c.provider].defaultModel };
 }
 
 // Any tenant user: is the copilot ready to chat? (no secrets)
@@ -10514,8 +10556,9 @@ app.put('/api/assistant/config', authRequired, adminOnly, async (req, res) => {
     if (!apiKey) return res.status(400).json({ error: 'An API key is required' });
     const config = { provider, model, api_key: apiKey };
     const status = enabled ? 'active' : 'inactive';
-    if (existing) await pgPool.query('UPDATE integrations SET config = $2, status = $3 WHERE id = $1', [existing.id, config, status]);
-    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,'AI Assistant','llm',$2,$3)", [req.user.tenantId, config, status]);
+    const encCfg = encIntegrationConfig('llm', config);
+    if (existing) await pgPool.query('UPDATE integrations SET config = $2, status = $3 WHERE id = $1', [existing.id, encCfg, status]);
+    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,'AI Assistant','llm',$2,$3)", [req.user.tenantId, encCfg, status]);
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'assistant.configure', resourceType: 'integration', details: { provider, model, enabled } });
     res.json({ ok: true });
   } catch (e) { console.error('[Assistant] config save failed:', e.message); res.status(500).json({ error: 'Failed to save assistant config' }); }
