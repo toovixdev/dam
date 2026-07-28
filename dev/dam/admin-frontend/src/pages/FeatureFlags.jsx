@@ -7,9 +7,10 @@ import useApiData from '../hooks/useApiData';
 import { apiFetch, apiPost } from '../api/client';
 
 const STAGE_META = {
-  ga:    { cls: 'status-green', label: 'GA' },
-  beta:  { cls: 'sev-high',     label: 'Beta' },
-  alpha: { cls: 'sev-medium',   label: 'Alpha' },
+  ga:      { cls: 'status-green', label: 'GA' },
+  beta:    { cls: 'sev-high',     label: 'Beta' },
+  alpha:   { cls: 'sev-medium',   label: 'Alpha' },
+  roadmap: { cls: 'status-gray',  label: 'Roadmap' },
 };
 const TIER_LABEL = { enterprise: 'Enterprise', business: 'Business', professional: 'Professional', starter: 'Starter' };
 

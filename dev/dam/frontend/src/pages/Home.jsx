@@ -11,11 +11,11 @@ const CAPS = [
   ['var(--danger-soft)', 'var(--danger)', '⚠', 'Behavioral Threat Detection', 'Continuous learning builds per-user baselines. Detects anomalies: off-hours access, volume spikes, first-time sensitive reads, credential stuffing.'],
   ['var(--green-soft)', 'var(--green)', '⚖', 'Compliance Automation', 'Pre-built packs for PCI-DSS, GDPR, HIPAA, SOX, DPDPA, and RBI. Continuous control validation with one-click audit reports.'],
   ['var(--amber-soft)', 'var(--amber)', '◧', 'Sensitive Data Discovery', 'Auto-classify SSN, Aadhaar, PAN, credit cards, PHI across all engines. ML + regex + exact-match with region-specific validators.'],
-  ['var(--info-soft)', 'var(--info)', '⛓', 'Tamper-Evident Audit Trail', 'BLAKE3 hash-chain with KMS-signed hourly checkpoints. Prove 30 days of integrity by verifying 720 checkpoints, not billions of events.'],
+  ['var(--info-soft)', 'var(--info)', '⛓', 'Tamper-Evident Audit Trail', 'Hash-chain with signed hourly checkpoints. Prove 30 days of integrity by verifying 720 checkpoints, not billions of events.'],
   ['var(--danger-soft)', 'var(--danger)', '⛔', 'Inline Blocking + Proxy', 'DAM Proxy Gateway blocks threats in real-time. Monitor mode → blocking mode per policy. Virtual patching shields unpatched databases.'],
-  ['var(--primary-soft)', 'var(--primary)', '▦', 'Dynamic & Static Masking', 'Query-time masking for non-privileged users. Format-preserving for analytics. Static masking for non-prod clones with referential integrity.'],
+  ['var(--primary-soft)', 'var(--primary)', '▦', 'Dynamic Data Masking', 'Query-time masking for non-privileged users, by role. Format-preserving for analytics. (Static masking for non-prod clones is on the roadmap.)'],
   ['var(--green-soft)', 'var(--green)', '⊠', 'Access Governance', 'Discover privileged + dormant accounts. Entitlement recertification campaigns. Service-account identity resolution behind connection pools.'],
-  ['var(--amber-soft)', 'var(--amber)', '✦', 'LLM & AI Data Security', 'Monitor what users send to ChatGPT, Bedrock, Azure OpenAI. Redact PII in prompts before they reach the LLM. AI firewall for enterprises.'],
+  ['var(--amber-soft)', 'var(--amber)', '✦', 'LLM & AI Data Security', 'On the roadmap: monitor what apps send to ChatGPT, Bedrock and Azure OpenAI, with prompt-level PII controls before data reaches the LLM.'],
 ];
 
 const ENGINES = [['🔴', 'Oracle'], ['🔷', 'SQL Server'], ['🔵', 'IBM Db2'], ['🐘', 'PostgreSQL'], ['🐬', 'MySQL / MariaDB'], ['🍃', 'MongoDB']];
@@ -44,7 +44,7 @@ const PLANS = [
   { name: 'Business', price: 'Custom', unit: '/ db / month', desc: 'Unlimited databases', pop: true, cta: 'Start free trial',
     feats: ['Everything in Starter', 'UEBA + behavioral analytics', '1-year retention + cold archive', 'All compliance frameworks', 'SSO (Azure AD / Okta)', 'Inline blocking + proxy', 'Priority support + SLA'] },
   { name: 'Enterprise', price: 'Custom', unit: '', desc: 'On-prem / air-gapped / multi-region', pop: false, cta: 'Contact sales',
-    feats: ['Everything in Business', 'BYOK (all major KMS)', 'On-prem + air-gapped deploy', 'Multi-region data planes', 'LLM / AI data security', 'Dedicated support + TAM', 'Custom retention + legal hold'] },
+    feats: ['Everything in Business', 'Customer-managed keys (roadmap)', 'On-prem / air-gapped deploy', 'Multi-region data planes', 'Dedicated support + TAM', 'Custom retention + legal hold'] },
 ];
 
 const HERO_SVG = `<svg viewBox="0 0 900 380" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -185,7 +185,7 @@ export default function Home() {
 
       {/* Hero */}
       <section className="hero">
-        <div className="hero-badge">✦ Now with LLM data-security &amp; AI firewall</div>
+        <div className="hero-badge">✦ Now with just-in-time access &amp; deception</div>
         <h1>See every query.<br /><span className="grad">Stop every breach.</span></h1>
         <p>Database Activity Monitoring for the global enterprise. Real-time visibility, behavioral analytics, and compliance automation across every engine, every cloud, every region.</p>
         <div className="hero-ctas">
@@ -210,7 +210,7 @@ export default function Home() {
 
       {/* Stats */}
       <div className="stats">
-        {[['6', 'Database engines at GA'], ['6,000+', 'VA security tests'], ['< 3s', 'Alert latency end-to-end'], ['5', 'Data residency regions'], ['7', 'Compliance frameworks'], ['100B+', 'Events processed / month']].map(([sv, sl]) => (
+        {[['6', 'Database engines at GA'], ['5', 'Capture modes · agent to agentless'], ['< 3s', 'Alert latency end-to-end'], ['5', 'Data residency regions'], ['7', 'Compliance frameworks'], ['100B+', 'Events processed / month']].map(([sv, sl]) => (
           <div className="stat" key={sl}><div className="sv">{sv}</div><div className="sl">{sl}</div></div>
         ))}
       </div>
