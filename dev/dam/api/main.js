@@ -1377,7 +1377,7 @@ async function runAdminMigration() {
         ('alert-rules','Alert Rules & Policies','Custom rules, threshold, pattern, correlation','ga',    true,  true,  true,  true,  false, NULL, NULL, 2),
         ('va-scanner','VA Scanner','Roadmap — CIS-benchmark DB config & privilege assessment','roadmap',  true,  true,  true,  false, false, NULL, NULL, 3),
         ('compliance-packs','Compliance Packs','PCI-DSS, GDPR, HIPAA, SOX, DPDPA, RBI','ga',             true,  true,  true,  false, true,  NULL, NULL, 4),
-        ('ueba','Behavioral Analytics (UEBA)','Baselines, peer groups, risk scoring, anomaly','beta',    false, true,  true,  false, false, '100% by Q3 2026', '0.02%', 5),
+        ('ueba','Behavioral Analytics (UEBA)','Behavioral baselines + anomaly rules · risk scoring in progress','beta', false, true,  true,  false, false, '100% by Q3 2026', '0.02%', 5),
         ('dynamic-masking','Dynamic Masking','Query-time masking by role, format-preserving','ga',       false, true,  true,  false, false, NULL, NULL, 6),
         ('static-masking','Static Masking','Roadmap — masked non-prod clones with referential integrity','roadmap', false, true,  true,  false, false, NULL, NULL, 7),
         ('inline-proxy','Inline Blocking / Proxy','DAM proxy gateway, real-time block, virtual patch','ga', false, false, true, false, false, NULL, NULL, 8),
@@ -1387,8 +1387,8 @@ async function runAdminMigration() {
         ('sql-allowlist','SQL Grammar Allowlist','Roadmap — learned SQL allowlist + deviation blocking','roadmap', false, false, true,  false, false, NULL, NULL, 12),
         ('deception','Deception Console','Honeypot tables, decoy records, trap detection','beta',        false, false, true,  false, false, '100% by Q4 2026', '0.01%', 13),
         ('jit-access','JIT Access','Just-in-time privileged access, auto-expiry, approvals','alpha',     false, false, true,  false, false, NULL, NULL, 14),
-        ('sso','SSO (SAML / OIDC)','Azure AD, Okta, Google, LDAP/Kerberos','ga',                         false, true,  true,  false, true,  NULL, NULL, 15),
-        ('onprem','On-Prem / Air-Gapped','Customer-managed K8s, offline licensing','ga',                 false, false, true,  false, true,  NULL, NULL, 16)`);
+        ('sso','SSO (OIDC)','Azure AD & Okta · per-tenant IdP on the roadmap','beta',                    false, true,  true,  false, true,  NULL, NULL, 15),
+        ('onprem','On-Prem / Air-Gapped','Customer-managed Docker/K8s · air-gap & offline licensing on the roadmap','beta', false, false, true,  false, true,  NULL, NULL, 16)`);
       console.log('[Admin] Seeded feature_flags catalog (16 features)');
     }
 

@@ -44,7 +44,7 @@ const PLANS = [
   { name: 'Business', price: 'Custom', unit: '/ db / month', desc: 'Unlimited databases', pop: true, cta: 'Start free trial',
     feats: ['Everything in Starter', 'UEBA + behavioral analytics', '1-year retention + cold archive', 'All compliance frameworks', 'SSO (Azure AD / Okta)', 'Inline blocking + proxy', 'Priority support + SLA'] },
   { name: 'Enterprise', price: 'Custom', unit: '', desc: 'On-prem / air-gapped / multi-region', pop: false, cta: 'Contact sales',
-    feats: ['Everything in Business', 'Customer-managed keys (roadmap)', 'On-prem / air-gapped deploy', 'Multi-region data planes', 'Dedicated support + TAM', 'Custom retention + legal hold'] },
+    feats: ['Everything in Business', 'Customer-managed keys (roadmap)', 'On-prem deploy (air-gap on roadmap)', 'Multi-region data planes', 'Dedicated support + TAM', 'Custom retention + legal hold'] },
 ];
 
 const HERO_SVG = `<svg viewBox="0 0 900 380" fill="none" xmlns="http://www.w3.org/2000/svg">
