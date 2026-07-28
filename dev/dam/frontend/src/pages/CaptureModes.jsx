@@ -124,6 +124,12 @@ const CAP_BANDS = [
     { name: 'Posture', v: 1, cells: [['detective', 'dim'], ['detective', 'dim'], ['preventive', 'warn'], ['detective', 'dim'], ['detective', 'dim']] },
     { name: 'Engines', v: 1, cells: [['MySQL · PG · MSSQL', 'dim'], ['MySQL · PG', 'dim'], ['MySQL', 'dim'], ['all five', ''], ['managed DBs', 'dim']] },
   ] },
+  { band: 'Data classification', rows: [
+    // Orthogonal to capture: a least-privilege catalog read (CLASSIFY=true), so any mode that
+    // ships an agent can do it; Agentless has no agent to log in and read the schema.
+    { name: 'Classify PII/PCI columns', hint: 'orthogonal — least-privilege catalog read, not the capture path', cells: [['yes'], ['yes'], ['yes'], ['yes', 'not MongoDB'], ['no', 'no agent to read']] },
+    { name: 'Discovers sensitive data at rest', hint: 'schema scan · independent of live traffic', cells: [['yes'], ['yes'], ['yes'], ['yes', 'MySQL·PG·MSSQL·Oracle'], ['no']] },
+  ] },
 ];
 
 function CapCell({ v, cell }) {
@@ -206,7 +212,7 @@ export default function CaptureModes() {
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-header">
           <span className="card-title">What each configuration can do</span>
-          <span className="card-sub">footprint · visibility · enforcement · ★ = decision-driver</span>
+          <span className="card-sub">footprint · visibility · enforcement · classification · ★ = decision-driver</span>
         </div>
         <div className="card-body no-pad" style={{ overflowX: 'auto' }}>
           <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 840 }}>
