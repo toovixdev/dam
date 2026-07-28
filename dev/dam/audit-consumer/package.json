@@ -3,6 +3,9 @@
   "version": "0.2.0",
   "private": true,
   "description": "DAM audit consumer — one service, per-cloud source adapters (GCP Pub/Sub, Azure Event Hub) → control-plane ingest",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "dependencies": {
     "@google-cloud/pubsub": "^4.9.0",
     "@azure/event-hubs": "^5.12.0"

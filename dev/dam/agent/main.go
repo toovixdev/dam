@@ -27,6 +27,8 @@ import (
 	"time"
 	"unicode/utf16"
 
+	"toovix/dam-agent/maskdetect"
+
 	_ "github.com/go-sql-driver/mysql"
 	_ "github.com/lib/pq"
 	_ "github.com/microsoft/go-mssqldb"
@@ -866,63 +868,13 @@ func classifyCol(name string) (tag, sens string, ok bool) {
 //   • a run of 3+ X (upper or lower)                  → XXX-XX-6789, xxxxxxxx
 //   • an explicit redaction marker                    → REDACTED, [MASKED], ***REDACTED***
 // The >=80% column threshold + sensitive-only scope keep the 3-run X rule from mis-flagging names.
-var reMaskFill = regexp.MustCompile(`[*#•●]{3,}`)
-var reMaskX = regexp.MustCompile(`(?i)x{3,}`)
-var reMaskMarker = regexp.MustCompile(`(?i)^\s*[\[*]*\s*(redacted|masked|restricted)\s*[\]*]*\s*$`)
-
-func looksMaskedValue(v string) (bool, string) {
-	if reMaskMarker.MatchString(v) {
-		return true, "marker"
-	}
-	if reMaskFill.MatchString(v) || reMaskX.MatchString(v) {
-		return true, "redaction"
-	}
-	return false, ""
-}
-
-// detectMaskedAtRest returns whether the sampled values are dominated by masked-looking values.
-// Needs a meaningful sample (>=8 non-empty) and >=80% hit rate before it will claim "masked".
-func detectMaskedAtRest(values []string) (bool, string) {
-	n, hit := 0, 0
-	method := ""
-	for _, v := range values {
-		v = strings.TrimSpace(v)
-		if v == "" {
-			continue
-		}
-		n++
-		if ok, m := looksMaskedValue(v); ok {
-			hit++
-			if method == "" {
-				method = m
-			}
-		}
-	}
-	if n < 8 {
-		return false, ""
-	}
-	if float64(hit)/float64(n) >= 0.8 {
-		return true, method
-	}
-	return false, ""
-}
-
-// quoteIdent escapes an identifier for the given driver's quoting style.
-func quoteIdent(driver, id string) string {
-	switch driver {
-	case "mysql":
-		return "`" + strings.ReplaceAll(id, "`", "``") + "`"
-	case "sqlserver":
-		return "[" + strings.ReplaceAll(id, "]", "]]") + "]"
-	default: // postgres, oracle — ANSI double-quote
-		return `"` + strings.ReplaceAll(id, `"`, `""`) + `"`
-	}
-}
+// Masking-at-rest detection + identifier quoting live in the maskdetect subpackage
+// (dependency-free, unit-tested — see maskdetect/maskdetect_test.go).
 
 // sampleColumnValues pulls up to 200 non-null values from a single column to feed the detector.
 // Read-only, capped, and the raw values never leave the agent.
 func sampleColumnValues(db *sql.DB, driver, schema, table, col string) []string {
-	qc, qs, qt := quoteIdent(driver, col), quoteIdent(driver, schema), quoteIdent(driver, table)
+	qc, qs, qt := maskdetect.QuoteIdent(driver, col), maskdetect.QuoteIdent(driver, schema), maskdetect.QuoteIdent(driver, table)
 	var q string
 	switch driver {
 	case "sqlserver":
@@ -1248,7 +1200,7 @@ func runClassificationScan(cfg Config) error {
 		rows.Close()
 		// Sample stored values per sensitive column and flag those already masked at rest.
 		for _, p := range pending {
-			if masked, method := detectMaskedAtRest(sampleColumnValues(db, t.driver, p.schema, p.table, p.col)); masked {
+			if masked, method := maskdetect.Detect(sampleColumnValues(db, t.driver, p.schema, p.table, p.col)); masked {
 				p.cm["is_masked_at_rest"] = true
 				p.cm["mask_at_rest_method"] = method
 			}

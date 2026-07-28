@@ -4,7 +4,10 @@
   "private": true,
   "scripts": {
     "start": "node main.js",
-    "dev": "node --watch main.js"
+    "dev": "node --watch main.js",
+    "test": "node --test test/*.test.js",
+    "test:unit": "node --test test/secrets.test.js test/compliance-catalog.test.js",
+    "test:functional": "node --test test/functional.test.js"
   },
   "dependencies": {
     "express": "^4.21.0",
