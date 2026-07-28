@@ -8,6 +8,8 @@ import DataTable from '../components/shared/DataTable';
 import Modal from '../components/shared/Modal';
 import { SeverityBadge } from '../components/shared/Badge';
 import useApiData from '../hooks/useApiData';
+import useFeatures from '../hooks/useFeatures';
+import { UpsellPanel } from '../components/shared/FeatureGate';
 import { apiPost, apiPut, apiDelete } from '../api/client';
 import { toast } from '../components/shared/Toast';
 
@@ -26,6 +28,9 @@ function ActionChips({ actions }) {
 
 export default function Policies() {
   const { data, loading, error, refetch } = useApiData('/policies');
+  const { features } = useFeatures();
+  // SQL grammar allow-list / governed exceptions is an Enterprise feature.
+  const allowlistOn = features['sql-allowlist'] !== false;
   const [lastRefresh, setLastRefresh] = useState(new Date());
   const [tab, setTab] = useState('all');
   const [selected, setSelected] = useState(null);
@@ -46,7 +51,7 @@ export default function Policies() {
     { id: 'block', label: 'Block', count: rows.filter(p => p.category === 'block').length },
     { id: 'anomaly', label: 'Anomaly', count: rows.filter(p => p.rule_type === 'anomaly').length },
     { id: 'monitor', label: 'Monitor', count: monitor },
-    { id: 'exceptions', label: 'Exceptions' },
+    { id: 'exceptions', label: allowlistOn ? 'Exceptions' : 'Exceptions 🔒' },
   ];
   const filtered = rows.filter(p =>
     tab === 'all' ? true
@@ -106,7 +111,7 @@ export default function Policies() {
       <TabNav tabs={tabs} active={tab} onChange={setTab} />
 
       {tab === 'exceptions' ? (
-        <ExceptionsPanel rules={rows} />
+        allowlistOn ? <ExceptionsPanel rules={rows} /> : <UpsellPanel name="SQL grammar allow-list / governed exceptions" inline />
       ) : (
         <div className="card">
           <div className="card-header">

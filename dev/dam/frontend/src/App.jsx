@@ -17,6 +17,7 @@ import Policies from './pages/Policies';
 import Quarantine from './pages/Quarantine';
 import Classification from './pages/Classification';
 import Compliance from './pages/Compliance';
+import FeatureGate from './components/shared/FeatureGate';
 import Dsar from './pages/Dsar';
 import AuditTrail from './pages/AuditTrail';
 import ChangeLog from './pages/ChangeLog';
@@ -73,14 +74,14 @@ export default function App() {
           <Route path="/quarantine" element={<ProtectedRoute screen="quarantine"><Quarantine /></ProtectedRoute>} />
           <Route path="/classification" element={<ProtectedRoute screen="classification"><Classification /></ProtectedRoute>} />
           <Route path="/masking" element={<ProtectedRoute screen="masking"><Masking /></ProtectedRoute>} />
-          <Route path="/access" element={<ProtectedRoute screen="access"><AccessGovernance /></ProtectedRoute>} />
+          <Route path="/access" element={<ProtectedRoute screen="access"><FeatureGate feature="jit-access" name="Access Governance (JIT)"><AccessGovernance /></FeatureGate></ProtectedRoute>} />
           <Route path="/compliance" element={<ProtectedRoute screen="compliance"><Compliance /></ProtectedRoute>} />
-          <Route path="/dsar" element={<ProtectedRoute screen="dsar"><Dsar /></ProtectedRoute>} />
+          <Route path="/dsar" element={<ProtectedRoute screen="dsar"><FeatureGate feature="dsar" name="DSAR Manager"><Dsar /></FeatureGate></ProtectedRoute>} />
           <Route path="/audit" element={<ProtectedRoute screen="audit"><AuditTrail /></ProtectedRoute>} />
           <Route path="/change-log" element={<ProtectedRoute screen="change-log"><ChangeLog /></ProtectedRoute>} />
           <Route path="/attestations" element={<ProtectedRoute screen="attestations"><Attestations /></ProtectedRoute>} />
           <Route path="/reports" element={<ProtectedRoute screen="reports"><Reports /></ProtectedRoute>} />
-          <Route path="/llm" element={<ProtectedRoute screen="llm"><LlmMonitoring /></ProtectedRoute>} />
+          <Route path="/llm" element={<ProtectedRoute screen="llm"><FeatureGate feature="llm-monitoring" name="LLM Monitoring"><LlmMonitoring /></FeatureGate></ProtectedRoute>} />
           <Route path="/copilot" element={<ProtectedRoute screen="copilot"><Copilot /></ProtectedRoute>} />
           <Route path="/active-defense" element={<ProtectedRoute screen="active-defense"><ActiveDefense /></ProtectedRoute>} />
           <Route path="/users" element={<ProtectedRoute screen="users"><Users /></ProtectedRoute>} />

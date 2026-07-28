@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import useApiData from '../hooks/useApiData';
 import { getBranding, onBrandingChange } from '../branding';
 import { canSee as roleCanSee } from '../roles';
+import useFeatures, { SCREEN_FEATURE } from '../hooks/useFeatures';
 
 const NAV = [
   { sec: 'Monitor' },
@@ -43,6 +44,11 @@ const NAV = [
 export default function Sidebar({ collapsed, onToggle }) {
   const { user } = useAuth();
   const canSee = (id) => roleCanSee(user?.role, id);
+
+  // Entitlement gate: a nav item mapped to a feature the tenant's plan doesn't include is shown
+  // locked (dimmed + 🔒) rather than hidden — clicking it lands on the Enterprise upsell.
+  const { features } = useFeatures();
+  const isLocked = (id) => { const f = SCREEN_FEATURE[id]; return !!f && features[f] === false; };
 
   // White-label branding (custom logo + name), reactive to Settings changes.
   const [brand, setBrand] = useState(getBranding());
@@ -85,16 +91,20 @@ export default function Sidebar({ collapsed, onToggle }) {
           if (!canSee(item.id)) return null;
 
           const badge = badgeFor(item);
+          const locked = isLocked(item.id);
           return (
             <NavLink
               key={item.id}
               to={item.to}
-              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
-              title={item.label}
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''} ${locked ? 'nav-locked' : ''}`}
+              title={locked ? `${item.label} — available on the Enterprise plan` : item.label}
+              style={locked ? { opacity: 0.55 } : undefined}
             >
               <span className="nav-icon">{item.ic}</span>
               {!collapsed && <span className="nav-label">{item.label}</span>}
-              {!collapsed && badge && <span className={`nav-badge ${item.id === 'agents' ? 'warn' : ''}`} title={item.id === 'agents' ? `${badge} agent(s) offline` : undefined}>{badge}</span>}
+              {!collapsed && locked
+                ? <span className="nav-badge" title="Enterprise feature" style={{ background: 'transparent', fontSize: 12 }}>🔒</span>
+                : (!collapsed && badge && <span className={`nav-badge ${item.id === 'agents' ? 'warn' : ''}`} title={item.id === 'agents' ? `${badge} agent(s) offline` : undefined}>{badge}</span>)}
             </NavLink>
           );
         })}

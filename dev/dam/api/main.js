@@ -4652,7 +4652,7 @@ app.delete('/api/compliance/masking/bypass/:id', authRequired, async (req, res) 
 // + audit layer; the grant itself is recorded here (real GRANT/REVOKE execution can be
 // layered on via the mysql2 path used by quarantine release).
 const JIT_OPEN = ['pending', 'active'];
-app.get('/api/access/jit', authRequired, async (req, res) => {
+app.get('/api/access/jit', authRequired, featureRequired('jit-access'), async (req, res) => {
   try {
     const rows = (await pgPool.query(
       `SELECT * FROM jit_grants WHERE tenant_id = $1
@@ -4672,7 +4672,7 @@ app.get('/api/access/jit', authRequired, async (req, res) => {
 
 // Request a JIT grant against a broker-gated database and one of that broker's
 // pre-approved scopes (the ceiling). Free-text scope is no longer accepted.
-app.post('/api/access/jit', authRequired, async (req, res) => {
+app.post('/api/access/jit', authRequired, featureRequired('jit-access'), async (req, res) => {
   const { brokerId, scopeId, reason, durationMins } = req.body || {};
   if (!brokerId || !scopeId) return res.status(400).json({ error: 'brokerId and scopeId are required' });
   const mins = Math.min(Math.max(parseInt(durationMins) || 120, 15), 7 * 24 * 60);
@@ -4788,14 +4788,14 @@ async function verifyApproval(g, signatureB64) {
 }
 
 // ── Broker management ────────────────────────────────────────────────────────
-app.get('/api/access/jit/brokers', authRequired, async (req, res) => {
+app.get('/api/access/jit/brokers', authRequired, featureRequired('jit-access'), async (req, res) => {
   try {
     const rows = (await pgPool.query('SELECT * FROM jit_brokers WHERE tenant_id = $1 ORDER BY created_at DESC', [req.user.tenantId])).rows;
     res.json({ brokers: rows, vault: !!VAULT_ADDR, signer: !!(SIGNER_URL || process.env.SIGNER_PUBKEY_PEM) });
   } catch (err) { res.status(500).json({ error: 'Failed to load brokers' }); }
 });
 
-app.post('/api/access/jit/brokers', authRequired, adminOnly, async (req, res) => {
+app.post('/api/access/jit/brokers', authRequired, featureRequired('jit-access'), adminOnly, async (req, res) => {
   const { label, engine, host, port, vaultMount, vaultRole, allowedScopes, rateLimitPerHour, owners } = req.body || {};
   if (!engine || !host || !vaultRole) return res.status(400).json({ error: 'engine, host and vaultRole are required' });
   const scopes = Array.isArray(allowedScopes) ? allowedScopes : [];
@@ -4817,7 +4817,7 @@ app.post('/api/access/jit/brokers', authRequired, adminOnly, async (req, res) =>
   }
 });
 
-app.delete('/api/access/jit/brokers/:id', authRequired, adminOnly, async (req, res) => {
+app.delete('/api/access/jit/brokers/:id', authRequired, featureRequired('jit-access'), adminOnly, async (req, res) => {
   try {
     const del = await pgPool.query('DELETE FROM jit_brokers WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId]);
     if (!del.rowCount) return res.status(404).json({ error: 'Broker not found' });
@@ -4828,7 +4828,7 @@ app.delete('/api/access/jit/brokers/:id', authRequired, adminOnly, async (req, r
 
 // Health check: prove Vault can mint a scoped user, that it CONNECTS, and that it
 // is NOT over-privileged (out-of-scope check), then revoke the probe lease.
-app.post('/api/access/jit/brokers/:id/health', authRequired, adminOnly, async (req, res) => {
+app.post('/api/access/jit/brokers/:id/health', authRequired, featureRequired('jit-access'), adminOnly, async (req, res) => {
   const b = (await pgPool.query('SELECT * FROM jit_brokers WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId])).rows[0];
   if (!b) return res.status(404).json({ error: 'Broker not found' });
   const detail = { checked_at: new Date().toISOString(), vault: false, mint: false, connect: false, in_scope: false, notes: [] };
@@ -4889,7 +4889,7 @@ async function brokerProbe(b, cred, scope) {
 
 // Broker-gated dropdown: only databases with a HEALTHY broker are offerable,
 // each with its allowed scopes (so the request form is constrained to the ceiling).
-app.get('/api/access/jit/databases', authRequired, async (req, res) => {
+app.get('/api/access/jit/databases', authRequired, featureRequired('jit-access'), async (req, res) => {
   try {
     const rows = (await pgPool.query(
       `SELECT id, label, engine, host, port, allowed_scopes FROM jit_brokers WHERE status='healthy' AND tenant_id = $1 ORDER BY label`, [req.user.tenantId])).rows;
@@ -4898,7 +4898,7 @@ app.get('/api/access/jit/databases', authRequired, async (req, res) => {
 });
 
 // Where to obtain an approval signature (the separate signer service).
-app.get('/api/access/jit/signer', authRequired, async (req, res) => {
+app.get('/api/access/jit/signer', authRequired, featureRequired('jit-access'), async (req, res) => {
   res.json({ signerUrl: process.env.SIGNER_PUBLIC_URL || SIGNER_URL || '', configured: !!(SIGNER_URL || process.env.SIGNER_PUBKEY_PEM) });
 });
 
@@ -4907,7 +4907,7 @@ app.get('/api/access/jit/signer', authRequired, async (req, res) => {
 // a DB owner of THIS broker (or tenant_admin as audited break-glass); a valid signer
 // signature (anti-compromise gate); in-ceiling scope; per-DB rate breaker. Only then
 // does Vault mint the scoped, short-lived DB user.
-app.post('/api/access/jit/:id/provision', authRequired, async (req, res) => {
+app.post('/api/access/jit/:id/provision', authRequired, featureRequired('jit-access'), async (req, res) => {
   const { signature } = req.body || {};
   if (!signature) return res.status(400).json({ error: 'A signed approval (signature) is required — approve via the Approval Signer first' });
   const approver = (req.user.email || '').toLowerCase().trim();   // verified identity, not spoofable
@@ -4976,7 +4976,7 @@ app.post('/api/access/jit/:id/provision', authRequired, async (req, res) => {
   }
 });
 
-app.post('/api/access/jit/:id/revoke', authRequired, async (req, res) => {
+app.post('/api/access/jit/:id/revoke', authRequired, featureRequired('jit-access'), async (req, res) => {
   const me = (req.user.email || '').toLowerCase().trim();
   try {
     const g = (await pgPool.query('SELECT * FROM jit_grants WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId])).rows[0];
@@ -8074,6 +8074,48 @@ app.get('/api/features', authRequired, async (req, res) => {
     res.status(500).json({ error: 'Failed to load features' });
   }
 });
+
+// Entitlements = whether the tenant's PLAN includes each feature (tier eligibility + overrides),
+// independent of GA-rollout stage. This is what the console gates its UI on: an enterprise-only
+// feature (e.g. jit-access, still 'alpha') is entitled=true for enterprise, false for business —
+// whereas /api/features would report it disabled for everyone because it isn't GA yet.
+function entitlementFor(flag, tier, override) {
+  if (override === 'disabled') return false;
+  if (override === 'enabled' || override === 'beta' || override === 'alpha') return true;
+  if (flag.is_core) return true;
+  return tierEligible(flag, tier);
+}
+app.get('/api/entitlements', authRequired, async (req, res) => {
+  try {
+    const tier = (await pgPool.query('SELECT tier FROM tenants WHERE id = $1', [req.user.tenantId])).rows[0]?.tier || 'starter';
+    const flags = (await pgPool.query('SELECT * FROM feature_flags')).rows;
+    const ov = {};
+    (await pgPool.query('SELECT feature_key, status FROM feature_overrides WHERE tenant_id = $1', [req.user.tenantId])).rows.forEach(o => { ov[o.feature_key] = o.status; });
+    const out = {};
+    flags.forEach(f => { out[f.key] = entitlementFor(f, tier, ov[f.key]); });
+    res.json(out);
+  } catch (err) {
+    console.error('[Entitlements] failed:', err.message);
+    res.status(500).json({ error: 'Failed to load entitlements' });
+  }
+});
+
+// Middleware: 403 a tenant whose plan doesn't include `key`. Fail-open on a lookup error so a
+// glitch never blocks a legitimately-entitled request. Server-side twin of the console's gate.
+function featureRequired(key) {
+  return async (req, res, next) => {
+    try {
+      const flag = (await pgPool.query('SELECT * FROM feature_flags WHERE key = $1', [key])).rows[0];
+      if (!flag) return next();
+      const tier = (await pgPool.query('SELECT tier FROM tenants WHERE id = $1', [req.user.tenantId])).rows[0]?.tier || 'starter';
+      const ov = (await pgPool.query('SELECT status FROM feature_overrides WHERE tenant_id = $1 AND feature_key = $2', [req.user.tenantId, key])).rows[0]?.status;
+      if (!entitlementFor(flag, tier, ov)) {
+        return res.status(403).json({ error: `${flag.name} is available on the Enterprise plan`, feature: key, upgrade: true });
+      }
+      next();
+    } catch (e) { next(); }
+  };
+}
 
 app.get('/api/compliance/masking', authRequired, async (req, res) => {
   const T = req.user.tenantId;
