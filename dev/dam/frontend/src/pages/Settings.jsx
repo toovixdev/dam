@@ -6,7 +6,9 @@ import { useAuth } from '../context/AuthContext';
 import { toast } from '../components/shared/Toast';
 import { getBranding, setBranding, resetBranding } from '../branding';
 import useApiData from '../hooks/useApiData';
-import { apiPut, apiDelete } from '../api/client';
+import useFeatures from '../hooks/useFeatures';
+import { UpsellPanel } from '../components/shared/FeatureGate';
+import { apiPut, apiPost, apiDelete } from '../api/client';
 
 function Toggle({ on, onChange }) {
   return <button className={`switch ${on ? 'on' : ''}`} aria-label="toggle" onClick={onChange} />;
@@ -166,13 +168,15 @@ export default function Settings() {
       )}
 
       {tab === 'sec' && (
-        <div className="card"><div className="card-body" style={{ paddingTop: 4 }}>
-          <SettingRow title="Enforce MFA" sub="All users"><Toggle on={toggles.mfa} onChange={() => flip('mfa')} /></SettingRow>
-          <SettingRow title="BYOK (customer KMS)" sub="HashiCorp Vault · key rotation 90d"><Toggle on={toggles.byok} onChange={() => flip('byok')} /></SettingRow>
-          <SettingRow title="No native DB audit" sub="Self-managed only · PaaS exception"><Toggle on={toggles.noNative} onChange={() => flip('noNative')} /></SettingRow>
-          <SettingRow title="Inline blocking fail mode" sub="Fail-open default; fail-closed for crown-jewel DBs"><span className="badge amber">fail-open</span></SettingRow>
-          <SettingRow title="Control-plane self-audit" sub="Hash-chained"><Toggle on={toggles.selfAudit} onChange={() => flip('selfAudit')} /></SettingRow>
-        </div></div>
+        <>
+          <EncryptionPanel />
+          <div className="card"><div className="card-body" style={{ paddingTop: 4 }}>
+            <SettingRow title="Enforce MFA" sub="All users"><Toggle on={toggles.mfa} onChange={() => flip('mfa')} /></SettingRow>
+            <SettingRow title="No native DB audit" sub="Self-managed only · PaaS exception"><Toggle on={toggles.noNative} onChange={() => flip('noNative')} /></SettingRow>
+            <SettingRow title="Inline blocking fail mode" sub="Fail-open default; fail-closed for crown-jewel DBs"><span className="badge amber">fail-open</span></SettingRow>
+            <SettingRow title="Control-plane self-audit" sub="Hash-chained"><Toggle on={toggles.selfAudit} onChange={() => flip('selfAudit')} /></SettingRow>
+          </div></div>
+        </>
       )}
 
       {tab === 'pay' && <PaymentsTab key={tab} />}
@@ -503,4 +507,87 @@ function GatewayCard({ provider, title, accent, info, fields, help, onSaved }) {
       </div>
     </div>
   );
+}
+
+// ── Encryption at rest — BYOK / customer-managed key (Enterprise) ─────────────
+function EncryptionPanel() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'tenant_admin';
+  const { features } = useFeatures();
+  const entitled = features['byok'] !== false;
+  const { data, refetch } = useApiData('/settings/encryption', { poll: 0, skip: !entitled });
+  const [busy, setBusy] = useState('');
+  const [source, setSource] = useState('vault');
+
+  const card = (body) => (
+    <div className="card">
+      <div className="card-header"><span className="card-title">Encryption at rest</span>
+        <span className="card-sub">how your stored secrets (cloud keys, integration secrets) are protected</span></div>
+      <div className="card-body">{body}</div>
+    </div>
+  );
+
+  if (!entitled) return card(<UpsellPanel name="Customer-managed encryption (BYOK)" inline />);
+
+  const st = data || {};
+  const providerLabel = st.provider === 'vault-transit' ? 'HashiCorp Vault' : st.provider === 'env-key' ? 'Platform key' : (st.provider || '—');
+
+  const enable = async () => {
+    setBusy('enable');
+    const body = source === 'vault' ? { provider: 'vault-transit', managedBy: 'customer' } : { provider: 'env-key', managedBy: 'platform' };
+    const res = await apiPut('/settings/encryption', body);
+    setBusy('');
+    if (res?.ok) { toast('Encryption enabled', 'ok'); refetch(); }
+    else toast(res?.data?.error || 'Could not enable encryption', 'err');
+  };
+  const test = async () => {
+    setBusy('test');
+    const r = await apiPost('/settings/encryption/test', {});
+    setBusy('');
+    toast(r?.data?.ok ? 'Encryption round-trip OK' : `Test failed: ${r?.data?.error || ''}`, r?.data?.ok ? 'ok' : 'err');
+  };
+  const rotate = async () => {
+    if (!window.confirm('Rotate the encryption key? Existing data stays readable — only the wrapping key changes.')) return;
+    setBusy('rotate');
+    const r = await apiPost('/settings/encryption/rotate', {});
+    setBusy('');
+    if (r?.ok) { toast('Key rotated', 'ok'); refetch(); } else toast(r?.data?.error || 'Rotate failed', 'err');
+  };
+  const reencrypt = async () => {
+    setBusy('reencrypt');
+    const r = await apiPost('/settings/encryption/reencrypt', {});
+    setBusy('');
+    if (r?.ok) { toast(`Re-encrypted ${r.data.migrated} secret(s) under the current key`, 'ok'); refetch(); }
+    else toast(r?.data?.error || 'Re-encrypt failed', 'err');
+  };
+
+  return card(st.enabled ? (
+    <>
+      <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', marginBottom: 16 }}>
+        <div><div className="muted" style={{ fontSize: 12 }}>Key store</div><b>{providerLabel}</b>{st.managed_by ? <span className="badge" style={{ marginLeft: 6 }}>{st.managed_by}-managed</span> : null}</div>
+        <div><div className="muted" style={{ fontSize: 12 }}>Key reference</div><b className="mono" style={{ fontSize: 12.5 }}>{st.kek_ref || '—'}</b></div>
+        <div><div className="muted" style={{ fontSize: 12 }}>Last rotated</div><b>{st.rotated_at ? new Date(st.rotated_at).toLocaleString() : 'never'}</b></div>
+      </div>
+      {isAdmin ? (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <button className="btn-secondary" disabled={busy === 'test'} onClick={test}>{busy === 'test' ? 'Testing…' : 'Test'}</button>
+          <button className="btn-secondary" disabled={busy === 'rotate'} onClick={rotate}>{busy === 'rotate' ? 'Rotating…' : 'Rotate key'}</button>
+          <button className="btn-secondary" disabled={busy === 'reencrypt'} onClick={reencrypt}>{busy === 'reencrypt' ? 'Re-encrypting…' : 'Re-encrypt existing secrets'}</button>
+        </div>
+      ) : <div className="muted" style={{ fontSize: 12.5 }}>Only a Tenant Admin can change encryption settings.</div>}
+    </>
+  ) : (
+    <>
+      <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Your secrets are always encrypted. Choose where the <b>key that unlocks them</b> lives — the platform, or a key held in HashiCorp Vault.</p>
+      {isAdmin ? (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <select value={source} onChange={(e) => setSource(e.target.value)} style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 13 }}>
+            <option value="vault" disabled={data && !st.vault_available}>HashiCorp Vault — key stays in Vault (recommended){data && !st.vault_available ? ' — not configured' : ''}</option>
+            <option value="platform">Platform key</option>
+          </select>
+          <button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Enabling…' : 'Enable encryption'}</button>
+        </div>
+      ) : <div className="muted" style={{ fontSize: 12.5 }}>Only a Tenant Admin can enable customer-managed encryption.</div>}
+    </>
+  ));
 }
