@@ -83,12 +83,22 @@ vault write database/roles/jit-inventory-read-all \
   revocation_statements="DROP USER '{{name}}'@'%';" \
   default_ttl="1h" max_ttl="24h"
 
-# 4) AppRole for the DAM API — least-privilege policy (read only these creds + revoke).
+# 3c) Transit engine — the platform Key Encryption Key store for BYOK / envelope encryption.
+#     The DAM API wraps/unwraps per-tenant Data Encryption Keys here; the KEK never leaves Vault.
+echo "[bootstrap] enabling Transit secrets engine (BYOK KEK store)..."
+vault secrets enable transit 2>/dev/null || true
+vault write -f transit/keys/dam-platform 2>/dev/null || true   # default platform-managed KEK
+
+# 4) AppRole for the DAM API — least-privilege policy (read only these creds + revoke,
+#    plus Transit wrap/unwrap for the encryption layer).
 echo "[bootstrap] configuring AppRole for dam-api..."
 vault auth enable approle 2>/dev/null || true
 cat > /tmp/jit-policy.hcl <<POL
 path "database/creds/jit-*" { capabilities = ["read"] }
 path "sys/leases/revoke"    { capabilities = ["update"] }
+path "transit/encrypt/*"    { capabilities = ["update"] }
+path "transit/decrypt/*"    { capabilities = ["update"] }
+path "transit/keys/*"       { capabilities = ["create", "read", "update"] }
 POL
 vault policy write dam-jit /tmp/jit-policy.hcl
 vault write auth/approle/role/dam-api \
