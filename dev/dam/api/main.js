@@ -605,6 +605,7 @@ async function runAuthMigration() {
     // no audit logs, so last_ingest_at alone would flap it to "unmonitored" every 15 min even though
     // the connector is healthy. This advances while the consumer is alive + subscribed.
     await client.query(`ALTER TABLE cloud_connectors ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMPTZ`);
+    await tenantCrypto.ensureTable(); // BYOK: per-tenant encryption config (tenant_encryption)
     // Encrypt any legacy plaintext connector credentials now that a key is configured. Rows are
     // already-encrypted when the JSONB has an 'enc' key; re-encrypt the rest (raw credential objects).
     if (secrets.hasKey) {
@@ -6778,6 +6779,12 @@ app.put('/api/settings/financial-assumptions', authRequired, async (req, res) =>
 const secrets = require('./secrets');
 const { encSecret, decSecret, packCredential, unpackCredential } = secrets;
 
+// BYOK — per-tenant envelope encryption over the platform secrets layer (see tenant-crypto.js).
+// vault is passed only when configured. packCredentialFor/unpackCredentialFor fall back to the
+// platform key for tenants with no encryption config, so they're safe to call unconditionally.
+const { makeTenantCrypto } = require('./tenant-crypto');
+const tenantCrypto = makeTenantCrypto({ pgPool, secrets, vault: VAULT_ADDR ? { fetch: vaultFetch, token: vaultToken } : null });
+
 // One-time, idempotent at-rest encryption backfill: encrypt any secret still stored in
 // plaintext (values without the enc: prefix). decSecret passes plaintext through unchanged,
 // so readers work whether a value is migrated yet or not. Runs every boot but only rewrites
@@ -7125,7 +7132,7 @@ async function runCloudDiscovery(tenantId, providers, jobId) {
     if (!conns.length) { errors.push(`${pid}: no connector configured`); continue; }
     for (const conn of conns) {
       try {
-        conn.credential = unpackCredential(conn.credential);
+        conn.credential = await tenantCrypto.unpackCredentialFor(tenantId, conn.credential);
         const cands = await adapter(conn);
         for (const c of cands) if (await upsertCloudCandidate(tenantId, c, jobId)) found++;
         await pgPool.query(`UPDATE cloud_connectors SET last_run_at = now(), last_result = $2, status = 'ok' WHERE id = $1`, [conn.id, `${cands.length} instance(s)`]);
@@ -7193,7 +7200,7 @@ app.post('/api/discovery/connectors', authRequired, async (req, res) => {
      ON CONFLICT (tenant_id, provider, project) DO UPDATE SET identity = EXCLUDED.identity, credential = EXCLUDED.credential,
        subscription = COALESCE(EXCLUDED.subscription, cloud_connectors.subscription), status = 'configured'
      RETURNING id, provider, project, identity, subscription, status, created_at`,
-    [req.user.tenantId, provider, proj, identity, packCredential(cred), sub]
+    [req.user.tenantId, provider, proj, identity, await tenantCrypto.packCredentialFor(req.user.tenantId, cred), sub]
   )).rows[0];
   res.status(201).json(row);
 });
@@ -7203,7 +7210,7 @@ app.post('/api/discovery/connectors/:id/test', authRequired, async (req, res) =>
   const adapter = CLOUD_ADAPTERS[conn.provider];
   if (!adapter) return res.status(400).json({ error: `No adapter for ${conn.provider} yet` });
   try {
-    conn.credential = unpackCredential(conn.credential);
+    conn.credential = await tenantCrypto.unpackCredentialFor(req.user.tenantId, conn.credential);
     const cands = await adapter(conn);
     await pgPool.query(`UPDATE cloud_connectors SET last_run_at = now(), last_result = $2, status = 'ok' WHERE id = $1`, [conn.id, `${cands.length} instance(s)`]);
     res.json({ ok: true, count: cands.length, sample: cands.slice(0, 5).map((c) => ({ name: c.endpoint, engine: c.engine, region: c.region })) });
