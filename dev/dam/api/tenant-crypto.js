@@ -10,7 +10,9 @@
 //   • vault-transit — KEK = a HashiCorp Vault Transit key. The key never leaves Vault; the DEK is
 //                     wrapped/unwrapped via Vault's API. Platform-owned key = the default hardened
 //                     setup; a customer-owned Vault key = true BYOK.
-//   • aws-kms / azure-keyvault / gcp-kms — cloud KMS adapters (stubs here; same wrap/unwrap shape).
+//   • aws-kms / azure-keyvault / gcp-kms — cloud KMS adapters. The KEK is a customer key in their
+//     own cloud account (true BYOK); the DEK is wrapped/unwrapped via the provider's REST API and
+//     the master key never leaves the KMS/vault. Same wrap/unwrap contract as the others.
 //
 // "Default vs BYOK" is therefore a single knob: which vault/KMS holds the KEK, and who controls it
 // (managed_by = 'platform' | 'customer'). The stored envelope is self-describing (a `k:"byok"`
@@ -59,6 +61,75 @@ async function awsKmsCall(cfg, action, payload) {
   const resp = await fetch(`https://${host}/`, { method: 'POST', headers, body });
   const j = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(j.message || j.__type || `AWS KMS ${action} failed (${resp.status})`);
+  return j;
+}
+
+// ── OAuth2 bearer-token cache shared by the Azure/GCP adapters (keyed by a hash of the
+// credential so we don't re-mint a token on every wrap/unwrap). ──────────────────────────────
+const _tokenCache = new Map();
+async function cachedToken(key, fetcher) {
+  const hit = _tokenCache.get(key);
+  if (hit && hit.exp - Date.now() > 60_000) return hit.token; // refresh ≥60s before expiry
+  const { token, expiresInSec } = await fetcher();
+  _tokenCache.set(key, { token, exp: Date.now() + (expiresInSec || 3600) * 1000 });
+  return token;
+}
+const _hash = (parts) => crypto.createHash('sha256').update(parts.join('|')).digest('hex');
+
+// ── Azure Key Vault — the KEK is a customer RSA key in their Key Vault; the DEK is wrapped/
+// unwrapped via wrapKey/unwrapKey (RSA-OAEP-256) and the private key never leaves the vault.
+// cfg = { tenantId, clientId, clientSecret } (an Azure AD app with wrap/unwrap on the key);
+// ref = the key identifier URL, e.g. https://<vault>.vault.azure.net/keys/<name>[/<version>].
+async function azureToken(cfg) {
+  if (!cfg || !cfg.tenantId || !cfg.clientId || !cfg.clientSecret) throw new Error('Azure Key Vault needs tenantId, clientId and clientSecret');
+  return cachedToken('az:' + _hash([cfg.tenantId, cfg.clientId, cfg.clientSecret]), async () => {
+    const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: cfg.clientId, client_secret: cfg.clientSecret, scope: 'https://vault.azure.net/.default' });
+    const r = await fetch(`https://login.microsoftonline.com/${encodeURIComponent(cfg.tenantId)}/oauth2/v2.0/token`, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error_description || j.error || `Azure AD token failed (${r.status})`);
+    return { token: j.access_token, expiresInSec: Number(j.expires_in) };
+  });
+}
+async function azureKvCall(ref, cfg, op, value) {
+  if (!ref) throw new Error('Azure Key Vault needs a key identifier (kekRef)');
+  const token = await azureToken(cfg);
+  const r = await fetch(`${String(ref).replace(/\/+$/, '')}/${op}?api-version=7.4`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ alg: 'RSA-OAEP-256', value }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || `Azure Key Vault ${op} failed (${r.status})`);
+  return j; // { kid, value }  (value is base64url)
+}
+
+// ── GCP Cloud KMS — the KEK is a customer CryptoKey; the DEK is wrapped/unwrapped via encrypt/
+// decrypt and the key material never leaves KMS. Auth is the service-account JWT-bearer flow.
+// cfg = the service-account JSON ({ client_email, private_key }); ref = the CryptoKey resource
+// name projects/…/cryptoKeys/… (decrypt auto-detects the key version from the ciphertext).
+async function gcpToken(cfg) {
+  const clientEmail = cfg && (cfg.client_email || cfg.clientEmail);
+  const privateKey = cfg && (cfg.private_key || cfg.privateKey);
+  if (!clientEmail || !privateKey) throw new Error('GCP KMS needs a service account (client_email + private_key)');
+  return cachedToken('gcp:' + _hash([clientEmail, privateKey]), async () => {
+    const now = Math.floor(Date.now() / 1000);
+    const seg = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const signingInput = `${seg({ alg: 'RS256', typ: 'JWT' })}.${seg({ iss: clientEmail, scope: 'https://www.googleapis.com/auth/cloudkms', aud: 'https://oauth2.googleapis.com/token', iat: now, exp: now + 3600 })}`;
+    const signature = crypto.sign('RSA-SHA256', Buffer.from(signingInput), privateKey.replace(/\\n/g, '\n')).toString('base64url');
+    const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer', assertion: `${signingInput}.${signature}` }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error_description || j.error || `GCP token failed (${r.status})`);
+    return { token: j.access_token, expiresInSec: Number(j.expires_in) };
+  });
+}
+async function gcpKmsCall(ref, cfg, op, payload) {
+  if (!ref) throw new Error('GCP KMS needs a crypto key resource name (kekRef)');
+  const token = await gcpToken(cfg);
+  const r = await fetch(`https://cloudkms.googleapis.com/v1/${ref}:${op}`, {
+    method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(payload),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((j.error && j.error.message) || `GCP KMS ${op} failed (${r.status})`);
   return j;
 }
 
@@ -131,13 +202,38 @@ function makeTenantCrypto({ pgPool, secrets, vault }) {
         return Buffer.from(r.Plaintext, 'base64');
       },
     },
-    // Cloud KMS adapters — same wrap/unwrap contract; implemented next.
-    'azure-keyvault': notImplemented('Azure Key Vault'),
-    'gcp-kms': notImplemented('GCP Cloud KMS'),
+    // Azure Key Vault — the KEK is a customer RSA key in their vault; wrap/unwrap via RSA-OAEP-256.
+    // The wrapped blob carries the exact key version (kid) so unwrap stays correct across rotation.
+    'azure-keyvault': {
+      async wrap(ref, cfg, dek) {
+        const r = await azureKvCall(ref, cfg, 'wrapkey', dek.toString('base64url'));
+        if (!r.value) throw new Error('Azure Key Vault wrapkey returned no value');
+        return `${r.kid || ref}::${r.value}`;
+      },
+      async unwrap(ref, cfg, wrapped) {
+        const i = String(wrapped).indexOf('::');
+        const kid = i > 0 ? wrapped.slice(0, i) : ref;      // unwrap with the version that wrapped it
+        const val = i > 0 ? wrapped.slice(i + 2) : wrapped;
+        const r = await azureKvCall(kid, cfg, 'unwrapkey', val);
+        if (!r.value) throw new Error('Azure Key Vault unwrapkey returned no value');
+        return Buffer.from(r.value, 'base64url');
+      },
+    },
+    // GCP Cloud KMS — the KEK is a customer CryptoKey; wrap/unwrap via encrypt/decrypt. Decrypt
+    // auto-detects the key version from the ciphertext, so rotation needs no version tracking.
+    'gcp-kms': {
+      async wrap(ref, cfg, dek) {
+        const r = await gcpKmsCall(ref, cfg, 'encrypt', { plaintext: dek.toString('base64') });
+        if (!r.ciphertext) throw new Error('GCP KMS encrypt returned no ciphertext');
+        return r.ciphertext; // base64
+      },
+      async unwrap(ref, cfg, wrapped) {
+        const r = await gcpKmsCall(ref, cfg, 'decrypt', { ciphertext: wrapped });
+        if (!r.plaintext) throw new Error('GCP KMS decrypt returned no plaintext');
+        return Buffer.from(r.plaintext, 'base64');
+      },
+    },
   };
-  function notImplemented(name) {
-    return { async wrap() { throw new Error(`${name} KEK provider not implemented yet`); }, async unwrap() { throw new Error(`${name} KEK provider not implemented yet`); } };
-  }
   const providerFor = (p) => providers[p] || (() => { throw new Error(`Unknown KEK provider: ${p}`); })();
 
   // ── Config + DEK access ──────────────────────────────────────────────────────

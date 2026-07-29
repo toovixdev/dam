@@ -519,6 +519,8 @@ function EncryptionPanel() {
   const [busy, setBusy] = useState('');
   const [source, setSource] = useState('vault');
   const [aws, setAws] = useState({ arn: '', region: 'us-east-1', akid: '', secret: '' });
+  const [azure, setAzure] = useState({ keyId: '', tenantId: '', clientId: '', clientSecret: '' });
+  const [gcp, setGcp] = useState({ keyName: '', saJson: '' });
   const [changing, setChanging] = useState(false);
 
   const card = (body) => (
@@ -532,13 +534,21 @@ function EncryptionPanel() {
   if (!entitled) return card(<UpsellPanel name="Customer-managed encryption (BYOK)" inline />);
 
   const st = data || {};
-  const providerLabel = st.provider === 'vault-transit' ? 'HashiCorp Vault' : st.provider === 'aws-kms' ? 'AWS KMS' : st.provider === 'env-key' ? 'Platform key' : (st.provider || '—');
+  const providerLabel = { 'vault-transit': 'HashiCorp Vault', 'aws-kms': 'AWS KMS', 'azure-keyvault': 'Azure Key Vault', 'gcp-kms': 'GCP Cloud KMS', 'env-key': 'Platform key' }[st.provider] || st.provider || '—';
 
   const enable = async () => {
     let body;
     if (source === 'aws-kms') {
       if (!aws.arn.trim() || !aws.akid.trim() || !aws.secret.trim() || !aws.region.trim()) return toast('Enter the KMS key ARN, region, and AWS access keys', 'err');
       body = { provider: 'aws-kms', managedBy: 'customer', kekRef: aws.arn.trim(), kekConfig: { accessKeyId: aws.akid.trim(), secretAccessKey: aws.secret.trim(), region: aws.region.trim() } };
+    } else if (source === 'azure-keyvault') {
+      if (!azure.keyId.trim() || !azure.tenantId.trim() || !azure.clientId.trim() || !azure.clientSecret.trim()) return toast('Enter the key identifier and the Azure AD app (tenant, client ID, client secret)', 'err');
+      body = { provider: 'azure-keyvault', managedBy: 'customer', kekRef: azure.keyId.trim(), kekConfig: { tenantId: azure.tenantId.trim(), clientId: azure.clientId.trim(), clientSecret: azure.clientSecret.trim() } };
+    } else if (source === 'gcp-kms') {
+      let sa;
+      try { sa = JSON.parse(gcp.saJson); } catch { return toast('Service account key must be valid JSON', 'err'); }
+      if (!gcp.keyName.trim() || !sa.client_email || !sa.private_key) return toast('Enter the crypto key resource name and a service-account JSON key', 'err');
+      body = { provider: 'gcp-kms', managedBy: 'customer', kekRef: gcp.keyName.trim(), kekConfig: { client_email: sa.client_email, private_key: sa.private_key } };
     } else if (source === 'vault') {
       body = { provider: 'vault-transit', managedBy: 'customer' };
     } else {
@@ -581,24 +591,48 @@ function EncryptionPanel() {
 
   // The provider picker — a dropdown plus the AWS KMS fields. Shared by first-time
   // enable and the "change key store" switch (both call enable(); PUT is switch-safe).
+  const advanced = ['aws-kms', 'azure-keyvault', 'gcp-kms'].includes(source); // providers with their own config + submit
+  const fld = { fontSize: 12, color: 'var(--muted)' };
+  const advLabel = { 'aws-kms': 'AWS KMS', 'azure-keyvault': 'Azure Key Vault', 'gcp-kms': 'GCP Cloud KMS' };
+  const submitBlock = (label) => (
+    <div style={{ gridColumn: '1 / -1' }}><button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Working…' : `${label} (${advLabel[source]})`}</button></div>
+  );
   const picker = (submitLabel) => (
     <>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <select value={source} onChange={(e) => setSource(e.target.value)} style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 13 }}>
           <option value="vault" disabled={data && !st.vault_available}>HashiCorp Vault — key stays in Vault (recommended){data && !st.vault_available ? ' — not configured' : ''}</option>
           <option value="aws-kms">AWS KMS — your key in your AWS account (BYOK)</option>
+          <option value="azure-keyvault">Azure Key Vault — your key in your Azure tenant (BYOK)</option>
+          <option value="gcp-kms">GCP Cloud KMS — your key in your GCP project (BYOK)</option>
           <option value="platform">Platform key</option>
         </select>
-        {source !== 'aws-kms' && <button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Working…' : submitLabel}</button>}
+        {!advanced && <button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Working…' : submitLabel}</button>}
         {changing && <button className="btn-secondary" disabled={busy === 'enable'} onClick={() => setChanging(false)}>Cancel</button>}
       </div>
       {source === 'aws-kms' && (
         <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, maxWidth: 620 }}>
-          <div style={{ gridColumn: '1 / -1' }}><label style={{ fontSize: 12, color: 'var(--muted)' }}>KMS key ARN</label><input value={aws.arn} onChange={(e) => setAws({ ...aws, arn: e.target.value })} placeholder="arn:aws:kms:us-east-1:…:key/…" style={{ width: '100%', fontSize: 12.5 }} /></div>
-          <div><label style={{ fontSize: 12, color: 'var(--muted)' }}>Region</label><input value={aws.region} onChange={(e) => setAws({ ...aws, region: e.target.value })} placeholder="us-east-1" style={{ width: '100%', fontSize: 12.5 }} /></div>
-          <div><label style={{ fontSize: 12, color: 'var(--muted)' }}>Access key ID</label><input value={aws.akid} onChange={(e) => setAws({ ...aws, akid: e.target.value })} placeholder="AKIA…" style={{ width: '100%', fontSize: 12.5 }} /></div>
-          <div style={{ gridColumn: '1 / -1' }}><label style={{ fontSize: 12, color: 'var(--muted)' }}>Secret access key</label><input type="password" value={aws.secret} onChange={(e) => setAws({ ...aws, secret: e.target.value })} placeholder="stored encrypted; needs kms:Encrypt/Decrypt on the key" style={{ width: '100%', fontSize: 12.5 }} /></div>
-          <div style={{ gridColumn: '1 / -1' }}><button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Working…' : `${submitLabel} (AWS KMS)`}</button></div>
+          <div style={{ gridColumn: '1 / -1' }}><label style={fld}>KMS key ARN</label><input value={aws.arn} onChange={(e) => setAws({ ...aws, arn: e.target.value })} placeholder="arn:aws:kms:us-east-1:…:key/…" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div><label style={fld}>Region</label><input value={aws.region} onChange={(e) => setAws({ ...aws, region: e.target.value })} placeholder="us-east-1" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div><label style={fld}>Access key ID</label><input value={aws.akid} onChange={(e) => setAws({ ...aws, akid: e.target.value })} placeholder="AKIA…" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><label style={fld}>Secret access key</label><input type="password" value={aws.secret} onChange={(e) => setAws({ ...aws, secret: e.target.value })} placeholder="stored encrypted; needs kms:Encrypt/Decrypt on the key" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          {submitBlock(submitLabel)}
+        </div>
+      )}
+      {source === 'azure-keyvault' && (
+        <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, maxWidth: 620 }}>
+          <div style={{ gridColumn: '1 / -1' }}><label style={fld}>Key identifier</label><input value={azure.keyId} onChange={(e) => setAzure({ ...azure, keyId: e.target.value })} placeholder="https://<vault>.vault.azure.net/keys/<name>" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div><label style={fld}>Directory (tenant) ID</label><input value={azure.tenantId} onChange={(e) => setAzure({ ...azure, tenantId: e.target.value })} placeholder="00000000-0000-…" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div><label style={fld}>Application (client) ID</label><input value={azure.clientId} onChange={(e) => setAzure({ ...azure, clientId: e.target.value })} placeholder="00000000-0000-…" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><label style={fld}>Client secret</label><input type="password" value={azure.clientSecret} onChange={(e) => setAzure({ ...azure, clientSecret: e.target.value })} placeholder="stored encrypted; app needs Key Wrap/Unwrap on the key" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          {submitBlock(submitLabel)}
+        </div>
+      )}
+      {source === 'gcp-kms' && (
+        <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr', gap: 10, maxWidth: 620 }}>
+          <div><label style={fld}>Crypto key resource name</label><input value={gcp.keyName} onChange={(e) => setGcp({ ...gcp, keyName: e.target.value })} placeholder="projects/…/locations/…/keyRings/…/cryptoKeys/…" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div><label style={fld}>Service account key (JSON)</label><textarea value={gcp.saJson} onChange={(e) => setGcp({ ...gcp, saJson: e.target.value })} placeholder='{"client_email":"…","private_key":"-----BEGIN PRIVATE KEY-----…"}' rows={5} style={{ width: '100%', fontSize: 12, fontFamily: 'monospace' }} /><div style={fld}>Stored encrypted; the account needs cloudkms.cryptoKeyVersions.useToEncrypt/Decrypt on the key.</div></div>
+          {submitBlock(submitLabel)}
         </div>
       )}
     </>
@@ -616,7 +650,7 @@ function EncryptionPanel() {
           <button className="btn-secondary" disabled={busy === 'test'} onClick={test}>{busy === 'test' ? 'Testing…' : 'Test'}</button>
           <button className="btn-secondary" disabled={busy === 'rotate'} onClick={rotate}>{busy === 'rotate' ? 'Rotating…' : 'Rotate key'}</button>
           <button className="btn-secondary" disabled={busy === 'reencrypt'} onClick={reencrypt}>{busy === 'reencrypt' ? 'Re-encrypting…' : 'Re-encrypt existing secrets'}</button>
-          {!changing && <button className="btn-secondary" onClick={() => { setSource(st.provider === 'aws-kms' ? 'aws-kms' : st.provider === 'env-key' ? 'platform' : 'vault'); setChanging(true); }}>Change key store</button>}
+          {!changing && <button className="btn-secondary" onClick={() => { setSource(['aws-kms', 'azure-keyvault', 'gcp-kms'].includes(st.provider) ? st.provider : st.provider === 'env-key' ? 'platform' : 'vault'); setChanging(true); }}>Change key store</button>}
           {!changing && <button className="btn-secondary" disabled={busy === 'disable'} onClick={disable} style={{ color: 'var(--danger, #c0392b)' }}>{busy === 'disable' ? 'Returning…' : 'Return to platform default'}</button>}
         </div>
       ) : <div className="muted" style={{ fontSize: 12.5 }}>Only a Tenant Admin can change encryption settings.</div>}
