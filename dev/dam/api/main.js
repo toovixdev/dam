@@ -1384,7 +1384,7 @@ async function runAdminMigration() {
         ('inline-proxy','Inline Blocking / Proxy','DAM proxy gateway, real-time block, virtual patch','ga', false, false, true, false, false, NULL, NULL, 8),
         ('llm-monitoring','LLM Monitoring','Roadmap — monitor DB queries from AI/LLM apps','roadmap', false, false, true,  false, false, NULL, NULL, 9),
         ('dsar','DSAR Module','Data subject access/erasure requests, GDPR/DPDPA','ga',                   false, false, true,  false, false, NULL, NULL, 10),
-        ('byok','BYOK / Customer KMS','Roadmap — customer-managed encryption key (Vault Transit first)','roadmap', false, false, true,  false, false, NULL, NULL, 11),
+        ('byok','BYOK / Customer KMS','Customer-managed encryption key — HashiCorp Vault, AWS KMS, Azure Key Vault, GCP Cloud KMS','ga', false, false, true,  false, false, NULL, NULL, 11),
         ('sql-allowlist','SQL Grammar Allowlist','Roadmap — learned SQL allowlist + deviation blocking','roadmap', false, false, true,  false, false, NULL, NULL, 12),
         ('deception','Deception Console','Honeypot tables, decoy records, trap detection','beta',        false, false, true,  false, false, '100% by Q4 2026', '0.01%', 13),
         ('jit-access','JIT Access','Just-in-time privileged access, auto-expiry, approvals','alpha',     false, false, true,  false, false, NULL, NULL, 14),
@@ -1392,6 +1392,13 @@ async function runAdminMigration() {
         ('onprem','On-Prem / Air-Gapped','Customer-managed Docker/K8s · air-gap & offline licensing on the roadmap','beta', false, false, true,  false, true,  NULL, NULL, 16)`);
       console.log('[Admin] Seeded feature_flags catalog (16 features)');
     }
+
+    // Catalog corrections for features that have since shipped (the seed above only runs on an
+    // empty table, so existing installs need these in-place updates). Idempotent: each guards on
+    // the stale value, so it's a no-op once applied and never clobbers admin per-tenant overrides.
+    await client.query(
+      `UPDATE feature_flags SET stage='ga', description=$1 WHERE key='byok' AND stage <> 'ga'`,
+      ['Customer-managed encryption key — HashiCorp Vault, AWS KMS, Azure Key Vault, GCP Cloud KMS']);
 
     // Resource quotas: plan-tier defaults + per-tenant overrides (isolated admin tables).
     // NULL limit = unlimited / custom (per-contract). storage in GB.
