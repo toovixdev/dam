@@ -6869,6 +6869,80 @@ app.put('/api/settings/cloud-providers', authRequired, async (req, res) => {
   res.json({ providers: list });
 });
 
+// ── BYOK — per-tenant encryption key configuration (Enterprise feature) ────────
+// Status is readable by any authed user (to render the panel); changes are admin-only. Key
+// material is never returned. Enabling/switching is non-destructive; existing secrets keep
+// decrypting until re-encrypted (see /reencrypt).
+app.get('/api/settings/encryption', authRequired, featureRequired('byok'), async (req, res) => {
+  try {
+    const cfg = await tenantCrypto.getConfig(req.user.tenantId);
+    res.json({
+      enabled: !!cfg,
+      provider: cfg ? cfg.kek_provider : null,
+      managed_by: cfg ? cfg.managed_by : null,
+      kek_ref: cfg ? cfg.kek_ref : null,
+      dek_created_at: cfg ? cfg.dek_created_at : null,
+      rotated_at: cfg ? cfg.rotated_at : null,
+      updated_by: cfg ? cfg.updated_by : null,
+      updated_at: cfg ? cfg.updated_at : null,
+      vault_available: !!VAULT_ADDR,
+      providers: tenantCrypto.KEK_PROVIDERS,
+    });
+  } catch (e) { console.error('[Encryption] status failed:', e.message); res.status(500).json({ error: 'Failed to load encryption config' }); }
+});
+
+// Enable / switch the KEK provider. Defaults to Vault Transit, platform-managed (the hardened
+// default); managed_by:'customer' points at a per-tenant Vault key = true BYOK.
+app.put('/api/settings/encryption', authRequired, featureRequired('byok'), adminOnly, async (req, res) => {
+  const provider = String((req.body && req.body.provider) || 'vault-transit');
+  const managedBy = String((req.body && req.body.managedBy) || 'platform');
+  if (!tenantCrypto.KEK_PROVIDERS.includes(provider)) return res.status(400).json({ error: 'Unknown KEK provider' });
+  if (!['platform', 'customer'].includes(managedBy)) return res.status(400).json({ error: 'managedBy must be platform or customer' });
+  if (provider === 'vault-transit' && !VAULT_ADDR) return res.status(400).json({ error: 'Vault is not configured on this control plane' });
+  try {
+    const r = await tenantCrypto.enable(req.user.tenantId, {
+      provider, managedBy,
+      kekRef: (req.body && req.body.kekRef) || null,
+      kekConfig: (req.body && req.body.kekConfig) || null,
+      updatedBy: req.user.email,
+    });
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'encryption.enable', resourceType: 'tenant_encryption', resourceId: req.user.tenantId, details: { provider, managed_by: managedBy, kek_ref: r.kek_ref } });
+    res.json({ ok: true, ...r });
+  } catch (e) { console.error('[Encryption] enable failed:', e.message); res.status(400).json({ error: e.message }); }
+});
+
+// Rotate the KEK (new key version) and re-wrap the DEK — no data re-encryption, safe anytime.
+app.post('/api/settings/encryption/rotate', authRequired, featureRequired('byok'), adminOnly, async (req, res) => {
+  try {
+    const r = await tenantCrypto.rotateKek(req.user.tenantId, { updatedBy: req.user.email });
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'encryption.rotate_kek', resourceType: 'tenant_encryption', resourceId: req.user.tenantId, details: {} });
+    res.json({ ok: true, ...r });
+  } catch (e) { console.error('[Encryption] rotate failed:', e.message); res.status(400).json({ error: e.message }); }
+});
+
+// Round-trip probe through the tenant's KEK+DEK — powers the "Test" button.
+app.post('/api/settings/encryption/test', authRequired, featureRequired('byok'), async (req, res) => {
+  res.json(await tenantCrypto.test(req.user.tenantId));
+});
+
+// Migrate the tenant's existing per-tenant secrets to the current encryption config (re-encrypt
+// cloud connector credentials under the active DEK). Bounded, per-tenant, non-destructive.
+app.post('/api/settings/encryption/reencrypt', authRequired, featureRequired('byok'), adminOnly, async (req, res) => {
+  const T = req.user.tenantId;
+  try {
+    const rows = (await pgPool.query('SELECT id, credential FROM cloud_connectors WHERE tenant_id = $1', [T])).rows;
+    let migrated = 0;
+    for (const r of rows) {
+      const plain = await tenantCrypto.unpackCredentialFor(T, r.credential);
+      const packed = await tenantCrypto.packCredentialFor(T, plain);
+      await pgPool.query('UPDATE cloud_connectors SET credential = $2 WHERE id = $1', [r.id, packed]);
+      migrated++;
+    }
+    await writeAudit({ tenantId: T, actorId: req.user.userId, actorEmail: req.user.email, action: 'encryption.reencrypt', resourceType: 'tenant_encryption', resourceId: T, details: { migrated } });
+    res.json({ ok: true, migrated });
+  } catch (e) { console.error('[Encryption] reencrypt failed:', e.message); res.status(500).json({ error: e.message }); }
+});
+
 // ── Cloud discovery: provider adapters (agentless enumeration of managed DBs) ──
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
