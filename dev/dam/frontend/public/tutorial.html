@@ -992,7 +992,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
           <div style="font-weight:800;color:var(--ink)">Default &mdash; the platform holds the key</div>
           <div style="font-size:13px;color:var(--muted);margin:2px 0 14px">One key opens every customer&rsquo;s data.</div>
           <div style="border:2px solid var(--indigo);background:var(--soft);border-radius:10px;padding:10px 12px;font-weight:700;color:var(--ink)">🔑 One master key
-            <span style="display:block;font-weight:500;color:var(--muted);font-size:12.5px">kept by the platform &mdash; a file on our server</span></div>
+            <span style="display:block;font-weight:500;color:var(--muted);font-size:12.5px">held in the platform&rsquo;s key manager (HashiCorp Vault / cloud KMS)</span></div>
           <div style="text-align:center;color:var(--indigo);font-size:20px;margin:4px 0">&darr;<span style="font-size:12px;color:var(--muted);margin-left:6px">unlocks</span></div>
           <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--ink)">🔒 Your secrets, encrypted in the database</div>
           <div style="font-size:12.5px;color:var(--body);margin-top:12px">The platform can decrypt your data at any time. You trust us with the key.</div>
@@ -1002,9 +1002,9 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
           <div style="font-size:13px;color:var(--muted);margin:2px 0 14px">Your key lives in <b>your</b> vault and never leaves it.</div>
           <div style="display:flex;gap:10px;align-items:stretch;flex-wrap:wrap">
             <div style="flex:1;min-width:140px;border:2px solid var(--ok);background:#fff;border-radius:10px;padding:10px 12px">
-              <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ok);font-weight:800">Your vault</div>
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ok);font-weight:800">Your key manager</div>
               <div style="font-weight:700;color:var(--ink);margin-top:4px">🔑 Your master key</div>
-              <div style="font-size:12px;color:var(--muted)">never leaves your vault</div>
+              <div style="font-size:12px;color:var(--muted)">Vault / Azure KV / AWS KMS / GCP KMS &mdash; never leaves it</div>
             </div>
             <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:72px;font-size:12px;color:var(--body);text-align:center">
               <div>&#9312; &ldquo;please<br>unlock&rdquo; &rarr;</div>
@@ -1021,6 +1021,14 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
         </div>
       </div>
 
+      <h3 style="margin:22px 0 6px">Where your key can live</h3>
+      <p>The key store is pluggable &mdash; the master key can sit in whichever key manager you trust:</p>
+      <ul style="margin:6px 0 14px">
+        <li><b>HashiCorp Vault</b> (Transit) &mdash; <span style="color:var(--ok);font-weight:600">available now</span>; the key never leaves Vault.</li>
+        <li><b>Azure Key Vault</b>, <b>AWS KMS</b>, <b>GCP Cloud KMS</b> &mdash; <span style="color:var(--high);font-weight:600">on the roadmap</span>; keep the key in your own cloud account (true BYOK).</li>
+        <li><b>Platform-managed key</b> &mdash; the simplest option, managed for you (no separate vault required).</li>
+      </ul>
+
       <div class="note"><b>Why the &ldquo;locked data-key&rdquo; in the middle?</b> Re-locking a whole box of valuables
         every time you rotate your key would be slow. So each box has its own small key that does the actual locking,
         and <b>that</b> small key is what your master key protects. Rotating your master key just re-locks the small
@@ -1036,7 +1044,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
         <tbody>
           <tr style="border-bottom:1px solid var(--line)"><td style="padding:8px 10px;font-weight:700;color:var(--ink)">Master key (opens the data)</td>
             <td style="padding:8px 10px">Platform &mdash; a file on the server</td>
-            <td style="padding:8px 10px"><b>Your vault</b> &mdash; never on our server or in our database</td></tr>
+            <td style="padding:8px 10px"><b>Your key manager</b> (Vault / Azure KV / AWS KMS / GCP KMS) &mdash; never on our server or in our database</td></tr>
           <tr style="border-bottom:1px solid var(--line)"><td style="padding:8px 10px;font-weight:700;color:var(--ink)">Locked data-key</td>
             <td style="padding:8px 10px">Not used (the master key encrypts data directly)</td>
             <td style="padding:8px 10px">In our database, but <b>useless without your vault</b></td></tr>
