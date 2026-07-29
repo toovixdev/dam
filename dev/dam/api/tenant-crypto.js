@@ -242,10 +242,20 @@ function makeTenantCrypto({ pgPool, secrets, vault }) {
     } catch (e) { return { ok: false, error: e.message }; }
   }
 
+  // Turn BYOK off for a tenant — drop the per-tenant key config so future writes
+  // use the platform default envelope. Callers MUST first re-encrypt any existing
+  // BYOK-marked rows back under the platform key (while this config still exists,
+  // so the DEK can unwrap them); otherwise those rows would be orphaned.
+  async function disable(tenantId) {
+    await pgPool.query('DELETE FROM tenant_encryption WHERE tenant_id = $1', [tenantId]);
+    invalidate(tenantId);
+    return { disabled: true };
+  }
+
   return {
     ensureTable, getConfig, invalidate,
     packCredentialFor, unpackCredentialFor,
-    enable, rotateKek, test,
+    enable, rotateKek, test, disable,
     KEK_PROVIDERS, platformVaultKeyName, tenantVaultKeyName,
   };
 }

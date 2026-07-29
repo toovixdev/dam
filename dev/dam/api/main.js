@@ -6943,6 +6943,28 @@ app.post('/api/settings/encryption/reencrypt', authRequired, featureRequired('by
   } catch (e) { console.error('[Encryption] reencrypt failed:', e.message); res.status(500).json({ error: e.message }); }
 });
 
+// Turn BYOK off — return the tenant to the platform default. Re-encrypt every BYOK-marked
+// secret back under the platform key FIRST (while the per-tenant DEK still exists to unwrap
+// them), then drop the config. If any row fails to re-encrypt, we abort before deleting the
+// config so nothing is orphaned.
+app.delete('/api/settings/encryption', authRequired, featureRequired('byok'), adminOnly, async (req, res) => {
+  const T = req.user.tenantId;
+  try {
+    const cfg = await tenantCrypto.getConfig(T);
+    if (!cfg) return res.json({ ok: true, migrated: 0, alreadyDefault: true });
+    const rows = (await pgPool.query('SELECT id, credential FROM cloud_connectors WHERE tenant_id = $1', [T])).rows;
+    let migrated = 0;
+    for (const r of rows) {
+      const plain = await tenantCrypto.unpackCredentialFor(T, r.credential); // via the current BYOK config
+      await pgPool.query('UPDATE cloud_connectors SET credential = $2 WHERE id = $1', [r.id, packCredential(plain)]); // platform default envelope
+      migrated++;
+    }
+    await tenantCrypto.disable(T); // only after all secrets are safely back under the platform key
+    await writeAudit({ tenantId: T, actorId: req.user.userId, actorEmail: req.user.email, action: 'encryption.disable', resourceType: 'tenant_encryption', resourceId: T, details: { migrated, was_provider: cfg.kek_provider } });
+    res.json({ ok: true, migrated });
+  } catch (e) { console.error('[Encryption] disable failed:', e.message); res.status(500).json({ error: e.message }); }
+});
+
 // ── Cloud discovery: provider adapters (agentless enumeration of managed DBs) ──
 const b64url = (buf) => Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 

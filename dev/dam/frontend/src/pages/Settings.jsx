@@ -519,6 +519,7 @@ function EncryptionPanel() {
   const [busy, setBusy] = useState('');
   const [source, setSource] = useState('vault');
   const [aws, setAws] = useState({ arn: '', region: 'us-east-1', akid: '', secret: '' });
+  const [changing, setChanging] = useState(false);
 
   const card = (body) => (
     <div className="card">
@@ -546,8 +547,16 @@ function EncryptionPanel() {
     setBusy('enable');
     const res = await apiPut('/settings/encryption', body);
     setBusy('');
-    if (res?.ok) { toast('Encryption enabled', 'ok'); refetch(); }
+    if (res?.ok) { toast(res.data.switched ? 'Key store switched — your data stays readable' : 'Encryption enabled', 'ok'); setChanging(false); refetch(); }
     else toast(res?.data?.error || 'Could not enable encryption', 'err');
+  };
+  const disable = async () => {
+    if (!window.confirm('Return to the platform default? Your secrets will be re-encrypted under the platform key and the per-tenant key configuration will be removed. Existing data stays readable throughout.')) return;
+    setBusy('disable');
+    const res = await apiDelete('/settings/encryption');
+    setBusy('');
+    if (res?.ok) { toast(`Returned to platform default — ${res.data.migrated} secret(s) re-encrypted`, 'ok'); refetch(); }
+    else toast(res?.data?.error || 'Could not return to default', 'err');
   };
   const test = async () => {
     setBusy('test');
@@ -570,6 +579,31 @@ function EncryptionPanel() {
     else toast(r?.data?.error || 'Re-encrypt failed', 'err');
   };
 
+  // The provider picker — a dropdown plus the AWS KMS fields. Shared by first-time
+  // enable and the "change key store" switch (both call enable(); PUT is switch-safe).
+  const picker = (submitLabel) => (
+    <>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={source} onChange={(e) => setSource(e.target.value)} style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 13 }}>
+          <option value="vault" disabled={data && !st.vault_available}>HashiCorp Vault — key stays in Vault (recommended){data && !st.vault_available ? ' — not configured' : ''}</option>
+          <option value="aws-kms">AWS KMS — your key in your AWS account (BYOK)</option>
+          <option value="platform">Platform key</option>
+        </select>
+        {source !== 'aws-kms' && <button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Working…' : submitLabel}</button>}
+        {changing && <button className="btn-secondary" disabled={busy === 'enable'} onClick={() => setChanging(false)}>Cancel</button>}
+      </div>
+      {source === 'aws-kms' && (
+        <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, maxWidth: 620 }}>
+          <div style={{ gridColumn: '1 / -1' }}><label style={{ fontSize: 12, color: 'var(--muted)' }}>KMS key ARN</label><input value={aws.arn} onChange={(e) => setAws({ ...aws, arn: e.target.value })} placeholder="arn:aws:kms:us-east-1:…:key/…" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div><label style={{ fontSize: 12, color: 'var(--muted)' }}>Region</label><input value={aws.region} onChange={(e) => setAws({ ...aws, region: e.target.value })} placeholder="us-east-1" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div><label style={{ fontSize: 12, color: 'var(--muted)' }}>Access key ID</label><input value={aws.akid} onChange={(e) => setAws({ ...aws, akid: e.target.value })} placeholder="AKIA…" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><label style={{ fontSize: 12, color: 'var(--muted)' }}>Secret access key</label><input type="password" value={aws.secret} onChange={(e) => setAws({ ...aws, secret: e.target.value })} placeholder="stored encrypted; needs kms:Encrypt/Decrypt on the key" style={{ width: '100%', fontSize: 12.5 }} /></div>
+          <div style={{ gridColumn: '1 / -1' }}><button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Working…' : `${submitLabel} (AWS KMS)`}</button></div>
+        </div>
+      )}
+    </>
+  );
+
   return card(st.enabled ? (
     <>
       <div style={{ display: 'flex', gap: 26, flexWrap: 'wrap', marginBottom: 16 }}>
@@ -582,33 +616,21 @@ function EncryptionPanel() {
           <button className="btn-secondary" disabled={busy === 'test'} onClick={test}>{busy === 'test' ? 'Testing…' : 'Test'}</button>
           <button className="btn-secondary" disabled={busy === 'rotate'} onClick={rotate}>{busy === 'rotate' ? 'Rotating…' : 'Rotate key'}</button>
           <button className="btn-secondary" disabled={busy === 'reencrypt'} onClick={reencrypt}>{busy === 'reencrypt' ? 'Re-encrypting…' : 'Re-encrypt existing secrets'}</button>
+          {!changing && <button className="btn-secondary" onClick={() => { setSource(st.provider === 'aws-kms' ? 'aws-kms' : st.provider === 'env-key' ? 'platform' : 'vault'); setChanging(true); }}>Change key store</button>}
+          {!changing && <button className="btn-secondary" disabled={busy === 'disable'} onClick={disable} style={{ color: 'var(--danger, #c0392b)' }}>{busy === 'disable' ? 'Returning…' : 'Return to platform default'}</button>}
         </div>
       ) : <div className="muted" style={{ fontSize: 12.5 }}>Only a Tenant Admin can change encryption settings.</div>}
+      {isAdmin && changing && (
+        <div style={{ marginTop: 16, paddingTop: 14, borderTop: '1px solid var(--line)' }}>
+          <p className="muted" style={{ fontSize: 12.5, marginTop: 0 }}>Move the key that unlocks your secrets to a different store. Your data stays readable — the same underlying data key is simply re-wrapped by the new store.</p>
+          {picker('Switch key store')}
+        </div>
+      )}
     </>
   ) : (
     <>
       <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>Your secrets are always encrypted. Choose where the <b>key that unlocks them</b> lives — the platform, HashiCorp Vault, or your own AWS KMS.</p>
-      {isAdmin ? (
-        <>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={source} onChange={(e) => setSource(e.target.value)} style={{ padding: '7px 10px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 13 }}>
-              <option value="vault" disabled={data && !st.vault_available}>HashiCorp Vault — key stays in Vault (recommended){data && !st.vault_available ? ' — not configured' : ''}</option>
-              <option value="aws-kms">AWS KMS — your key in your AWS account (BYOK)</option>
-              <option value="platform">Platform key</option>
-            </select>
-            {source !== 'aws-kms' && <button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Enabling…' : 'Enable encryption'}</button>}
-          </div>
-          {source === 'aws-kms' && (
-            <div style={{ marginTop: 12, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, maxWidth: 620 }}>
-              <div style={{ gridColumn: '1 / -1' }}><label style={{ fontSize: 12, color: 'var(--muted)' }}>KMS key ARN</label><input value={aws.arn} onChange={(e) => setAws({ ...aws, arn: e.target.value })} placeholder="arn:aws:kms:us-east-1:…:key/…" style={{ width: '100%', fontSize: 12.5 }} /></div>
-              <div><label style={{ fontSize: 12, color: 'var(--muted)' }}>Region</label><input value={aws.region} onChange={(e) => setAws({ ...aws, region: e.target.value })} placeholder="us-east-1" style={{ width: '100%', fontSize: 12.5 }} /></div>
-              <div><label style={{ fontSize: 12, color: 'var(--muted)' }}>Access key ID</label><input value={aws.akid} onChange={(e) => setAws({ ...aws, akid: e.target.value })} placeholder="AKIA…" style={{ width: '100%', fontSize: 12.5 }} /></div>
-              <div style={{ gridColumn: '1 / -1' }}><label style={{ fontSize: 12, color: 'var(--muted)' }}>Secret access key</label><input type="password" value={aws.secret} onChange={(e) => setAws({ ...aws, secret: e.target.value })} placeholder="stored encrypted; needs kms:Encrypt/Decrypt on the key" style={{ width: '100%', fontSize: 12.5 }} /></div>
-              <div style={{ gridColumn: '1 / -1' }}><button className="btn-primary" disabled={busy === 'enable'} onClick={enable}>{busy === 'enable' ? 'Enabling…' : 'Enable with AWS KMS'}</button></div>
-            </div>
-          )}
-        </>
-      ) : <div className="muted" style={{ fontSize: 12.5 }}>Only a Tenant Admin can enable customer-managed encryption.</div>}
+      {isAdmin ? picker('Enable encryption') : <div className="muted" style={{ fontSize: 12.5 }}>Only a Tenant Admin can enable customer-managed encryption.</div>}
     </>
   ));
 }
