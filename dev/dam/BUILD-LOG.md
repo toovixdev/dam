@@ -2383,3 +2383,36 @@ Remaining plaintext is *outside* the control plane: agent-side `dam_svc` DB pass
 hosts (agent env files). This pass is the prerequisite for **BYOK** — every secret is now encrypted
 under one key; BYOK swaps that key's source (env → customer KMS, Vault Transit first). See
 `docs/va-scanner-design.md` sibling for the BYOK design in the chat history.
+
+## BYOK / envelope encryption — pluggable KEK providers (2026-07-29)
+
+`api/tenant-crypto.js`: per-tenant **DEK** (random AES-256) encrypts each tenant's secrets via the
+`secrets.js` toolkit keyed by that DEK; the DEK is stored **wrapped** by a pluggable **KEK**. The
+envelope is self-describing (`{enc, k:'byok'}`) so BYOK and platform-encrypted rows coexist with no
+forced migration — a tenant with no config transparently uses the platform key. Enterprise-gated
+(`featureRequired('byok')`), admin-only, all changes audited. UI: Settings → Encryption.
+
+**KEK providers (all live + verified):**
+- `env-key` — platform `CREDENTIAL_ENCRYPTION_KEY` (dev/fallback).
+- `vault-transit` — HashiCorp Vault Transit; key never leaves Vault (`transit/keys/dam-platform`).
+- `aws-kms` — hand-rolled SigV4 KMS Encrypt/Decrypt (no SDK). Verified vs real KMS.
+- `azure-keyvault` — RSA-OAEP-256 wrapKey/unwrapKey; AAD client-credentials token. The wrapped
+  blob carries the exact key version (`kid::value`) so unwrap survives rotation. **Verified
+  end-to-end against a live Key Vault** (wrap/unwrap/rotate) through the module path.
+- `gcp-kms` — Cloud KMS encrypt/decrypt; SA JWT-bearer token; decrypt auto-detects version. KMS
+  wire format verified vs real Cloud KMS; JWT-bearer assertion validated (RS256).
+
+Shared OAuth token cache (keyed by credential hash). `kek_config` (customer cloud creds) is itself
+encrypted at rest under the platform key before storing.
+
+**Key operations & their layers (the mental model):**
+- *Change key store* / *Rotate key* → re-wrap the **DEK** only (one tiny blob); secrets untouched; instant.
+  `enable()` is switch-safe (unwrap + re-wrap the SAME DEK), so switching providers never orphans data.
+- *Re-encrypt existing secrets* → rewrite every secret under the current DEK (migration of legacy rows).
+- *Return to platform default* (`DELETE /api/settings/encryption`) → re-encrypt all BYOK rows back under
+  the platform key FIRST, then drop the per-tenant config (order matters; nothing orphaned). The plaintext
+  secret values never change through any of these — only the at-rest ciphertext.
+
+Endpoints: `GET/PUT/DELETE /api/settings/encryption` + `/rotate`, `/test`, `/reencrypt`. Unit tests:
+`api/test/tenant-crypto.test.js` (8, env-key path + switch-preserves-DEK). Throwaway-tenant e2e
+confirmed the full enable → switch → return-to-default lifecycle keeps a secret decryptable throughout.

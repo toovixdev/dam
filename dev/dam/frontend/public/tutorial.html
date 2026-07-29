@@ -1025,7 +1025,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
       <p>The key store is pluggable &mdash; the master key can sit in whichever key manager you trust:</p>
       <ul style="margin:6px 0 14px">
         <li><b>HashiCorp Vault</b> (Transit) &mdash; <span style="color:var(--ok);font-weight:600">available now</span>; the key never leaves Vault.</li>
-        <li><b>Azure Key Vault</b>, <b>AWS KMS</b>, <b>GCP Cloud KMS</b> &mdash; <span style="color:var(--high);font-weight:600">on the roadmap</span>; keep the key in your own cloud account (true BYOK).</li>
+        <li><b>AWS KMS</b>, <b>Azure Key Vault</b>, <b>GCP Cloud KMS</b> &mdash; <span style="color:var(--ok);font-weight:600">available now</span>; keep the key in your own cloud account (true BYOK) &mdash; the key material never leaves your KMS.</li>
         <li><b>Platform-managed key</b> &mdash; the simplest option, managed for you (no separate vault required).</li>
       </ul>
 
