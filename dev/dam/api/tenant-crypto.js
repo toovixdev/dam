@@ -136,18 +136,26 @@ function makeTenantCrypto({ pgPool, secrets, vault }) {
     const ref = kekRef || (provider === 'vault-transit'
       ? (managedBy === 'customer' ? tenantVaultKeyName(tenantId) : platformVaultKeyName())
       : null);
-    const dek = crypto.randomBytes(32);
+    // Switching the KEK provider/key must PRESERVE the DEK — otherwise every already-enveloped
+    // secret (encrypted under the old DEK) becomes undecryptable. So on a switch we unwrap the
+    // existing DEK and re-wrap the SAME key under the new provider; only a first-time enable mints
+    // a fresh DEK. (Rotating the DEK itself — new key + re-encrypt all data — is a separate op.)
+    const existing = await getConfig(tenantId);
+    const dek = existing ? await getDEK(tenantId, existing) : crypto.randomBytes(32);
     const wrapped = await providerFor(provider).wrap(ref, kekConfig, dek);
-    await pgPool.query(
-      `INSERT INTO tenant_encryption (tenant_id, kek_provider, kek_ref, kek_config, managed_by, wrapped_dek, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (tenant_id) DO UPDATE SET kek_provider = EXCLUDED.kek_provider, kek_ref = EXCLUDED.kek_ref,
-         kek_config = EXCLUDED.kek_config, managed_by = EXCLUDED.managed_by, wrapped_dek = EXCLUDED.wrapped_dek,
-         dek_created_at = now(), rotated_at = NULL, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-      [tenantId, provider, ref, kekConfig ? JSON.stringify(kekConfig) : null, managedBy, wrapped, updatedBy]);
+    const cfgJson = kekConfig ? JSON.stringify(kekConfig) : null;
+    if (existing) {
+      await pgPool.query(
+        `UPDATE tenant_encryption SET kek_provider=$2, kek_ref=$3, kek_config=$4, managed_by=$5, wrapped_dek=$6, updated_by=$7, updated_at=now() WHERE tenant_id=$1`,
+        [tenantId, provider, ref, cfgJson, managedBy, wrapped, updatedBy]);
+    } else {
+      await pgPool.query(
+        `INSERT INTO tenant_encryption (tenant_id, kek_provider, kek_ref, kek_config, managed_by, wrapped_dek, updated_by) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [tenantId, provider, ref, cfgJson, managedBy, wrapped, updatedBy]);
+    }
     invalidate(tenantId);
     dekCache.set(tenantId, { dek, at: Date.now() });
-    return { provider, managed_by: managedBy, kek_ref: ref };
+    return { provider, managed_by: managedBy, kek_ref: ref, switched: !!existing };
   }
 
   // Rotate the KEK (new key version) and re-wrap the SAME DEK. Existing ciphertext still decrypts

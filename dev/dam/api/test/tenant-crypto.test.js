@@ -34,6 +34,12 @@ function fakePg() {
         const row = store.get(params[0]); if (row) row.wrapped_dek = params[1];
         return { rows: [] };
       }
+      if (/^UPDATE tenant_encryption SET kek_provider/i.test(sql)) {
+        const [tenant_id, kek_provider, kek_ref, kek_config, managed_by, wrapped_dek, updated_by] = params;
+        const row = store.get(tenant_id);
+        if (row) Object.assign(row, { kek_provider, kek_ref, kek_config: kek_config ? JSON.parse(kek_config) : null, managed_by, wrapped_dek, updated_by });
+        return { rows: [] };
+      }
       throw new Error('unexpected SQL in fake pg: ' + sql.slice(0, 40));
     },
   };
@@ -71,6 +77,19 @@ test('rotateKek re-wraps the same DEK — existing ciphertext still decrypts', a
   const stored = JSON.parse(await tc.packCredentialFor('t3', { k: 'v' }));
   await tc.rotateKek('t3');
   assert.deepEqual(await tc.unpackCredentialFor('t3', stored), { k: 'v' }, 'old ciphertext decrypts after KEK rotation');
+});
+
+test('switching provider PRESERVES the DEK — existing enveloped data stays decryptable', async () => {
+  const tc = mk();
+  await tc.enable('sw', { provider: 'env-key' });                       // first enable → DEK minted
+  const stored = JSON.parse(await tc.packCredentialFor('sw', { s: 'keep-me' }));
+  const dekWrap1 = (await tc.getConfig('sw')).wrapped_dek;
+  const res = await tc.enable('sw', { provider: 'env-key', managedBy: 'platform' }); // switch/re-enable
+  assert.equal(res.switched, true);
+  const dekWrap2 = (await tc.getConfig('sw')).wrapped_dek;
+  assert.notEqual(dekWrap1, dekWrap2, 're-wrapped (new IV) so the stored blob differs');
+  // The crucial guarantee: data encrypted before the switch still decrypts (same underlying DEK).
+  assert.deepEqual(await tc.unpackCredentialFor('sw', stored), { s: 'keep-me' });
 });
 
 test('test() reports a healthy config', async () => {
