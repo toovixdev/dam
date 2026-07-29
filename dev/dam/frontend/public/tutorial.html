@@ -242,6 +242,7 @@
     <a href="#s-quarantine">6 · Quarantine</a>
     <a href="#s-compliance">7 · Compliance & reports</a>
     <a href="#s-copilot">8 · The AI Copilot</a>
+    <a href="#encryption">Encryption &amp; BYOK</a>
     <a href="#admin">Admin: users & setup</a>
     <div class="toc-title">Part 4 · Wrap-up</div>
     <a href="#bestpractice">Best practices</a>
@@ -973,6 +974,84 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
       </div>
       <p>An admin first connects an AI account (Anthropic Claude or OpenAI) via the Copilot <span class="ui g">⚙ Configure</span> button. After that, anyone in the workspace can chat.</p>
       <div class="note">The Help tab is scoped on purpose: it helps with TooVix and database-security topics and politely declines unrelated questions.</div>
+    </section>
+
+    <section id="encryption">
+      <span class="part-badge">Part 3 · Security</span>
+      <h2>How your secrets are protected — encryption &amp; BYOK</h2>
+      <p>TooVix stores a few sensitive things for you — the read-only cloud keys it uses to discover
+         managed databases, integration secrets, and so on. These are always <b>encrypted</b> before they
+         touch the database. The only question BYOK answers is: <b>who holds the key that can unlock them?</b></p>
+
+      <h3 style="margin:22px 0 6px">A safe-deposit-box analogy</h3>
+      <p>Your secrets are valuables locked in a box inside a bank (our database). What matters is
+         <b>who keeps the key, and where</b>.</p>
+
+      <div style="display:flex;gap:16px;flex-wrap:wrap;margin:18px 0">
+        <div style="flex:1;min-width:270px;border:1px solid var(--line);border-radius:14px;padding:18px;background:var(--surface);box-shadow:var(--shadow)">
+          <div style="font-weight:800;color:var(--ink)">Default &mdash; the platform holds the key</div>
+          <div style="font-size:13px;color:var(--muted);margin:2px 0 14px">One key opens every customer&rsquo;s data.</div>
+          <div style="border:2px solid var(--indigo);background:var(--soft);border-radius:10px;padding:10px 12px;font-weight:700;color:var(--ink)">🔑 One master key
+            <span style="display:block;font-weight:500;color:var(--muted);font-size:12.5px">kept by the platform &mdash; a file on our server</span></div>
+          <div style="text-align:center;color:var(--indigo);font-size:20px;margin:4px 0">&darr;<span style="font-size:12px;color:var(--muted);margin-left:6px">unlocks</span></div>
+          <div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;color:var(--ink)">🔒 Your secrets, encrypted in the database</div>
+          <div style="font-size:12.5px;color:var(--body);margin-top:12px">The platform can decrypt your data at any time. You trust us with the key.</div>
+        </div>
+        <div style="flex:1;min-width:290px;border:2px solid var(--ok);border-radius:14px;padding:18px;background:#f0fdf4;box-shadow:var(--shadow)">
+          <div style="font-weight:800;color:var(--ink)">BYOK &mdash; you hold the key</div>
+          <div style="font-size:13px;color:var(--muted);margin:2px 0 14px">Your key lives in <b>your</b> vault and never leaves it.</div>
+          <div style="display:flex;gap:10px;align-items:stretch;flex-wrap:wrap">
+            <div style="flex:1;min-width:140px;border:2px solid var(--ok);background:#fff;border-radius:10px;padding:10px 12px">
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ok);font-weight:800">Your vault</div>
+              <div style="font-weight:700;color:var(--ink);margin-top:4px">🔑 Your master key</div>
+              <div style="font-size:12px;color:var(--muted)">never leaves your vault</div>
+            </div>
+            <div style="display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:72px;font-size:12px;color:var(--body);text-align:center">
+              <div>&#9312; &ldquo;please<br>unlock&rdquo; &rarr;</div>
+              <div style="color:var(--ok);margin-top:8px">&larr; &#9313; unlocked</div>
+            </div>
+            <div style="flex:1;min-width:150px;border:1px solid var(--line);background:#fff;border-radius:10px;padding:10px 12px">
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:800">Platform database</div>
+              <div style="color:var(--ink);margin-top:4px">🔐 Locked data-key</div>
+              <div style="color:var(--ink)">🔒 Your secrets</div>
+            </div>
+          </div>
+          <div style="font-size:12.5px;color:var(--body);margin-top:12px">The platform must send its <b>locked</b> data-key to your vault to be opened &mdash; it never holds
+            your master key. <b>Switch your key off and the platform is locked out for good</b> (&ldquo;crypto-shred&rdquo;).</div>
+        </div>
+      </div>
+
+      <div class="note"><b>Why the &ldquo;locked data-key&rdquo; in the middle?</b> Re-locking a whole box of valuables
+        every time you rotate your key would be slow. So each box has its own small key that does the actual locking,
+        and <b>that</b> small key is what your master key protects. Rotating your master key just re-locks the small
+        key &mdash; the valuables are never disturbed.
+        <span style="display:block;margin-top:6px;color:var(--muted);font-size:12.5px">Technical names, if you meet them elsewhere:
+        the small key = <b>DEK</b> (data encryption key); your master key = <b>KEK</b> (key encryption key);
+        &ldquo;wrapped&rdquo; = the small key kept locked.</span></div>
+
+      <h3 style="margin:22px 0 6px">What&rsquo;s stored where</h3>
+      <table style="width:100%;border-collapse:collapse;font-size:14px;margin:8px 0 4px">
+        <thead><tr style="text-align:left;border-bottom:2px solid var(--line)">
+          <th style="padding:8px 10px"></th><th style="padding:8px 10px">Default</th><th style="padding:8px 10px">BYOK</th></tr></thead>
+        <tbody>
+          <tr style="border-bottom:1px solid var(--line)"><td style="padding:8px 10px;font-weight:700;color:var(--ink)">Master key (opens the data)</td>
+            <td style="padding:8px 10px">Platform &mdash; a file on the server</td>
+            <td style="padding:8px 10px"><b>Your vault</b> &mdash; never on our server or in our database</td></tr>
+          <tr style="border-bottom:1px solid var(--line)"><td style="padding:8px 10px;font-weight:700;color:var(--ink)">Locked data-key</td>
+            <td style="padding:8px 10px">Not used (the master key encrypts data directly)</td>
+            <td style="padding:8px 10px">In our database, but <b>useless without your vault</b></td></tr>
+          <tr style="border-bottom:1px solid var(--line)"><td style="padding:8px 10px;font-weight:700;color:var(--ink)">Encrypted secrets</td>
+            <td style="padding:8px 10px">Our database</td><td style="padding:8px 10px">Our database (same place)</td></tr>
+          <tr><td style="padding:8px 10px;font-weight:700;color:var(--ink)">Who can decrypt</td>
+            <td style="padding:8px 10px">The platform, on its own</td>
+            <td style="padding:8px 10px"><b>Only with your vault&rsquo;s permission</b> &mdash; you can revoke it anytime</td></tr>
+        </tbody>
+      </table>
+
+      <div class="note" style="margin-top:14px"><b>What BYOK does not change:</b> login passwords are stored as one-way
+        <b>hashes</b> (never encrypted, nothing to key); just-in-time database credentials are issued live by the vault
+        and <b>never stored</b>; and agent-side database logins live on your own database hosts. BYOK is about the
+        secrets the platform keeps <em>for you</em>.</div>
     </section>
 
     <section id="admin">
