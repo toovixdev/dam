@@ -1386,6 +1386,32 @@ async function runAdminMigration() {
       PRIMARY KEY (tenant_id, principal)
     )`);
 
+    // VA Scanner: database security assessment (CIS-style config/privilege/auth/encryption checks).
+    // Scans are executed read-only by the agent; results land here. See docs/va-scanner-design.md.
+    await client.query(`CREATE TABLE IF NOT EXISTS va_scans (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL, database_id UUID, instance_id UUID,
+      engine VARCHAR(40), benchmark VARCHAR(120), target VARCHAR(200),
+      status VARCHAR(20) NOT NULL DEFAULT 'complete',   -- running | complete | error
+      checks_run INT DEFAULT 0, passed INT DEFAULT 0, failed INT DEFAULT 0, errored INT DEFAULT 0,
+      score INT DEFAULT 0,                              -- severity-weighted % passed
+      trigger VARCHAR(20) DEFAULT 'manual',             -- manual | scheduled
+      error TEXT,
+      started_at TIMESTAMPTZ DEFAULT now(), finished_at TIMESTAMPTZ DEFAULT now()
+    )`);
+    await client.query(`CREATE TABLE IF NOT EXISTS va_findings (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id UUID NOT NULL, database_id UUID, scan_id UUID,
+      engine VARCHAR(40), check_id VARCHAR(80), benchmark VARCHAR(120), section VARCHAR(20),
+      title VARCHAR(240), severity VARCHAR(15),         -- critical|high|medium|low|info
+      status VARCHAR(15),                               -- fail | pass | error
+      detail TEXT, evidence TEXT, remediation TEXT, refs TEXT[],
+      first_seen TIMESTAMPTZ DEFAULT now(), last_seen TIMESTAMPTZ DEFAULT now(),
+      waived BOOLEAN DEFAULT false, waiver_note VARCHAR(400), waived_by VARCHAR(200),
+      UNIQUE (tenant_id, database_id, check_id)         -- upsert → drift (first/last seen) + risk-acceptance
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_va_findings_tenant_db ON va_findings (tenant_id, database_id)`);
+
     const ff = await client.query('SELECT COUNT(*) AS n FROM feature_flags');
     if (parseInt(ff.rows[0].n) === 0) {
       // cols: key, name, description, stage, starter, business, enterprise, core, gated, target, error, sort
@@ -8006,6 +8032,129 @@ app.get('/api/classification/runs', authRequired, async (req, res) => {
        FROM classification_runs WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 50`, [req.user.tenantId]
   );
   res.json(rows);
+});
+
+// ── VA Scanner ────────────────────────────────────────────
+// Database security assessment: the agent runs read-only CIS-style checks and posts results;
+// findings are upserted (drift-tracked) and drive the VA page + Compliance. docs/va-scanner-design.md
+const vaScanRequested = new Set();     // tenantIds with a pending on-demand VA scan
+const vaManualTriggerAt = new Map();   // tenantId → epoch ms of last consumed on-demand trigger
+const VA_SEV_WEIGHT = { critical: 5, high: 3, medium: 2, low: 1, info: 0.5 };
+
+app.post('/api/va/scan', authRequired, featureRequired('va-scanner'), (req, res) => {
+  vaScanRequested.add(req.user.tenantId);
+  res.json({ requested: true });
+});
+// Token-authed: the agent polls this and runs a scan when pending flips true.
+app.get('/api/va/scan-pending', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.query.token || req.headers['x-enroll-token']);
+  if (!tenantId) return res.json({ pending: false });
+  const pending = vaScanRequested.has(tenantId);
+  if (pending) { vaScanRequested.delete(tenantId); vaManualTriggerAt.set(tenantId, Date.now()); }
+  res.json({ pending });
+});
+// Token-gated ingest of a completed VA scan (one instance, N checks). Upserts findings so
+// first_seen/last_seen track drift and a waiver survives re-scans.
+app.post('/api/va/scan-results', async (req, res) => {
+  const { token, host, port, engine, database, benchmark, checks, error } = req.body || {};
+  if (!Array.isArray(checks)) return res.status(400).json({ error: 'checks[] required' });
+  let tenantId = null;
+  if (token) {
+    tenantId = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
+    if (!tenantId && token === AGENT_ENROLL_TOKEN) tenantId = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
+  }
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const eng = engine || 'mysql';
+  try {
+    // Find-or-create the instance + a database row to attribute findings to (mirrors classification).
+    let instanceId = null;
+    if (host) {
+      const f = await pgPool.query(`SELECT id FROM db_instances WHERE tenant_id=$1 AND host=$2 AND port IS NOT DISTINCT FROM $3 AND engine=$4`, [tenantId, host, port || null, eng]);
+      instanceId = f.rows[0]?.id || (await pgPool.query(`INSERT INTO db_instances (tenant_id, name, engine, host, port) VALUES ($1,$2,$3,$4,$5) RETURNING id`, [tenantId, host, eng, host, port || null])).rows[0].id;
+    }
+    const dbName = database || host || 'database';
+    let dbRow = (await pgPool.query(`SELECT id FROM databases WHERE tenant_id=$1 AND name=$2 AND ($3::uuid IS NULL OR instance_id=$3::uuid) LIMIT 1`, [tenantId, dbName, instanceId])).rows[0];
+    if (!dbRow && instanceId) {
+      const inst = (await pgPool.query('SELECT * FROM db_instances WHERE id=$1', [instanceId])).rows[0];
+      dbRow = (await pgPool.query(
+        `INSERT INTO databases (tenant_id, instance_id, name, engine, version, host, port, deployment_type, cloud_provider, region, environment, monitoring_status, risk_score)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'monitored',0) RETURNING id`,
+        [tenantId, instanceId, dbName, inst.engine, inst.version, inst.host, inst.port, inst.deployment_type, inst.cloud_provider, inst.region, inst.environment])).rows[0];
+    }
+    if (!dbRow) return res.status(400).json({ error: 'could not resolve a database to attribute findings' });
+    const dbId = dbRow.id;
+
+    // Severity-weighted score: % of check-weight that passed (errors excluded from the denominator).
+    let passed = 0, failed = 0, errored = 0, totalW = 0, failW = 0;
+    for (const c of checks) {
+      const w = VA_SEV_WEIGHT[c.severity] || 1;
+      if (c.status === 'pass') { passed++; totalW += w; }
+      else if (c.status === 'fail') { failed++; totalW += w; failW += w; }
+      else errored++;
+    }
+    const score = totalW > 0 ? Math.round(100 * (1 - failW / totalW)) : (errored && !passed ? 0 : 100);
+    const trig = vaManualTriggerAt.get(tenantId);
+    const trigger = trig && (Date.now() - trig) < MANUAL_WINDOW_MS ? 'manual' : 'scheduled';
+    const scan = (await pgPool.query(
+      `INSERT INTO va_scans (tenant_id, database_id, instance_id, engine, benchmark, target, status, checks_run, passed, failed, errored, score, trigger, error, finished_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now()) RETURNING id`,
+      [tenantId, dbId, instanceId, eng, benchmark || null, host || dbName, error ? 'error' : 'complete', checks.length, passed, failed, errored, score, trigger, error || null])).rows[0];
+
+    for (const c of checks) {
+      await pgPool.query(
+        `INSERT INTO va_findings (tenant_id, database_id, scan_id, engine, check_id, benchmark, section, title, severity, status, detail, evidence, remediation, refs, first_seen, last_seen)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now(), now())
+         ON CONFLICT (tenant_id, database_id, check_id) DO UPDATE SET
+           scan_id=EXCLUDED.scan_id, benchmark=EXCLUDED.benchmark, section=EXCLUDED.section, title=EXCLUDED.title,
+           severity=EXCLUDED.severity, status=EXCLUDED.status, detail=EXCLUDED.detail, evidence=EXCLUDED.evidence,
+           remediation=EXCLUDED.remediation, refs=EXCLUDED.refs, last_seen=now()`,
+        [tenantId, dbId, scan.id, eng, c.check_id, benchmark || null, c.section || null, (c.title || c.check_id).slice(0, 240), c.severity || 'medium', c.status || 'error', c.detail || null, (c.evidence || '').slice(0, 4000) || null, c.remediation || null, Array.isArray(c.refs) ? c.refs : []]);
+    }
+    vaManualTriggerAt.delete(tenantId);
+    console.log(`[VA] scan ingested: ${eng} ${host || dbName} — ${passed} pass / ${failed} fail / ${errored} err (score ${score})`);
+    res.json({ scan_id: scan.id, score, passed, failed, errored });
+  } catch (e) { console.error('[VA] ingest failed:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// Posture KPIs for the VA page.
+app.get('/api/va/summary', authRequired, featureRequired('va-scanner'), async (req, res) => {
+  const T = req.user.tenantId;
+  const s = (await pgPool.query(
+    `SELECT COUNT(*) FILTER (WHERE status='fail' AND NOT waived) open,
+            COUNT(*) FILTER (WHERE status='fail' AND severity='critical' AND NOT waived) crit,
+            COUNT(*) FILTER (WHERE status='fail' AND severity='high' AND NOT waived) high,
+            COUNT(*) FILTER (WHERE waived) waived,
+            COUNT(DISTINCT database_id) databases
+       FROM va_findings WHERE tenant_id=$1`, [T])).rows[0];
+  const last = (await pgPool.query(`SELECT MAX(finished_at) last, ROUND(AVG(score)) score FROM va_scans WHERE tenant_id=$1 AND status='complete'`, [T])).rows[0];
+  res.json({ open: +s.open, critical: +s.crit, high: +s.high, waived: +s.waived, databases: +s.databases, last_scan: last.last, score: last.score != null ? +last.score : null });
+});
+// All findings for the VA page (open first, then by severity).
+app.get('/api/va/findings', authRequired, featureRequired('va-scanner'), async (req, res) => {
+  const rows = (await pgPool.query(
+    `SELECT f.id, f.database_id, d.name database_name, f.engine, f.check_id, f.benchmark, f.section, f.title, f.severity, f.status,
+            f.detail, f.evidence, f.remediation, f.refs, f.first_seen, f.last_seen, f.waived, f.waiver_note
+       FROM va_findings f LEFT JOIN databases d ON d.id=f.database_id
+      WHERE f.tenant_id=$1
+      ORDER BY (f.status='fail' AND NOT f.waived) DESC,
+               CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, f.check_id`, [req.user.tenantId])).rows;
+  res.json(rows);
+});
+// Recent scan runs.
+app.get('/api/va/scans', authRequired, featureRequired('va-scanner'), async (req, res) => {
+  const rows = (await pgPool.query(
+    `SELECT s.id, d.name database_name, s.engine, s.benchmark, s.target, s.status, s.checks_run, s.passed, s.failed, s.errored, s.score, s.trigger, s.error, s.finished_at
+       FROM va_scans s LEFT JOIN databases d ON d.id=s.database_id WHERE s.tenant_id=$1 ORDER BY s.finished_at DESC LIMIT 50`, [req.user.tenantId])).rows;
+  res.json(rows);
+});
+// Waive / un-waive a finding (risk acceptance) — admin only, audited.
+app.post('/api/va/findings/:id/waive', authRequired, featureRequired('va-scanner'), adminOnly, async (req, res) => {
+  const { waived = true, note } = req.body || {};
+  const r = await pgPool.query(`UPDATE va_findings SET waived=$3, waiver_note=$4, waived_by=$5 WHERE id=$1 AND tenant_id=$2 RETURNING id`,
+    [req.params.id, req.user.tenantId, !!waived, note || null, req.user.email]);
+  if (!r.rows.length) return res.status(404).json({ error: 'finding not found' });
+  await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: waived ? 'va.finding.waive' : 'va.finding.unwaive', resourceType: 'va_finding', resourceId: req.params.id, details: { note: note || null } });
+  res.json({ ok: true });
 });
 
 // ── Compliance Center ─────────────────────────────────────

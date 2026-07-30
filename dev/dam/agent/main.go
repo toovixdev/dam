@@ -55,6 +55,7 @@ type Config struct {
 	// Classification (schema scan) — orthogonal to capture: the agent logs into the DB
 	// as a least-privilege reader and classifies columns by name (PII/PCI).
 	Classify     bool
+	VaScan       bool // VA Scanner: run read-only CIS-style security checks (mysql|postgresql)
 	DBUser       string
 	DBPass       string
 	DBName       string // postgres: the database to classify (information_schema is per-DB in PG)
@@ -136,6 +137,7 @@ func loadConfig() Config {
 		AgentHost: "dam-agent-" + env("MODE", "proxy") + "-" + env("TARGET_HOST", "client-mysql") + "-" + env("TARGET_PORT", "3306"),
 		Version:   "0.1.0",
 		Classify:  env("CLASSIFY", "false") == "true",
+		VaScan:    env("VA_SCAN", "false") == "true",
 		DBUser:    env("DB_USER", ""),
 		DBPass:    env("DB_PASSWORD", ""),
 		DBName:    env("DB_NAME", ""),
@@ -189,6 +191,14 @@ func main() {
 		go scanTriggerLoop(cfg) // on-demand — the "Run Scan" button
 	} else if cfg.Classify {
 		log.Printf("classification enabled but skipped (need DB_USER and engine mysql|postgresql|mssql|oracle|mongodb; postgres/mssql/oracle/mongodb also need DB_NAME)")
+	}
+
+	// VA Scanner runs alongside any capture mode (read-only security assessment over the DB login).
+	if cfg.VaScan && cfg.DBUser != "" && (cfg.Engine == "mysql" || cfg.Engine == "postgresql") {
+		go vaScanLoop(cfg)        // periodic (VA_SCAN_INTERVAL_MIN)
+		go vaScanTriggerLoop(cfg) // on-demand — the VA page's "Run scan" button
+	} else if cfg.VaScan {
+		log.Printf("VA scan enabled but skipped (need DB_USER and engine mysql|postgresql)")
 	}
 
 	switch cfg.Mode {
