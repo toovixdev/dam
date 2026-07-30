@@ -194,11 +194,12 @@ func main() {
 	}
 
 	// VA Scanner runs alongside any capture mode (read-only security assessment over the DB login).
-	if cfg.VaScan && cfg.DBUser != "" && (cfg.Engine == "mysql" || cfg.Engine == "postgresql") {
+	vaScannable := cfg.Engine == "mysql" || cfg.Engine == "postgresql" || cfg.Engine == "mssql" || cfg.Engine == "oracle"
+	if cfg.VaScan && cfg.DBUser != "" && vaScannable {
 		go vaScanLoop(cfg)        // periodic (VA_SCAN_INTERVAL_MIN)
 		go vaScanTriggerLoop(cfg) // on-demand — the VA page's "Run scan" button
 	} else if cfg.VaScan {
-		log.Printf("VA scan enabled but skipped (need DB_USER and engine mysql|postgresql)")
+		log.Printf("VA scan enabled but skipped (need DB_USER and engine mysql|postgresql|mssql|oracle)")
 	}
 
 	switch cfg.Mode {

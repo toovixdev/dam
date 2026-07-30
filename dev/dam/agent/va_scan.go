@@ -179,6 +179,19 @@ func vaConnect(cfg Config) (*sql.DB, string, error) {
 		}
 		db, err := sql.Open("postgres", pgDSN(cfg, dbname))
 		return db, "CIS PostgreSQL", err
+	case "mssql":
+		dbname := "master" // server-level checks (sys.configurations, sys.sql_logins) work from any DB
+		for _, p := range strings.Split(cfg.DBName, ",") {
+			if p = strings.TrimSpace(p); p != "" && p != "*" {
+				dbname = p
+				break
+			}
+		}
+		db, err := sql.Open("sqlserver", mssqlDSN(cfg, dbname))
+		return db, "CIS SQL Server", err
+	case "oracle":
+		db, err := sql.Open("oracle", oracleDSN(cfg))
+		return db, "CIS Oracle", err
 	}
 	return nil, "", fmt.Errorf("VA scan unsupported for engine %q", cfg.Engine)
 }
@@ -213,6 +226,10 @@ func runVaScan(cfg Config) error {
 		checks = mysqlVaChecks
 	case "postgresql":
 		checks = postgresVaChecks
+	case "mssql":
+		checks = mssqlVaChecks
+	case "oracle":
+		checks = oracleVaChecks
 	}
 	findings := make([]vaFinding, 0, len(checks))
 	var pass, fail, errc int
