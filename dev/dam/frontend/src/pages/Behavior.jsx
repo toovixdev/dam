@@ -34,32 +34,51 @@ function Factor({ n, label, tone }) {
 }
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']; // ClickHouse toDayOfWeek: 1=Mon … 7=Sun
+const HOUR_TICK = { 0: '12a', 6: '6a', 12: '12p', 18: '6p' };    // readable hour markers across the top
+const cellBg = (a) => `rgba(99,102,241,${a})`;
 
-// Learned-activity heatmap: 7 days × 24 hours, cell intensity = typical query volume.
-// This is the baseline an entity is scored against — off-cell activity is "unusual hours".
+// Learned-activity heatmap: 7 days × 24 hours, cell intensity = this entity's typical query
+// volume in that hour. It's the baseline the entity is scored against — activity in the pale
+// (normally-idle) cells is exactly what "off-normal-hours" flags. Rendered with axis labels,
+// a legend, and a plain-language caption so a first-time viewer can read it at a glance.
 function Heatmap({ cells }) {
   const map = {}; let max = 0;
   (cells || []).forEach((c) => { const k = `${c.day_of_week}-${c.hour_of_day}`; map[k] = +c.q || 0; if (map[k] > max) max = map[k]; });
-  if (!max) return <div className="muted" style={{ fontSize: 12.5, padding: '10px 0' }}>No learned baseline yet for this entity — it needs a few days of activity.</div>;
+  if (!max) return <div className="muted" style={{ fontSize: 12.5, padding: '10px 0' }}>No learned baseline yet for this entity — it needs a few days of activity before a normal pattern appears.</div>;
+  const HOURS = Array.from({ length: 24 }, (_, h) => h);
   return (
     <div style={{ overflowX: 'auto' }}>
+      <div className="muted" style={{ fontSize: 10.5, letterSpacing: '.04em', marginBottom: 3 }}>HOUR OF DAY →</div>
       <table style={{ borderCollapse: 'separate', borderSpacing: 2 }}>
         <thead>
-          <tr><th></th>{Array.from({ length: 24 }, (_, h) => <th key={h} style={{ fontSize: 9, color: 'var(--muted)', fontWeight: 500, width: 14 }}>{h % 6 === 0 ? h : ''}</th>)}</tr>
+          <tr><th style={{ width: 30 }}></th>{HOURS.map((h) => <th key={h} style={{ fontSize: 9, color: 'var(--muted)', fontWeight: 500, width: 14, textAlign: 'left', whiteSpace: 'nowrap' }}>{HOUR_TICK[h] || ''}</th>)}</tr>
         </thead>
         <tbody>
           {[1, 2, 3, 4, 5, 6, 7].map((d) => (
             <tr key={d}>
-              <td style={{ fontSize: 10.5, color: 'var(--muted)', paddingRight: 6, textAlign: 'right' }}>{DAYS[d - 1]}</td>
-              {Array.from({ length: 24 }, (_, h) => {
+              <td style={{ fontSize: 10.5, color: d >= 6 ? 'var(--muted)' : 'var(--ink)', paddingRight: 6, textAlign: 'right' }}>{DAYS[d - 1]}</td>
+              {HOURS.map((h) => {
                 const v = map[`${d}-${h}`] || 0; const a = v ? 0.18 + 0.82 * (v / max) : 0;
-                return <td key={h} title={v ? `${DAYS[d - 1]} ${h}:00 — ~${v} queries` : `${DAYS[d - 1]} ${h}:00 — no learned activity`}
-                  style={{ width: 14, height: 14, borderRadius: 3, background: v ? `rgba(99,102,241,${a})` : 'var(--surface-2, #f0f0f4)' }} />;
+                return <td key={h} title={v ? `${DAYS[d - 1]} ${h}:00 — normally active (~${v} queries)` : `${DAYS[d - 1]} ${h}:00 — normally idle · access here is flagged as off-normal-hours`}
+                  style={{ width: 14, height: 14, borderRadius: 3, background: v ? cellBg(a) : 'var(--surface-2, #f0f0f4)' }} />;
               })}
             </tr>
           ))}
         </tbody>
       </table>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 10, flexWrap: 'wrap', fontSize: 11, color: 'var(--muted)' }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{ width: 12, height: 12, borderRadius: 3, background: 'var(--surface-2, #f0f0f4)' }} /> normally idle
+        </span>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          less
+          {[0.25, 0.5, 0.75, 1].map((a, i) => <span key={i} style={{ width: 12, height: 12, borderRadius: 3, background: cellBg(0.18 + 0.82 * a) }} />)}
+          more typical activity
+        </span>
+      </div>
+      <div className="muted" style={{ fontSize: 11.5, marginTop: 8, lineHeight: 1.5 }}>
+        Darker = when this entity is <b>normally active</b>. Access in the pale (idle) cells is what UEBA flags as <b>off-normal-hours</b>.
+      </div>
     </div>
   );
 }
@@ -97,7 +116,8 @@ function EntityDetail({ principal, onClose }) {
                 <Factor n={f.alert_pressure} label="alert pressure" tone="bad" />
                 {!f.off_hours && !f.volume_spikes && !f.new_tables && !f.sensitive_hits && !f.alert_pressure && <span className="muted" style={{ fontSize: 12.5 }}>No behavioural deviation — activity matches this entity's baseline.</span>}
               </div>
-              <div className="muted" style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 6 }}>Learned activity baseline</div>
+              <div className="muted" style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '.05em', marginBottom: 2 }}>Learned activity baseline</div>
+              <div className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>The hours this entity is normally active — what its behavior is scored against.</div>
               <Heatmap cells={d.heatmap} />
             </div>
             <div>
