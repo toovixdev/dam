@@ -2471,3 +2471,19 @@ vulnerability assessment (CIS-style DB security posture). Design: docs/va-scanne
 
 Not yet done (Phase 2/3): SQL Server/Oracle/Mongo check libraries, scheduled scans + trend/drift UI,
 version-EOL/CVE currency, findings in the signed Evidence-Pack PDF.
+
+### VA Scanner — SQL Server + Oracle check libraries (2026-07-30)
+
+Extended the VA scanner beyond MySQL/PostgreSQL:
+- **SQL Server** (~14 checks): sys.configurations hardening (xp_cmdshell, Ole Automation, Ad Hoc
+  Distributed Queries, clr, cross-db ownership chaining, scan-for-startup-procs, remote access/admin,
+  default trace), sa disabled, empty-password logins (PWDCOMPARE), CHECK_POLICY/EXPIRATION, sysadmin
+  membership sprawl.
+- **Oracle** (~14 checks): v$parameter (remote_os_authent, sec_case_sensitive_logon, sql92_security,
+  audit_trail, remote_listener, sec_max_failed_login_attempts, resource_limit), dba_users_with_defpwd,
+  DBA-role grants, PUBLIC EXECUTE on UTL_*/DBMS_ADVISOR, customer-held %ANY% sys privs (excludes
+  oracle_maintained), DEFAULT-profile password limits.
+- `vaConnect`/`runVaScan` handle mssql (sqlserver DSN) + oracle (go-ora DSN), reusing the classification
+  DSN builders; agent VA gating now mysql|postgresql|mssql|oracle.
+- Every query validated against local SQL Server 2022 + Oracle-free 23c containers (syntax + columns
+  correct; found real gaps e.g. UTL_TCP/UTL_HTTP executable by PUBLIC, non-system DBA grants).
