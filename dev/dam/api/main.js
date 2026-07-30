@@ -1395,7 +1395,7 @@ async function runAdminMigration() {
         ('alert-rules','Alert Rules & Policies','Custom rules, threshold, pattern, correlation','ga',    true,  true,  true,  true,  false, NULL, NULL, 2),
         ('va-scanner','VA Scanner','Roadmap — CIS-benchmark DB config & privilege assessment','roadmap',  true,  true,  true,  false, false, NULL, NULL, 3),
         ('compliance-packs','Compliance Packs','PCI-DSS, GDPR, HIPAA, SOX, DPDPA, RBI','ga',             true,  true,  true,  false, true,  NULL, NULL, 4),
-        ('ueba','Behavioral Analytics (UEBA)','Behavioral baselines + anomaly rules · risk scoring in progress','beta', false, true,  true,  false, false, '100% by Q3 2026', '0.02%', 5),
+        ('ueba','Behavioral Analytics (UEBA)','Per-entity behavioral risk from learned baselines — off-hours, volume, first-access anomalies','ga', false, true,  true,  false, false, NULL, NULL, 5),
         ('dynamic-masking','Dynamic Masking','Query-time masking by role, format-preserving','ga',       false, true,  true,  false, false, NULL, NULL, 6),
         ('static-masking','Static Masking','Roadmap — masked non-prod clones with referential integrity','roadmap', false, true,  true,  false, false, NULL, NULL, 7),
         ('inline-proxy','Inline Blocking / Proxy','DAM proxy gateway, real-time block, virtual patch','ga', false, false, true, false, false, NULL, NULL, 8),
@@ -1416,6 +1416,9 @@ async function runAdminMigration() {
     await client.query(
       `UPDATE feature_flags SET stage='ga', description=$1 WHERE key='byok' AND stage <> 'ga'`,
       ['Customer-managed encryption key — HashiCorp Vault, AWS KMS, Azure Key Vault, GCP Cloud KMS']);
+    await client.query(
+      `UPDATE feature_flags SET stage='ga', description=$1, rollout_target=NULL, rollout_error=NULL WHERE key='ueba' AND stage <> 'ga'`,
+      ['Per-entity behavioral risk from learned baselines — off-hours, volume, first-access anomalies']);
 
     // Resource quotas: plan-tier defaults + per-tenant overrides (isolated admin tables).
     // NULL limit = unlimited / custom (per-contract). storage in GB.
@@ -11099,6 +11102,80 @@ async function recomputePrincipalRisk() {
 }
 setInterval(recomputePrincipalRisk, 60000);
 setTimeout(recomputePrincipalRisk, 15000);
+
+// ── Baseline-driven behavioral detectors ─────────────────────────────────────
+// Raise alerts for activity that deviates from a principal's LEARNED baseline —
+// the "anomaly rules" made truly behavioral. Deliberately conservative so it can't
+// spam live tenants: only fires for already-learned principals, and only on strong
+// signals — off-normal-hours access to SENSITIVE objects, or a result set >3× the
+// principal's learned p95. Deduped (one open alert per rule+principal+object / 24h).
+let behavioralWatermark = null;
+function behavioralDetectSql(tenantId, evDb, lo, hi) {
+  const T = chEsc(tenantId);
+  const SENS = `[${SENSITIVE_TAGS.map((s) => `'${s}'`).join(',')}]`;
+  return `
+    WITH bl AS (
+      SELECT tenant_id,database_name,principal,hour_of_day,day_of_week, argMax(p95_rows,updated_at) AS p95_rows
+      FROM dam_analytics.baselines WHERE tenant_id='${T}' GROUP BY tenant_id,database_name,principal,hour_of_day,day_of_week
+    ), learned AS (SELECT principal, count() AS slots FROM dam_analytics.baselines WHERE tenant_id='${T}' GROUP BY principal)
+    SELECT e.principal AS principal, e.database_name AS database_name, e.schema_name AS schema_name, e.table_name AS table_name,
+           e.operation AS operation, e.row_count AS row_count, e.sql_text AS sql_text, e.client_ip AS client_ip, e.source_host AS source_host,
+           toString(e.timestamp) AS ts, e.tags AS tags,
+           if(b.day_of_week = 0 AND hasAny(e.tags,${SENS}), 'off_hours_sensitive', if(b.p95_rows > 0 AND e.row_count > 3*b.p95_rows, 'volume_spike', '')) AS anomaly
+    FROM ${evDb}.events e
+    LEFT JOIN bl b ON b.tenant_id=e.tenant_id AND b.database_name=e.database_name AND b.principal=e.principal AND b.hour_of_day=toHour(e.timestamp) AND b.day_of_week=toDayOfWeek(e.timestamp)
+    LEFT JOIN learned l ON l.principal=e.principal
+    WHERE e.tenant_id='${T}' AND e.timestamp > '${chEsc(lo)}' AND e.timestamp <= '${chEsc(hi)}' AND l.slots > 0 AND e.principal != ''
+      AND ( (b.day_of_week = 0 AND hasAny(e.tags,${SENS})) OR (b.p95_rows > 0 AND e.row_count > 3*b.p95_rows) )
+    ORDER BY e.timestamp LIMIT 50`;
+}
+const BEHAVIORAL_RULES = {
+  off_hours_sensitive: { rule: 'Behavioral: off-hours access to sensitive data', severity: 'high', why: 'Access to sensitive objects outside the principal’s learned activity window.' },
+  volume_spike: { rule: 'Behavioral: volume anomaly vs learned baseline', severity: 'medium', why: 'Result set far exceeds the principal’s learned typical volume for this time.' },
+};
+async function runBehavioralDetectors() {
+  try {
+    const tenants = (await pgPool.query('SELECT id FROM tenants')).rows;
+    if (!tenants.length) return;
+    const hi = (await chQuery(`SELECT toString(now() - INTERVAL 90 SECOND)`, 'TabSeparated')).trim();
+    if (!behavioralWatermark) behavioralWatermark = (await chQuery(`SELECT toString(now() - INTERVAL 12 MINUTE)`, 'TabSeparated')).trim();
+    const lo = behavioralWatermark;
+    if (!hi || hi <= lo) return;
+    for (const t of tenants) {
+      const tenantId = t.id;
+      const evDb = await eventsDbFor(tenantId);
+      let evs;
+      try { evs = await chQuery(behavioralDetectSql(tenantId, evDb, lo, hi)); } catch (e) { continue; }
+      if (!Array.isArray(evs) || !evs.length) continue;
+      const dbByName = {}, dbByHost = {};
+      (await pgPool.query('SELECT d.id, d.name, i.host FROM databases d LEFT JOIN db_instances i ON d.instance_id = i.id WHERE d.tenant_id = $1', [tenantId]))
+        .rows.forEach((d) => { dbByName[d.name] = d.id; if (d.host && !dbByHost[d.host]) dbByHost[d.host] = d.id; });
+      // Dedup set: behavioral alerts already open for this tenant in the last 24h.
+      const openKeys = new Set((await pgPool.query(
+        `SELECT rule, principal, object_name FROM alerts WHERE tenant_id=$1 AND rule LIKE 'Behavioral:%' AND created_at > now() - INTERVAL '24 hours'`, [tenantId])).rows
+        .map((r) => `${r.rule}|${r.principal}|${r.object_name}`));
+      for (const ev of evs) {
+        const meta = BEHAVIORAL_RULES[ev.anomaly]; if (!meta) continue;
+        const object = ev.schema_name ? `${ev.schema_name}.${ev.table_name}` : (ev.table_name || ev.database_name || '');
+        const key = `${meta.rule}|${ev.principal}|${object}`;
+        if (openKeys.has(key)) continue; // already alerted recently
+        openKeys.add(key);
+        const score = Math.min(99, sevBaseScore(meta.severity) + 20);
+        const tags = Array.isArray(ev.tags) ? ev.tags : [];
+        const ins = await pgPool.query(
+          `INSERT INTO alerts (tenant_id, database_id, severity, principal, summary, raw_sql, anomaly_score, status, rule, action, subtype, object_name, rows_affected, client_ip, sensitivity_tags, why, rule_condition)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,'open',$8,$9,$10,$11,$12,$13,$14,$15,$16) RETURNING id, created_at`,
+          [tenantId, dbByName[ev.database_name] || dbByHost[ev.source_host] || null, meta.severity, ev.principal, meta.rule, ev.sql_text, score,
+           meta.rule, ev.operation, ev.operation, object, String(ev.row_count || 0), (ev.client_ip || '').slice(0, 255), tags, meta.why, JSON.stringify({ baseline_deviation: ev.anomaly })]);
+        try { broadcast({ type: 'alert', alert: { id: ins.rows[0].id, severity: meta.severity, principal: ev.principal, database: ev.database_name, summary: meta.rule, anomaly_score: score, timestamp: ins.rows[0].created_at } }); } catch (e) { /* WS optional */ }
+        dispatchAlert({ tenantId, severity: meta.severity, principal: ev.principal, summary: meta.rule, database: ev.database_name, raw_sql: ev.sql_text, ts: ins.rows[0].created_at });
+      }
+    }
+    behavioralWatermark = hi;
+  } catch (e) { console.log('[Behavioral] detectors failed:', e.message); }
+}
+setInterval(runBehavioralDetectors, 30000);
+setTimeout(runBehavioralDetectors, 25000);
 
 // ── UEBA / Behavioral Analytics API (entity risk) ────────────────────────────
 // Top-line KPIs for the Behavioral Analytics page.

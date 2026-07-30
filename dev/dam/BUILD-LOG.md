@@ -2416,3 +2416,28 @@ encrypted at rest under the platform key before storing.
 Endpoints: `GET/PUT/DELETE /api/settings/encryption` + `/rotate`, `/test`, `/reencrypt`. Unit tests:
 `api/test/tenant-crypto.test.js` (8, env-key path + switch-preserves-DEK). Throwaway-tenant e2e
 confirmed the full enable → switch → return-to-default lifecycle keeps a secret decryptable throughout.
+
+## UEBA graduated to GA — real per-entity behavioral risk (2026-07-30)
+
+UEBA was a beta flag: baselines were LEARNED (`buildBaselines` → `dam_analytics.baselines`,
+hour×day × volume × common-tables) and a detection engine fired rules, but the learned baselines
+were never CONSUMED for scoring — `unusual_access_time` compiled to configured business-hours, and
+there was no per-*entity* (principal) risk score. This pass makes the risk scoring real.
+
+- **Entity risk engine** (`recomputePrincipalRisk`, 60s → `principal_risk` table): scores each
+  principal's last-24h activity against their OWN learned baseline — off-normal-hours, volume spikes
+  over their p95, first-time table access, sensitive-data reads + open-alert pressure. Cold-start
+  safe: deviation signals only count once a baseline exists, so a new principal never over-scores.
+  Cross-DB ClickHouse query (events plane LEFT JOIN dam_analytics.baselines) with a subquery to
+  avoid nested aggregates; validated live.
+- **`buildBaselines` is now plane-aware** — iterates tenants and reads `eventsDbFor(tenant)`, so paid
+  tenants on dedicated ClickHouse planes get baselines (was shared-plane only → coverage 2→5 tenants).
+- **Baseline-driven detectors** (`runBehavioralDetectors`, 30s, watermarked): raise deduped alerts for
+  off-normal-hours access to SENSITIVE objects, or result sets >3× the learned p95. Deliberately
+  conservative (learned principals only, strong signals, 1 open alert per rule+principal+object/24h) —
+  verified it returns 0 on current live data, so no false-positive spam.
+- **Behavioral Analytics page** (`/behavior`, Threats nav, role + `ueba` entitlement gated): KPI band
+  (entities, high/elevated, anomalies, baselines), entity risk ranking with behavioral-signal chips,
+  and a drill-in (score breakdown, learned hour×day heatmap, recent alerts, recent activity).
+  API: `/api/behavior/summary|entities|entities/:principal`.
+- **Flag flipped beta→GA** (seed + idempotent boot UPDATE, same pattern as byok).
