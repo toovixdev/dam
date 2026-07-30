@@ -223,6 +223,7 @@
     <a href="#capture">Capturing activity</a>
     <a href="#capture-modes">Capture modes in depth</a>
     <a href="#policies">Policies & detection</a>
+    <a href="#ueba">Behavioral analytics (UEBA)</a>
     <a href="#alerts-c">Alerts & severity</a>
     <a href="#respond">Responding to threats</a>
     <a href="#classify">Sensitive data & compliance</a>
@@ -410,6 +411,44 @@
         <tr><td><b>Disabled</b></td><td>The rule never runs.</td><td>Not relevant to you.</td></tr>
       </table>
       <div class="tip"><b>Best practice:</b> put a brand-new rule in <b>Monitor</b> first. Watch it for a few days. If it only fires on genuinely bad things, promote it to <b>Enabled</b>. This is how you avoid "alert fatigue."</div>
+    </section>
+
+    <section id="ueba">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Behavioral analytics — catching what rules can't (UEBA)</h2>
+      <p>Policies are powerful, but they only catch threats you can <em>describe in advance</em>. Many real attacks — a stolen login, a rogue insider, a service account gone wrong — look like perfectly ordinary queries. Nothing about a single <code>SELECT</code> screams "breach." What gives it away is that it's <b>unusual for that person</b>.</p>
+      <p><b>UEBA</b> (User &amp; Entity Behavior Analytics) is the part of DAM that <b>learns what "normal" looks like for every user and service account</b>, then flags activity that deviates from it — <em>without you writing a rule</em>.</p>
+
+      <h4>Step 1 — It learns a baseline for each "entity"</h4>
+      <p>An <b>entity</b> is anyone (or anything) that touches your databases — a human like <code>dba_mueller</code>, or a service account like <code>bi_reader</code>. For each one, DAM quietly learns, from a few days of ordinary activity:</p>
+      <ul>
+        <li><b>When</b> they're usually active — the hours and days they normally work.</li>
+        <li><b>How much</b> they usually read — their typical and peak result sizes.</li>
+        <li><b>What</b> they usually touch — the tables that are normal for them.</li>
+      </ul>
+      <p>That learned picture is their <b>baseline</b>. On the Behavioral Analytics page you can see it as a heatmap of an entity's normal hours — darker cells are busier.</p>
+
+      <h4>Step 2 — It scores deviations from that baseline</h4>
+      <p>Once an entity has a baseline, DAM watches for behavior that doesn't fit it. Three signals matter most:</p>
+      <div class="grid">
+        <div class="card"><div class="ic">🌙</div><h4>Off-normal-hours</h4><p>Activity outside the hours this entity normally works — especially against <b>sensitive</b> data. <em>e.g. an analyst who only ever works 9–5 pulls customer PII at 3 a.m.</em></p></div>
+        <div class="card"><div class="ic">📈</div><h4>Volume anomaly</h4><p>A result set far larger than this entity's own norm. <em>e.g. a service account that averages ~100 rows suddenly returns 60,000.</em></p></div>
+        <div class="card"><div class="ic">🆕</div><h4>First-time access</h4><p>Touching a table the entity has <b>never</b> accessed before. <em>e.g. a payroll app account suddenly reading a salaries table it has never queried.</em></p></div>
+      </div>
+      <p>Each entity gets a rolling <b>risk score</b> from 0 to 100 that blends these signals (plus any open alerts against them). So instead of only asking <em>"which database is risky?"</em>, you can now ask <b>"which <em>user</em> is behaving strangely right now?"</b></p>
+
+      <h4>Rules vs UEBA — you want both</h4>
+      <table>
+        <tr><th></th><th>Policies (rules)</th><th>UEBA (behavior)</th></tr>
+        <tr><td><b>Catches</b></td><td>Known-bad patterns you can describe</td><td>Unusual behavior you didn't predict</td></tr>
+        <tr><td><b>You define</b></td><td>The condition (e.g. "&gt; 10,000 PII rows")</td><td>Nothing — it learns the normal itself</td></tr>
+        <tr><td><b>Best at</b></td><td>Clear policy &amp; compliance lines</td><td>Stolen credentials, insider drift, misused service accounts</td></tr>
+      </table>
+      <div class="note"><b>Worked example.</b> <code>bi_reader</code> normally runs a few hundred report queries on weekday afternoons. One Saturday at 02:14 it opens a table it has never touched and exports 48,000 rows. No single query breaks a rule — but it's off-hours, a volume spike, <em>and</em> first-time access all at once. UEBA scores <code>bi_reader</code> as high-risk and raises a <b>behavioral alert</b> — before the data is gone.</div>
+
+      <h4>Where to see it</h4>
+      <p>Open <b>Behavioral Analytics</b> in the sidebar (under <em>Threats</em>). Your entities are <b>ranked by risk</b>, each with chips showing <em>why</em> (off-hours, volume, new tables). Click any entity to drill in: its learned-hours heatmap, the signals driving its score, and its recent alerts and activity.</p>
+      <div class="tip"><b>Give it a few days.</b> UEBA needs to watch normal activity before it can spot the abnormal — a brand-new entity has no baseline yet, so it is not over-flagged. Baselines also <b>adapt over time</b>, so as legitimate work patterns change, "normal" moves with them.</div>
     </section>
 
     <section id="alerts-c">
