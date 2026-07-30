@@ -2441,3 +2441,33 @@ there was no per-*entity* (principal) risk score. This pass makes the risk scori
   and a drill-in (score breakdown, learned hour×day heatmap, recent alerts, recent activity).
   API: `/api/behavior/summary|entities|entities/:principal`.
 - **Flag flipped beta→GA** (seed + idempotent boot UPDATE, same pattern as byok).
+
+## VA Scanner — database security assessment, Phase 1 MVP (2026-07-30)
+
+Turned the `va-scanner` marketing flag + placeholder report into a real, agent-executed
+vulnerability assessment (CIS-style DB security posture). Design: docs/va-scanner-design.md.
+
+- **Agent check engine** (`agent/va_scan.go` + `agent/va_checks.go`): checks are DATA (vaCheck
+  records) — a read-only query + an `expect` (equals/contains/rowsZero/…). The agent logs in as the
+  DB reader, runs each check, evaluates, and POSTs findings; checks needing catalog access the reader
+  lacks degrade to status `error` (never fail the scan). Library: ~18 MySQL + ~15 PostgreSQL checks
+  (local_infile, require_secure_transport/ssl, password validation, empty/anonymous/wildcard-host
+  accounts, SUPER/FILE/GRANT sprawl, PUBLIC grants, pg_hba trust, scram vs md5, logging/pgaudit…),
+  each mapped to CIS section + PCI refs. Gated on `VA_SCAN=true`; periodic (`VA_SCAN_INTERVAL_MIN`)
+  + on-demand poll (mirrors classification's scan-pending).
+- **Control plane** (`api/main.js`): `va_scans` + `va_findings` (upsert on tenant+db+check → drift:
+  first/last-seen + waiver). Endpoints `POST /api/va/scan` (trigger), `GET /api/va/scan-pending`
+  (agent poll), `POST /api/va/scan-results` (ingest + severity-weighted score), `GET /api/va/summary
+  |findings|scans`, `POST /api/va/findings/:id/waive`.
+- **UI**: `/vulnerability` page — posture score, open/critical/high KPIs, findings table (severity,
+  evidence, expandable remediation/refs, admin waive), Run-scan. Data Security nav; role + entitlement
+  gated. Replaced the `REPORTS.va` placeholder with a real findings report.
+- **Compliance**: `iso.va`/`rbi.va` now measure REAL scan state (a scan within 90d AND 0 open critical),
+  evidence "last VA scan Nd ago · X high, Y critical open across Z db(s)" — was "a report is scheduled".
+- **Flag** `va-scanner` flipped roadmap→GA.
+- **Verified live** on the dev MySQL: agent ran CIS MySQL 8.0 → 14 pass / 4 fail / 0 error, score 79,
+  with real findings (TLS not enforced, 3 wildcard-host accounts incl. root, no password validation,
+  passwords never expire).
+
+Not yet done (Phase 2/3): SQL Server/Oracle/Mongo check libraries, scheduled scans + trend/drift UI,
+version-EOL/CVE currency, findings in the signed Evidence-Pack PDF.
