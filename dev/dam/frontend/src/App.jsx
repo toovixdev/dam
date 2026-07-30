@@ -36,6 +36,7 @@ import Copilot from './pages/Copilot';
 import ActiveDefense from './pages/ActiveDefense';
 import AccessGovernance from './pages/AccessGovernance';
 import Behavior from './pages/Behavior';
+import Vulnerability from './pages/Vulnerability';
 import './App.css';
 
 function ProtectedRoute({ children, screen }) {
@@ -75,6 +76,7 @@ export default function App() {
           <Route path="/policies" element={<ProtectedRoute screen="policies"><Policies /></ProtectedRoute>} />
           <Route path="/quarantine" element={<ProtectedRoute screen="quarantine"><Quarantine /></ProtectedRoute>} />
           <Route path="/classification" element={<ProtectedRoute screen="classification"><Classification /></ProtectedRoute>} />
+          <Route path="/vulnerability" element={<ProtectedRoute screen="vulnerability"><FeatureGate feature="va-scanner" name="Vulnerability Assessment"><Vulnerability /></FeatureGate></ProtectedRoute>} />
           <Route path="/masking" element={<ProtectedRoute screen="masking"><Masking /></ProtectedRoute>} />
           <Route path="/access" element={<ProtectedRoute screen="access"><FeatureGate feature="jit-access" name="Access Governance (JIT)"><AccessGovernance /></FeatureGate></ProtectedRoute>} />
           <Route path="/compliance" element={<ProtectedRoute screen="compliance"><Compliance /></ProtectedRoute>} />

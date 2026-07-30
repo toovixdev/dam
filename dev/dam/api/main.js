@@ -1419,7 +1419,7 @@ async function runAdminMigration() {
         (key, name, description, stage, tier_starter, tier_business, tier_enterprise, is_core, tier_gated, rollout_target, rollout_error, sort_order) VALUES
         ('activity-monitoring','Activity Monitoring','Real-time capture, audit trail, hash-chain','ga',  true,  true,  true,  true,  false, NULL, NULL, 1),
         ('alert-rules','Alert Rules & Policies','Custom rules, threshold, pattern, correlation','ga',    true,  true,  true,  true,  false, NULL, NULL, 2),
-        ('va-scanner','VA Scanner','Roadmap — CIS-benchmark DB config & privilege assessment','roadmap',  true,  true,  true,  false, false, NULL, NULL, 3),
+        ('va-scanner','VA Scanner','Read-only CIS database security assessment — config, privilege, auth & TLS checks','ga',  true,  true,  true,  false, false, NULL, NULL, 3),
         ('compliance-packs','Compliance Packs','PCI-DSS, GDPR, HIPAA, SOX, DPDPA, RBI','ga',             true,  true,  true,  false, true,  NULL, NULL, 4),
         ('ueba','Behavioral Analytics (UEBA)','Per-entity behavioral risk from learned baselines — off-hours, volume, first-access anomalies','ga', false, true,  true,  false, false, NULL, NULL, 5),
         ('dynamic-masking','Dynamic Masking','Query-time masking by role, format-preserving','ga',       false, true,  true,  false, false, NULL, NULL, 6),
@@ -1445,6 +1445,9 @@ async function runAdminMigration() {
     await client.query(
       `UPDATE feature_flags SET stage='ga', description=$1, rollout_target=NULL, rollout_error=NULL WHERE key='ueba' AND stage <> 'ga'`,
       ['Per-entity behavioral risk from learned baselines — off-hours, volume, first-access anomalies']);
+    await client.query(
+      `UPDATE feature_flags SET stage='ga', description=$1 WHERE key='va-scanner' AND stage <> 'ga'`,
+      ['Read-only CIS database security assessment — config, privilege, auth & TLS checks']);
 
     // Resource quotas: plan-tier defaults + per-tenant overrides (isolated admin tables).
     // NULL limit = unlimited / custom (per-contract). storage in GB.
@@ -8201,7 +8204,15 @@ async function complianceMetrics(tenantId) {
       COUNT(*) FILTER (WHERE status='on') active FROM report_schedules WHERE tenant_id=$1`);
   const qp   = { auto_quarantine: false };
   try { qp.auto_quarantine = !!(await pgPool.query('SELECT auto_quarantine FROM quarantine_policy WHERE id=1')).rows[0]?.auto_quarantine; } catch { /* singleton, non-tenant */ }
+  // Real VA scan state (drives iso.va / rbi.va instead of "a report is scheduled").
+  const va = await pg1(`SELECT
+      COALESCE(EXTRACT(EPOCH FROM (now() - (SELECT MAX(finished_at) FROM va_scans WHERE tenant_id=$1 AND status='complete')))/86400, 99999) AS days,
+      (SELECT COUNT(*) FROM va_scans WHERE tenant_id=$1 AND status='complete') AS scans,
+      (SELECT COUNT(*) FROM va_findings WHERE tenant_id=$1 AND status='fail' AND NOT waived AND severity='critical') AS crit,
+      (SELECT COUNT(*) FROM va_findings WHERE tenant_id=$1 AND status='fail' AND NOT waived AND severity='high') AS high,
+      (SELECT COUNT(DISTINCT database_id) FROM va_findings WHERE tenant_id=$1) AS dbs`);
   return {
+    vaScans: +(va.scans || 0), vaDays: Math.floor(+(va.days || 99999)), vaCrit: +(va.crit || 0), vaHigh: +(va.high || 0), vaDbs: +(va.dbs || 0),
     sensitive: +c.sensitive, maskedSensitive: +c.masked_sensitive, unmaskedSensitive: +c.unmasked_sensitive,
     pciUnmasked: +c.pci_unmasked, piiUnmasked: +c.pii_unmasked, dbTotal: +d.total, unmonitored: +d.unmonitored,
     unmaskedList: unmasked, unmonitoredList: unmonList,
@@ -8241,7 +8252,9 @@ function buildFrameworks(m, states = {}) {
   const sod = m.jitSod > 0 || m.approvalsMultiParty > 0;               // maker-checker on privileged access
   const jitGov = m.jitTotal > 0;                                        // privileged access brokered/reviewable
   const uniqueIds = m.distinctPrincipals > 0 && m.sharedAcctEvents === 0; // no shared/generic accounts
-  const vaSched = m.schedVA > 0;                                        // recurring VA report scheduled
+  // Real VA posture: a scan ran within 90 days AND no open critical findings (design §6).
+  const vaReal = m.vaScans > 0 && m.vaDays <= 90 && m.vaCrit === 0;
+  const vaSched = m.schedVA > 0;                                        // (legacy) recurring VA report scheduled
   const policyOn = m.policiesActive > 0;                                // access-control policies defined
 
   // ── Evidence snippets (honest — they describe the real measured state) ──
@@ -8256,7 +8269,10 @@ function buildFrameworks(m, states = {}) {
   const evSod = { summary: sod ? `${m.jitSod} approved privileged grant(s) (approver ≠ requester) · ${m.approvalsMultiParty} multi-party approval(s)` : 'No brokered/approved privileged access recorded', link: { label: 'View Audit Trail', to: '/audit' } };
   const evJit = { summary: jitGov ? `${m.jitTotal} privileged-access grant(s) brokered & reviewable` : 'No just-in-time privileged-access brokering recorded', link: { label: 'View Audit Trail', to: '/audit' } };
   const evUnique = { summary: uniqueIds ? `${m.distinctPrincipals} distinct principal(s) · no shared/generic accounts` : (m.sharedAcctEvents > 0 ? `${m.sharedAcctEvents.toLocaleString()} event(s) from shared/generic accounts (root/admin/sa…)` : 'No principal activity captured yet'), link: { label: 'View activity', to: '/audit' } };
-  const evVa = { summary: vaSched ? 'Recurring vulnerability-assessment report scheduled' : 'No recurring VA report scheduled', link: { label: 'Reports', to: '/reports' } };
+  const evVa = { summary: m.vaScans > 0
+    ? `Last VA scan ${m.vaDays === 0 ? 'today' : m.vaDays + 'd ago'} · ${m.vaHigh} high, ${m.vaCrit} critical open across ${m.vaDbs} database(s)`
+    : 'No VA scan has run — enroll an agent with a DB login and run a scan',
+    link: { label: 'Vulnerability Assessment', to: '/vulnerability' } };
   const evPolicy = { summary: policyOn ? `${m.policiesActive} access-control policy/policies active` : 'No access-control policies defined', link: { label: 'Reports', to: '/reports' } };
   const evInv = { summary: `${m.classifiedObjects} object(s) across ${m.dbTotal} database(s) inventoried`, link: { label: 'View Classification', to: '/classification' } };
   const gapMask = (items, n) => ({ summary: `${n} sensitive column(s) exposed to non-privileged roles`, items, link: { label: 'Fix in Masking', to: 'tab:masking' } });
@@ -8296,7 +8312,7 @@ function buildFrameworks(m, states = {}) {
       meas('rbi.log', covered, covered ? 'Database activity logging for all critical systems' : `Activity logging gap on ${m.unmonitored} database(s)`, 'RBI Baseline 4', evCovered),
       meas('rbi.priv', privMon, 'Privileged user monitoring', 'RBI Baseline 8', evPriv),
       meas('rbi.localize', localized, 'Data localization per RBI mandate', 'RBI Storage 2018', evLocal),
-      meas('rbi.va', vaSched, vaSched ? 'Quarterly VA cadence scheduled' : 'No quarterly VA cadence scheduled', 'RBI Baseline 11', evVa),
+      meas('rbi.va', vaReal, vaReal ? `VA assessed ${m.vaDays}d ago · no critical findings open` : (m.vaScans > 0 ? `VA overdue or critical findings open (${m.vaCrit} critical)` : 'No VA scan has run'), 'RBI Baseline 11', evVa),
       meas('rbi.chain', chainOk, 'Tamper-evident audit trail (hash-chain)', 'RBI Baseline 16', evChain) ] },
     { key: 'certin', name: 'CERT-In', controls: [
       att('certin.retention', 'Logs retained 180 days rolling', 'CERT-In 2022', logging ? `${m.auditEvents.toLocaleString()} events on record` : 'no events yet'),
@@ -8318,7 +8334,7 @@ function buildFrameworks(m, states = {}) {
     { key: 'iso27001', name: 'ISO 27001', controls: [
       meas('iso.inventory', m.classifiedObjects > 0 || m.dbTotal > 0, 'Information asset inventory maintained', 'A.8.1.1', evInv),
       meas('iso.policy', policyOn, 'Access control policy enforced per classification', 'A.9.1.1', evPolicy),
-      meas('iso.va', vaSched, vaSched ? 'Vulnerability assessment scheduled' : 'Vulnerability assessment schedule overdue', 'A.12.6.1', evVa),
+      meas('iso.va', vaReal, vaReal ? `Vulnerability assessment current (${m.vaDays}d ago, 0 critical open)` : (m.vaScans > 0 ? `VA overdue or has ${m.vaCrit} open critical finding(s)` : 'No vulnerability assessment has run'), 'A.12.6.1', evVa),
       meas('iso.log', covered, covered ? 'Logging & monitoring on all databases' : `Logging & monitoring gaps on ${m.unmonitored} database(s)`, 'A.12.4.1', evCovered),
       att('iso.crypto', 'Cryptographic controls applied to sensitive data', 'A.10.1.1', null),
       att('iso.incident', 'Incident management within SLA', 'A.16.1.4', null),
@@ -8784,13 +8800,25 @@ const REPORTS = {
     };
   },
   va: async (user) => {
-    const risky = (await pgPool.query(`SELECT name, COALESCE(risk_score,0) risk, monitoring_status FROM databases WHERE tenant_id = $1 ORDER BY risk_score DESC NULLS LAST LIMIT 10`, [user.tenantId])).rows;
-    const unmon = (await pgPool.query(`SELECT COUNT(*) c FROM databases d WHERE d.tenant_id = $1 AND NOT EXISTS (SELECT 1 FROM agents a WHERE a.instance_id=d.instance_id)`, [user.tenantId])).rows[0].c;
+    const T = user.tenantId;
+    const sc = (await pgPool.query(`SELECT COUNT(*) scans, MAX(finished_at) last, ROUND(AVG(score)) score FROM va_scans WHERE tenant_id=$1 AND status='complete'`, [T])).rows[0];
+    if (!(+sc.scans)) return {
+      title: 'Vulnerability Assessment — Findings', period: 'Current',
+      note: 'No VA scan has run yet. Deploy an agent with a database login, then run a scan (Vulnerability Assessment → Run scan) to populate CIS-based findings.',
+      kpis: [kpi('Scans run', 0)], tables: [],
+    };
+    const sev = (await pgPool.query(`SELECT severity, COUNT(*) n FROM va_findings WHERE tenant_id=$1 AND status='fail' AND NOT waived GROUP BY severity`, [T])).rows;
+    const byS = Object.fromEntries(sev.map((r) => [r.severity, +r.n]));
+    const open = (byS.critical || 0) + (byS.high || 0) + (byS.medium || 0) + (byS.low || 0) + (byS.info || 0);
+    const fails = (await pgPool.query(
+      `SELECT f.severity, f.title, d.name db, f.check_id, f.remediation, f.evidence
+         FROM va_findings f LEFT JOIN databases d ON d.id=f.database_id
+        WHERE f.tenant_id=$1 AND f.status='fail' AND NOT f.waived
+        ORDER BY CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END LIMIT 50`, [T])).rows;
     return {
       title: 'Vulnerability Assessment — Findings', period: 'Current',
-      note: 'No dedicated VA scanner is enrolled yet; this summary derives risk posture from monitored databases. Enroll a VA scanner for CIS/STIG findings.',
-      kpis: [kpi('Databases at risk (≥70)', risky.filter((r) => r.risk >= 70).length), kpi('Unmonitored databases', unmon)],
-      tables: [tbl('Database risk posture', ['Database', 'Risk', 'Status'], risky.map((r) => [r.name, r.risk, r.monitoring_status]))],
+      kpis: [kpi('Posture score', (sc.score != null ? sc.score : '—') + '%'), kpi('Critical', byS.critical || 0), kpi('High', byS.high || 0), kpi('Open findings', open), kpi('Last scan', sc.last ? new Date(sc.last).toISOString().slice(0, 10) : '—')],
+      tables: [tbl('Open findings (most severe first)', ['Severity', 'Finding', 'Database', 'Check', 'Remediation'], fails.map((r) => [r.severity, r.title, r.db || '—', r.check_id, (r.remediation || '').slice(0, 90)]))],
     };
   },
   llm: async (user) => {

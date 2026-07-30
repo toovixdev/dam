@@ -18,4 +18,5 @@ export const SCREEN_FEATURE = {
   dsar: 'dsar',
   masking: 'dynamic-masking', // business+ (starter sees it locked)
   behavior: 'ueba',           // business+ (starter sees it locked)
+  vulnerability: 'va-scanner',
 };

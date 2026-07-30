@@ -22,6 +22,7 @@ const NAV = [
   { id: 'quarantine',     ic: '⛔', label: 'Quarantine',        to: '/quarantine' },
   { sec: 'Data Security' },
   { id: 'classification', ic: '◧', label: 'Classification',    to: '/classification' },
+  { id: 'vulnerability',  ic: '◆', label: 'Vulnerability Assessment', to: '/vulnerability' },
   { id: 'masking',        ic: '▦', label: 'Masking',           to: '/masking' },
   { id: 'access',         ic: '⊠', label: 'Access Governance', to: '/access' },
   { sec: 'Compliance' },
