@@ -590,6 +590,12 @@ services:
       CLICKHOUSE_URL: http://dam-clickhouse:8123
       CLICKHOUSE_USER: dam_writer
       CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
+      # VA Scanner: read-only CIS security assessment over the DB login (dev uses root for
+      # full coverage incl. account/privilege checks; prod would use a scoped elevated reader).
+      VA_SCAN: "true"
+      DB_USER: root
+      DB_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
+      DB_NAME: payments
     depends_on:
       - dam-api
       - client-mysql
