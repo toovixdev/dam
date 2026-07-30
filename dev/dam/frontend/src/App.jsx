@@ -35,6 +35,7 @@ import LlmMonitoring from './pages/LlmMonitoring';
 import Copilot from './pages/Copilot';
 import ActiveDefense from './pages/ActiveDefense';
 import AccessGovernance from './pages/AccessGovernance';
+import Behavior from './pages/Behavior';
 import './App.css';
 
 function ProtectedRoute({ children, screen }) {
@@ -69,6 +70,7 @@ export default function App() {
           <Route path="/agents" element={<ProtectedRoute screen="agents"><Agents /></ProtectedRoute>} />
           <Route path="/capture-modes" element={<ProtectedRoute screen="capture-modes"><CaptureModes /></ProtectedRoute>} />
           <Route path="/alerts" element={<ProtectedRoute screen="alerts"><Alerts /></ProtectedRoute>} />
+          <Route path="/behavior" element={<ProtectedRoute screen="behavior"><FeatureGate feature="ueba" name="Behavioral Analytics (UEBA)"><Behavior /></FeatureGate></ProtectedRoute>} />
           <Route path="/alerts/:id" element={<ProtectedRoute screen="alerts"><AlertDetail /></ProtectedRoute>} />
           <Route path="/policies" element={<ProtectedRoute screen="policies"><Policies /></ProtectedRoute>} />
           <Route path="/quarantine" element={<ProtectedRoute screen="quarantine"><Quarantine /></ProtectedRoute>} />

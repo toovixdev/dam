@@ -2,9 +2,9 @@
 // route guard (what to allow). Values match the internal roles stored on users.
 export const ROLE_ALLOW = {
   tenant_admin: '*',
-  soc_analyst:  ['dashboard', 'active-defense', 'databases', 'discovery', 'agents', 'capture-modes', 'alerts', 'policies', 'quarantine', 'classification', 'llm', 'support'],
-  db_owner:     ['dashboard', 'databases', 'agents', 'capture-modes', 'alerts', 'classification', 'access', 'reports', 'change-log', 'attestations', 'support'],
-  compliance:   ['dashboard', 'databases', 'classification', 'masking', 'access', 'compliance', 'dsar', 'audit', 'change-log', 'attestations', 'reports', 'llm', 'support'],
+  soc_analyst:  ['dashboard', 'active-defense', 'databases', 'discovery', 'agents', 'capture-modes', 'alerts', 'behavior', 'policies', 'quarantine', 'classification', 'llm', 'support'],
+  db_owner:     ['dashboard', 'databases', 'agents', 'capture-modes', 'alerts', 'behavior', 'classification', 'access', 'reports', 'change-log', 'attestations', 'support'],
+  compliance:   ['dashboard', 'databases', 'classification', 'masking', 'access', 'compliance', 'dsar', 'audit', 'change-log', 'attestations', 'reports', 'behavior', 'llm', 'support'],
   auditor:      ['dashboard', 'compliance', 'audit', 'change-log', 'attestations', 'reports', 'support'],
   viewer:       ['dashboard', 'access', 'reports'],
 };

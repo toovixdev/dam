@@ -17,4 +17,5 @@ export const SCREEN_FEATURE = {
   llm: 'llm-monitoring',
   dsar: 'dsar',
   masking: 'dynamic-masking', // business+ (starter sees it locked)
+  behavior: 'ueba',           // business+ (starter sees it locked)
 };

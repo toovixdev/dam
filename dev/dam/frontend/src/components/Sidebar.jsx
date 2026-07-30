@@ -17,6 +17,7 @@ const NAV = [
   { id: 'capture-modes',  ic: '◫', label: 'Capture Modes',     to: '/capture-modes' },
   { sec: 'Threats' },
   { id: 'alerts',         ic: '⚠', label: 'Alerts',            to: '/alerts' },
+  { id: 'behavior',       ic: '◉', label: 'Behavioral Analytics', to: '/behavior' },
   { id: 'policies',       ic: '⚑', label: 'Policies & Rules',  to: '/policies' },
   { id: 'quarantine',     ic: '⛔', label: 'Quarantine',        to: '/quarantine' },
   { sec: 'Data Security' },
