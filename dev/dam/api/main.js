@@ -1369,6 +1369,23 @@ async function runAdminMigration() {
       UNIQUE (feature_key, tenant_id)
     )`);
 
+    // UEBA entity risk: per-principal behavioral risk score, recomputed from the learned
+    // baselines (see recomputePrincipalRisk). One row per (tenant, principal).
+    await client.query(`CREATE TABLE IF NOT EXISTS principal_risk (
+      tenant_id      UUID NOT NULL,
+      principal      VARCHAR(255) NOT NULL,
+      risk_score     INT NOT NULL DEFAULT 0,
+      factors        JSONB NOT NULL DEFAULT '{}',
+      events_24h     BIGINT NOT NULL DEFAULT 0,
+      off_hours      BIGINT NOT NULL DEFAULT 0,
+      volume_spikes  BIGINT NOT NULL DEFAULT 0,
+      new_tables     INT NOT NULL DEFAULT 0,
+      sensitive_hits BIGINT NOT NULL DEFAULT 0,
+      last_activity  TIMESTAMPTZ,
+      updated_at     TIMESTAMPTZ DEFAULT now(),
+      PRIMARY KEY (tenant_id, principal)
+    )`);
+
     const ff = await client.query('SELECT COUNT(*) AS n FROM feature_flags');
     if (parseInt(ff.rows[0].n) === 0) {
       // cols: key, name, description, stage, starter, business, enterprise, core, gated, target, error, sort
@@ -10981,25 +10998,155 @@ setInterval(recomputeDbRisk, 60000);
 setTimeout(recomputeDbRisk, 8000);
 
 // Baseline builder: learn each principal's normal activity (hour-of-day × day-of-week)
-// from GENUINE traffic only (excludes the detection sim's own events). This is what
-// behavioral predicates like unusual_access_time are scored against.
+// from GENUINE traffic only (excludes the detection sim's own events). This is what the
+// entity-risk engine and behavioral predicates like unusual_access_time score against.
+// Plane-aware: paid tenants keep events in a dedicated DB, so we build per tenant from
+// eventsDbFor(tenant) rather than only the shared plane — baselines still land in the
+// shared dam_analytics.baselines (keyed by tenant_id).
 async function buildBaselines() {
-  // INSERT … SELECT must go via POST (ClickHouse runs GET read-only).
-  const sql = `INSERT INTO dam_analytics.baselines
-       (tenant_id, database_name, principal, hour_of_day, day_of_week, avg_queries, avg_rows, p95_queries, p95_rows, common_tables)
-     SELECT tenant_id, database_name, principal,
-            toHour(timestamp) AS hour_of_day, toDayOfWeek(timestamp) AS day_of_week,
-            count() AS avg_queries, avg(row_count) AS avg_rows,
-            quantile(0.95)(row_count) AS p95_queries, quantile(0.95)(row_count) AS p95_rows,
-            groupUniqArray(table_name) AS common_tables
-     FROM dam_analytics.events
-     WHERE timestamp >= now() - INTERVAL 30 DAY AND source_host != 'detection-sim'
-     GROUP BY tenant_id, database_name, principal, hour_of_day, day_of_week`;
   try {
-    const res = await fetch(`${CH_URL}/?${CH_AUTH}`, { method: 'POST', body: sql });
-    if (!res.ok) console.log('[Baselines] build failed:', (await res.text()).slice(0, 200));
+    const tenants = (await pgPool.query('SELECT id FROM tenants')).rows;
+    for (const { id } of tenants) {
+      const evDb = await eventsDbFor(id);
+      // INSERT … SELECT must go via POST (ClickHouse runs GET read-only).
+      const sql = `INSERT INTO dam_analytics.baselines
+           (tenant_id, database_name, principal, hour_of_day, day_of_week, avg_queries, avg_rows, p95_queries, p95_rows, common_tables)
+         SELECT tenant_id, database_name, principal,
+                toHour(timestamp) AS hour_of_day, toDayOfWeek(timestamp) AS day_of_week,
+                count() AS avg_queries, avg(row_count) AS avg_rows,
+                quantile(0.95)(row_count) AS p95_queries, quantile(0.95)(row_count) AS p95_rows,
+                groupUniqArray(table_name) AS common_tables
+         FROM ${evDb}.events
+         WHERE tenant_id = '${chEsc(id)}' AND timestamp >= now() - INTERVAL 30 DAY AND source_host != 'detection-sim'
+         GROUP BY tenant_id, database_name, principal, hour_of_day, day_of_week`;
+      const res = await fetch(`${CH_URL}/?${CH_AUTH}`, { method: 'POST', body: sql });
+      if (!res.ok) console.log(`[Baselines] build failed for ${id}:`, (await res.text()).slice(0, 150));
+    }
   } catch (e) { console.log('[Baselines] build failed:', e.message); }
 }
+
+// ── UEBA entity-risk engine ──────────────────────────────────────────────────
+// Per-principal behavioral risk (0–100), recomputed every minute by scoring each
+// principal's last-24h activity against their LEARNED baseline: off-normal-hours
+// activity, volume spikes over their p95, first-time table access, sensitive-data
+// exposure, plus open-alert pressure. Cold-start safe: deviation signals are only
+// counted once a principal has a baseline, so a brand-new principal never over-scores.
+const SENSITIVE_TAGS = ['pii', 'pci', 'aadhaar', 'gdpr', 'phi'];
+function entityRiskSql(tenantId, evDb) {
+  const T = chEsc(tenantId);
+  const SENS = `[${SENSITIVE_TAGS.map((s) => `'${s}'`).join(',')}]`;
+  return `
+    WITH learned AS (
+      SELECT principal, groupUniqArrayArray(common_tables) AS known_tables, count() AS slots
+      FROM dam_analytics.baselines WHERE tenant_id='${T}' GROUP BY principal
+    ), bl AS (
+      SELECT tenant_id,database_name,principal,hour_of_day,day_of_week, argMax(p95_rows,updated_at) AS p95_rows
+      FROM dam_analytics.baselines WHERE tenant_id='${T}'
+      GROUP BY tenant_id,database_name,principal,hour_of_day,day_of_week
+    )
+    SELECT principal, events_24h, last_activity, rows_24h, sensitive_hits, off_hours, volume_spikes,
+      if(slots>0, length(arrayFilter(t -> t!='' AND NOT has(known_tables,t), seen_tables)), 0) AS new_tables
+    FROM (
+      SELECT e.principal AS principal, count() AS events_24h, toString(max(e.timestamp)) AS last_activity, sum(e.row_count) AS rows_24h,
+        countIf(hasAny(e.tags,${SENS})) AS sensitive_hits,
+        countIf(l.slots > 0 AND b.day_of_week = 0) AS off_hours,
+        countIf(b.p95_rows > 0 AND e.row_count > b.p95_rows) AS volume_spikes,
+        groupUniqArray(e.table_name) AS seen_tables, any(l.known_tables) AS known_tables, max(l.slots) AS slots
+      FROM ${evDb}.events e
+      LEFT JOIN bl b ON b.tenant_id=e.tenant_id AND b.database_name=e.database_name AND b.principal=e.principal AND b.hour_of_day=toHour(e.timestamp) AND b.day_of_week=toDayOfWeek(e.timestamp)
+      LEFT JOIN learned l ON l.principal=e.principal
+      WHERE e.tenant_id='${T}' AND e.timestamp>=now()-INTERVAL 24 HOUR AND e.principal!=''
+      GROUP BY e.principal
+    ) ORDER BY events_24h DESC LIMIT 500`;
+}
+function entityRiskScore(r, alertScore) {
+  return Math.min(100,
+    Math.min(30, (+r.off_hours || 0) * 3)              // off-normal-hours access
+    + Math.min(22, (+r.volume_spikes || 0) * 5)        // volume anomalies vs learned p95
+    + Math.min(18, (+r.new_tables || 0) * 4)           // first-time object access
+    + Math.min(15, Math.ceil((+r.sensitive_hits || 0) / 5)) // sensitive-data exposure
+    + alertScore);                                     // open-alert pressure (severity-weighted)
+}
+async function recomputePrincipalRisk() {
+  try {
+    const tenants = (await pgPool.query('SELECT id FROM tenants')).rows;
+    for (const { id } of tenants) {
+      const evDb = await eventsDbFor(id);
+      let rows;
+      try { rows = await chQuery(entityRiskSql(id, evDb)); } catch (e) { continue; }
+      if (!Array.isArray(rows) || !rows.length) continue;
+      const alertRows = (await pgPool.query(
+        `SELECT principal, COUNT(*) FILTER (WHERE severity='critical') crit, COUNT(*) FILTER (WHERE severity='high') high, COUNT(*) FILTER (WHERE severity='medium') med
+         FROM alerts WHERE tenant_id=$1 AND status='open' AND principal IS NOT NULL GROUP BY principal`, [id])).rows;
+      const alertBy = {}; alertRows.forEach((a) => { alertBy[a.principal] = a; });
+      for (const r of rows) {
+        const a = alertBy[r.principal] || {};
+        const alertScore = Math.min(30, (+a.crit || 0) * 8 + (+a.high || 0) * 3 + (+a.med || 0) * 1);
+        const score = entityRiskScore(r, alertScore);
+        const factors = { off_hours: +r.off_hours || 0, volume_spikes: +r.volume_spikes || 0, new_tables: +r.new_tables || 0, sensitive_hits: +r.sensitive_hits || 0, alert_pressure: alertScore };
+        await pgPool.query(
+          `INSERT INTO principal_risk (tenant_id, principal, risk_score, factors, events_24h, off_hours, volume_spikes, new_tables, sensitive_hits, last_activity, updated_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10, now())
+           ON CONFLICT (tenant_id, principal) DO UPDATE SET risk_score=EXCLUDED.risk_score, factors=EXCLUDED.factors, events_24h=EXCLUDED.events_24h,
+             off_hours=EXCLUDED.off_hours, volume_spikes=EXCLUDED.volume_spikes, new_tables=EXCLUDED.new_tables, sensitive_hits=EXCLUDED.sensitive_hits,
+             last_activity=EXCLUDED.last_activity, updated_at=now()`,
+          [id, String(r.principal).slice(0, 255), score, JSON.stringify(factors), +r.events_24h || 0, +r.off_hours || 0, +r.volume_spikes || 0, +r.new_tables || 0, +r.sensitive_hits || 0, r.last_activity || null]);
+      }
+    }
+    // Keep the entity list live: drop principals with no activity in the last 7 days.
+    await pgPool.query(`DELETE FROM principal_risk WHERE updated_at < now() - INTERVAL '7 days'`);
+  } catch (e) { console.log('[EntityRisk] recompute failed:', e.message); }
+}
+setInterval(recomputePrincipalRisk, 60000);
+setTimeout(recomputePrincipalRisk, 15000);
+
+// ── UEBA / Behavioral Analytics API (entity risk) ────────────────────────────
+// Top-line KPIs for the Behavioral Analytics page.
+app.get('/api/behavior/summary', authRequired, featureRequired('ueba'), async (req, res) => {
+  const T = req.user.tenantId;
+  try {
+    const s = (await pgPool.query(
+      `SELECT COUNT(*) entities,
+              COUNT(*) FILTER (WHERE risk_score >= 70) high,
+              COUNT(*) FILTER (WHERE risk_score >= 40 AND risk_score < 70) elevated,
+              COALESCE(SUM(off_hours + volume_spikes + new_tables),0) anomalies,
+              MAX(updated_at) updated
+       FROM principal_risk WHERE tenant_id = $1`, [T])).rows[0];
+    let baselines = 0;
+    try { baselines = parseInt(await chQuery(`SELECT count() FROM dam_analytics.baselines WHERE tenant_id='${chEsc(T)}'`, 'TabSeparated')) || 0; } catch (e) { /* CH optional */ }
+    res.json({ entities: +s.entities, high: +s.high, elevated: +s.elevated, anomalies: +s.anomalies, baselines, updated: s.updated });
+  } catch (e) { console.error('[Behavior] summary failed:', e.message); res.status(500).json({ error: 'Failed to load behavioral summary' }); }
+});
+
+// Ranked entities (principals) with their behavioral risk + factor breakdown.
+app.get('/api/behavior/entities', authRequired, featureRequired('ueba'), async (req, res) => {
+  try {
+    const rows = (await pgPool.query(
+      `SELECT principal, risk_score, factors, events_24h, off_hours, volume_spikes, new_tables, sensitive_hits, last_activity
+       FROM principal_risk WHERE tenant_id = $1 ORDER BY risk_score DESC, events_24h DESC LIMIT 200`, [req.user.tenantId])).rows;
+    res.json(rows);
+  } catch (e) { console.error('[Behavior] entities failed:', e.message); res.status(500).json({ error: 'Failed to load entities' }); }
+});
+
+// One entity: its risk row, recent alerts, learned-hours heatmap, and recent activity.
+app.get('/api/behavior/entities/:principal', authRequired, featureRequired('ueba'), async (req, res) => {
+  const T = req.user.tenantId; const p = req.params.principal;
+  try {
+    const row = (await pgPool.query('SELECT * FROM principal_risk WHERE tenant_id = $1 AND principal = $2', [T, p])).rows[0];
+    if (!row) return res.status(404).json({ error: 'Unknown entity' });
+    const alerts = (await pgPool.query(
+      `SELECT id, severity, summary, object_name, anomaly_score, status, created_at
+       FROM alerts WHERE tenant_id = $1 AND principal = $2 ORDER BY created_at DESC LIMIT 20`, [T, p])).rows;
+    let heatmap = [], recent = [];
+    try { heatmap = await chQuery(`SELECT toUInt8(day_of_week) AS day_of_week, toUInt8(hour_of_day) AS hour_of_day, round(sum(avg_queries)) AS q FROM dam_analytics.baselines WHERE tenant_id='${chEsc(T)}' AND principal='${chEsc(p)}' GROUP BY day_of_week, hour_of_day`); } catch (e) { /* CH optional */ }
+    try {
+      const evDb = await eventsDbFor(T);
+      recent = await chQuery(`SELECT toString(timestamp) AS ts, database_name, operation, schema_name, table_name, row_count, arrayStringConcat(tags,',') AS tags
+                              FROM ${evDb}.events WHERE tenant_id='${chEsc(T)}' AND principal='${chEsc(p)}' AND timestamp>=now()-INTERVAL 24 HOUR ORDER BY timestamp DESC LIMIT 25`);
+    } catch (e) { /* CH optional */ }
+    res.json({ ...row, alerts, heatmap, recent });
+  } catch (e) { console.error('[Behavior] entity detail failed:', e.message); res.status(500).json({ error: 'Failed to load entity' }); }
+});
 setInterval(buildBaselines, 300000); // refresh learned baselines every 5 min
 setTimeout(buildBaselines, 20000);   // initial learn shortly after boot
 
