@@ -2521,3 +2521,20 @@ capability that lets you build the CIS library out in the control plane without 
 - **Proven live:** authored `mssql-common-criteria` via the real endpoint → the SQL-Server agent
   pulled the 15-check pack (was 14) and RAN it against the Azure SQL VM → real finding
   (`status=fail, v=0`), zero agent changes. Author centrally → agents execute on next scan.
+
+### VA content platform — Ed25519 pack signing, Step 3 (2026-07-31)
+
+Agents now only execute packs signed by the platform, so a compromised mirror / MITM can't inject
+checks that run on customer DBs.
+- Control plane generates an Ed25519 signing key on boot (private encrypted at rest under the
+  platform secrets key); `GET /api/va/checkpack` signs the exact payload string it serves and
+  returns {payload, signature, key_id}; `GET /api/va/checkpack/pubkey` serves the public key.
+- Agent fetches + caches the pubkey (over TLS = trust anchor), verifies every pulled pack, and
+  REFUSES a tampered/unverifiable pack — falling back to its built-in checks (never runs untrusted
+  content). Version-cached packs stay verified; unsigned responses accepted only for backward-compat.
+- **Proven:** valid payload verifies TRUE, tampered payload verifies FALSE; the live SQL-Server
+  agent logged "VA pack-signing key loaded" + "15 checks … signature verified" then scanned.
+
+Content platform now: Step 1 (central store + register + pull + fallback), Step 2 (custom-check
+authoring), Step 3 (pack signing). Remaining: applicability metadata (version/edition/managed) +
+bulk CIS import.
