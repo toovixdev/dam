@@ -2538,3 +2538,21 @@ checks that run on customer DBs.
 Content platform now: Step 1 (central store + register + pull + fallback), Step 2 (custom-check
 authoring), Step 3 (pack signing). Remaining: applicability metadata (version/edition/managed) +
 bulk CIS import.
+
+### VA content platform — applicability metadata, Step 4 (2026-07-31)
+
+Checks now target the right environments, so the library scales across mixed estates.
+- `va_check_defs` gains `min_version` / `max_version` / `applies_managed` (any|self-managed|managed).
+  The checkpack filters by the agent's reported context (engine_version + managed) BEFORE computing
+  the pack version + signing — so each context gets its own correctly-scoped, signed pack. Admin
+  CRUD + list carry the fields; editor + list show them.
+- Agent `detectVaContext()` reads engine version + deployment kind: managed auto-detected for SQL
+  Server via `SERVERPROPERTY('EngineEdition')` (5=Azure SQL DB, 8=Managed Instance); `DB_MANAGED`
+  env overrides any engine; default self-managed. Sent on every pull.
+- **Proven:** author `applies_managed=managed` + `min_version=17.0` checks →
+  self-managed 16.0 pull=15 (both excluded); managed 16.0=16 (paas-only in, v17 out); managed 17.0=17
+  (both in). Live SQL-Server agent logged `VA context: … version=16.0.4255.1 managed=self-managed`
+  then pulled the 15-check filtered+signed pack.
+
+Content platform complete: Step 1 central store/pull/fallback · Step 2 authoring · Step 3 Ed25519
+signing · Step 4 applicability. Remaining: bulk CIS import (e.g. CIS SecureSuite) to grow coverage.
