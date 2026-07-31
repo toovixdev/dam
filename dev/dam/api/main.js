@@ -8224,7 +8224,7 @@ app.get('/api/va/checkpack', async (req, res) => {
 // Admin: browse + curate the platform check library.
 app.get('/api/admin/va/checks', async (req, res) => {
   const rows = (await pgPool.query(
-    `SELECT id, engine, check_id, benchmark, section, title, severity, enabled, source, updated_at
+    `SELECT id, engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, enabled, source, updated_at
        FROM va_check_defs ORDER BY engine, CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, check_id`)).rows;
   const byEngine = {};
   for (const r of rows) (byEngine[r.engine] = byEngine[r.engine] || []).push(r);
@@ -8238,6 +8238,62 @@ app.post('/api/admin/va/checks/:id/toggle', async (req, res) => {
   const r = await pgPool.query('UPDATE va_check_defs SET enabled=$2, updated_at=now() WHERE id=$1 RETURNING engine, check_id, enabled', [req.params.id, !!(req.body && req.body.enabled)]);
   if (!r.rows.length) return res.status(404).json({ error: 'check not found' });
   res.json({ ok: true, ...r.rows[0] });
+});
+// ── Custom-check authoring: build/extend the CIS library centrally (no agent rebuild). ──
+const VA_ENGINES = ['mysql', 'postgresql', 'mssql', 'oracle'];
+const VA_SEVS = ['critical', 'high', 'medium', 'low', 'info'];
+const VA_OPS = ['equals', 'notEquals', 'contains', 'notContains', 'empty', 'notEmpty', 'gte', 'lte', 'rowsZero', 'rowsNonZero'];
+function vaNormRefs(refs) {
+  if (Array.isArray(refs)) return refs.map((r) => String(r).trim()).filter(Boolean);
+  if (typeof refs === 'string') return refs.split(',').map((r) => r.trim()).filter(Boolean);
+  return [];
+}
+function vaValidateCheck(b) {
+  if (!VA_ENGINES.includes(b.engine)) return 'engine must be one of ' + VA_ENGINES.join(', ');
+  if (!b.check_id || !/^[a-z0-9][a-z0-9-]{2,79}$/.test(b.check_id)) return 'check_id must be kebab-case, 3–80 chars (a-z, 0-9, -)';
+  if (!b.title || !String(b.title).trim()) return 'title is required';
+  if (!VA_SEVS.includes(b.severity)) return 'severity must be one of ' + VA_SEVS.join(', ');
+  if (!b.query || !String(b.query).trim()) return 'query is required';
+  const op = b.expect && b.expect.op;
+  if (!VA_OPS.includes(op)) return 'expect.op must be one of ' + VA_OPS.join(', ');
+  return null;
+}
+// Create a custom check → agents pull + run it on their next scan.
+app.post('/api/admin/va/checks', async (req, res) => {
+  const b = req.body || {};
+  const err = vaValidateCheck(b); if (err) return res.status(400).json({ error: err });
+  try {
+    const r = await pgPool.query(
+      `INSERT INTO va_check_defs (engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, source, enabled)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'custom',true) RETURNING id`,
+      [b.engine, b.check_id, b.benchmark || null, b.section || null, String(b.title).slice(0, 240), b.severity, b.query, JSON.stringify({ op: b.expect.op, column: b.expect.column || undefined, value: b.expect.value || undefined }), b.remediation || null, vaNormRefs(b.refs)]);
+    res.json({ ok: true, id: r.rows[0].id });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'a check with that engine + check_id already exists' });
+    res.status(500).json({ error: e.message });
+  }
+});
+// Edit any check (its definition). Agent-registered checks can be corrected here too.
+app.put('/api/admin/va/checks/:id', async (req, res) => {
+  const b = req.body || {};
+  const err = vaValidateCheck(b); if (err) return res.status(400).json({ error: err });
+  try {
+    const r = await pgPool.query(
+      `UPDATE va_check_defs SET engine=$2, check_id=$3, benchmark=$4, section=$5, title=$6, severity=$7, query=$8, expect=$9, remediation=$10, refs=$11, updated_at=now() WHERE id=$1 RETURNING id`,
+      [req.params.id, b.engine, b.check_id, b.benchmark || null, b.section || null, String(b.title).slice(0, 240), b.severity, b.query, JSON.stringify({ op: b.expect.op, column: b.expect.column || undefined, value: b.expect.value || undefined }), b.remediation || null, vaNormRefs(b.refs)]);
+    if (!r.rows.length) return res.status(404).json({ error: 'check not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'a check with that engine + check_id already exists' });
+    res.status(500).json({ error: e.message });
+  }
+});
+// Delete a check. Note: an agent-registered check reappears when that agent next registers —
+// disable it instead if you want it permanently out. Custom checks delete cleanly.
+app.delete('/api/admin/va/checks/:id', async (req, res) => {
+  const r = await pgPool.query('DELETE FROM va_check_defs WHERE id=$1 RETURNING source', [req.params.id]);
+  if (!r.rows.length) return res.status(404).json({ error: 'check not found' });
+  res.json({ ok: true, reappears: r.rows[0].source === 'agent' });
 });
 
 // ── Compliance Center ─────────────────────────────────────
