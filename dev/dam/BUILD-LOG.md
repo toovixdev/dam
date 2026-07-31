@@ -2510,3 +2510,14 @@ definitions" model). Self-bootstrapping — no manual seeding.
 
 Not yet (Step 2+): admin authoring of custom checks, pack signing, applicability metadata
 (version/edition/managed), and importing the fuller CIS core (e.g. CIS SecureSuite content).
+
+### VA content platform — custom-check authoring, Step 2 (2026-07-31)
+
+Admins can now **author** checks centrally (create/edit/delete), not just enable/disable — the
+capability that lets you build the CIS library out in the control plane without an agent rebuild.
+- `POST/PUT/DELETE /api/admin/va/checks` (validated: engine, kebab check_id, severity, expect.op);
+  admin list returns full fields; source='custom'. Content Packs page gets a check editor (engine/
+  severity/section/title/query + an expect builder {op,column,value} + remediation + refs).
+- **Proven live:** authored `mssql-common-criteria` via the real endpoint → the SQL-Server agent
+  pulled the 15-check pack (was 14) and RAN it against the Azure SQL VM → real finding
+  (`status=fail, v=0`), zero agent changes. Author centrally → agents execute on next scan.
