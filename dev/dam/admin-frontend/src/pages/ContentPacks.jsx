@@ -16,7 +16,7 @@ function sevBadge(sev) {
   const c = { critical: '#c0392b', high: '#d98a00', medium: '#3b82f6', low: '#6b7280', info: '#6b7280' }[sev] || '#6b7280';
   return <span className="badge" style={{ background: `${c}22`, color: c, fontWeight: 700 }}>{sev}</span>;
 }
-const blankCheck = () => ({ _new: true, engine: 'mssql', check_id: '', benchmark: '', section: '', title: '', severity: 'medium', query: '', expect: { op: 'equals', column: '', value: '' }, remediation: '', refs: [] });
+const blankCheck = () => ({ _new: true, engine: 'mssql', check_id: '', benchmark: '', section: '', title: '', severity: 'medium', query: '', expect: { op: 'equals', column: '', value: '' }, remediation: '', refs: [], applies_managed: 'any', min_version: '', max_version: '' });
 
 function CheckEditor({ check, onCancel, onSaved }) {
   const [f, setF] = useState({ ...check, expect: { op: 'equals', column: '', value: '', ...(check.expect || {}) }, refs: Array.isArray(check.refs) ? check.refs.join(', ') : (check.refs || '') });
@@ -53,6 +53,9 @@ function CheckEditor({ check, onCancel, onSaved }) {
           <div style={{ gridColumn: 'span 2' }}><div style={lbl}>Value {needsVal ? '' : '(n/a)'}</div><input style={inp} value={f.expect.value} placeholder="0" disabled={!['equals', 'notEquals', 'contains', 'notContains', 'gte', 'lte'].includes(f.expect.op)} onChange={(e) => setEx('value', e.target.value)} /></div>
           <div style={{ gridColumn: '1 / -1' }}><div style={lbl}>Remediation</div><input style={inp} value={f.remediation} placeholder="EXEC sp_configure 'x',0; RECONFIGURE;" onChange={(e) => set('remediation', e.target.value)} /></div>
           <div style={{ gridColumn: '1 / -1' }}><div style={lbl}>References (comma-separated)</div><input style={inp} value={f.refs} placeholder="CIS SQL Server §2.1, PCI-DSS 2.2.5" onChange={(e) => set('refs', e.target.value)} /></div>
+          <div><div style={lbl}>Applies to</div><select style={inp} value={f.applies_managed || 'any'} onChange={(e) => set('applies_managed', e.target.value)}><option value="any">any deployment</option><option value="self-managed">self-managed only</option><option value="managed">managed / PaaS only</option></select></div>
+          <div><div style={lbl}>Min version</div><input style={inp} value={f.min_version || ''} placeholder="e.g. 16.0" onChange={(e) => set('min_version', e.target.value)} /></div>
+          <div><div style={lbl}>Max version</div><input style={inp} value={f.max_version || ''} placeholder="e.g. 16.99" onChange={(e) => set('max_version', e.target.value)} /></div>
         </div>
         <div style={{ fontSize: 11.5, color: 'var(--muted)', marginTop: 8 }}>
           <b>op guide:</b> <code>rowsZero</code>/<code>rowsNonZero</code> → check passes on 0 / ≥1 returned rows (offending-rows pattern). <code>equals/notEquals/contains/gte/lte</code> → compare a column of the first row. Column empty = first column.
@@ -147,7 +150,10 @@ export default function ContentPacks() {
               {shown.map((c) => (
                 <tr key={c.id} style={{ opacity: c.enabled ? 1 : 0.5 }}>
                   <td><small className="muted">{c.engine}</small></td>
-                  <td><b>{c.title}</b><br /><small className="muted mono">{c.check_id}</small></td>
+                  <td><b>{c.title}</b><br /><small className="muted mono">{c.check_id}</small>
+                    {c.applies_managed && c.applies_managed !== 'any' && <span className="badge" style={{ marginLeft: 6, fontSize: 10 }}>{c.applies_managed}</span>}
+                    {(c.min_version || c.max_version) && <small className="muted" style={{ marginLeft: 6 }}>{c.min_version ? `≥${c.min_version}` : ''}{c.max_version ? ` ≤${c.max_version}` : ''}</small>}
+                  </td>
                   <td>{c.section || '—'}</td>
                   <td>{sevBadge(c.severity)}</td>
                   <td>{c.source === 'custom' ? <span className="badge sev-medium">custom</span> : <span className="badge status-gray">agent</span>}</td>

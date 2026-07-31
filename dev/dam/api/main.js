@@ -1433,6 +1433,12 @@ async function runAdminMigration() {
       created_at  TIMESTAMPTZ DEFAULT now(),
       UNIQUE (engine, check_id)
     )`);
+    // Applicability: a check runs only where it applies (version range + deployment kind), so the
+    // library scales across mixed estates (e.g. file/OS checks skip managed PaaS; a 2019-only check
+    // skips 2016). The agent reports its context on pull and the control plane filters accordingly.
+    await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS min_version VARCHAR(30)`);
+    await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS max_version VARCHAR(30)`);
+    await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS applies_managed VARCHAR(20) DEFAULT 'any'`); -- any | self-managed | managed
     // Ed25519 signing key for the check pack — agents only run packs signed by this key, so a
     // compromised mirror / MITM can't inject checks that execute on customer DBs. Private key
     // encrypted at rest under the platform secrets key.
@@ -8221,6 +8227,21 @@ async function vaSigningKey() {
 function vaSign(privatePem, payload) {
   return crypto.sign(null, Buffer.from(payload), crypto.createPrivateKey(privatePem)).toString('base64');
 }
+// Dotted numeric version compare ("16.0.4255.1" vs "15.0"): -1 | 0 | 1.
+function vaCmpVersion(a, b) {
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d < 0 ? -1 : 1; }
+  return 0;
+}
+// Does a check apply to the reporting agent's context (deployment kind + engine version)?
+// Unknown context (older agent / detection failed) → applies, so we never silently drop a check.
+function vaApplies(r, ctx) {
+  if (r.applies_managed && r.applies_managed !== 'any' && ctx.managed && r.applies_managed !== ctx.managed) return false;
+  if (r.min_version && ctx.version && vaCmpVersion(ctx.version, r.min_version) < 0) return false;
+  if (r.max_version && ctx.version && vaCmpVersion(ctx.version, r.max_version) > 0) return false;
+  return true;
+}
 // Agent self-registration: insert any checks we don't already have (ON CONFLICT DO NOTHING
 // preserves admin curation). Bootstraps + keeps the library current as agent versions ship.
 app.post('/api/va/checks/register', async (req, res) => {
@@ -8245,9 +8266,11 @@ app.get('/api/va/checkpack', async (req, res) => {
   const tenantId = await tenantFromEnrollToken(req.query.token || req.headers['x-enroll-token']);
   if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
   const engine = String(req.query.engine || '');
-  const rows = (await pgPool.query(
-    `SELECT check_id, benchmark, section, title, severity, query, expect, remediation, refs, updated_at
+  const ctx = { version: String(req.query.engine_version || ''), managed: String(req.query.managed || '') };
+  const all = (await pgPool.query(
+    `SELECT check_id, benchmark, section, title, severity, query, expect, remediation, refs, min_version, max_version, applies_managed, updated_at
        FROM va_check_defs WHERE engine=$1 AND enabled=true ORDER BY check_id`, [engine])).rows;
+  const rows = all.filter((r) => vaApplies(r, ctx));   // applicability filter — only what fits this agent
   const version = vaPackVersion(rows);
   if (req.query.version && req.query.version === version) return res.json({ engine, version, unchanged: true });
   const checks = rows.map((r) => ({ check_id: r.check_id, section: r.section, title: r.title, severity: r.severity, query: r.query, expect: r.expect, remediation: r.remediation, refs: r.refs || [] }));
@@ -8268,7 +8291,7 @@ app.get('/api/va/checkpack/pubkey', async (req, res) => {
 // Admin: browse + curate the platform check library.
 app.get('/api/admin/va/checks', async (req, res) => {
   const rows = (await pgPool.query(
-    `SELECT id, engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, enabled, source, updated_at
+    `SELECT id, engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, min_version, max_version, applies_managed, enabled, source, updated_at
        FROM va_check_defs ORDER BY engine, CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, check_id`)).rows;
   const byEngine = {};
   for (const r of rows) (byEngine[r.engine] = byEngine[r.engine] || []).push(r);
@@ -8300,6 +8323,7 @@ function vaValidateCheck(b) {
   if (!b.query || !String(b.query).trim()) return 'query is required';
   const op = b.expect && b.expect.op;
   if (!VA_OPS.includes(op)) return 'expect.op must be one of ' + VA_OPS.join(', ');
+  if (b.applies_managed && !['any', 'self-managed', 'managed'].includes(b.applies_managed)) return "applies_managed must be any | self-managed | managed";
   return null;
 }
 // Create a custom check → agents pull + run it on their next scan.
@@ -8308,9 +8332,9 @@ app.post('/api/admin/va/checks', async (req, res) => {
   const err = vaValidateCheck(b); if (err) return res.status(400).json({ error: err });
   try {
     const r = await pgPool.query(
-      `INSERT INTO va_check_defs (engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, source, enabled)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'custom',true) RETURNING id`,
-      [b.engine, b.check_id, b.benchmark || null, b.section || null, String(b.title).slice(0, 240), b.severity, b.query, JSON.stringify({ op: b.expect.op, column: b.expect.column || undefined, value: b.expect.value || undefined }), b.remediation || null, vaNormRefs(b.refs)]);
+      `INSERT INTO va_check_defs (engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, min_version, max_version, applies_managed, source, enabled)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'custom',true) RETURNING id`,
+      [b.engine, b.check_id, b.benchmark || null, b.section || null, String(b.title).slice(0, 240), b.severity, b.query, JSON.stringify({ op: b.expect.op, column: b.expect.column || undefined, value: b.expect.value || undefined }), b.remediation || null, vaNormRefs(b.refs), b.min_version || null, b.max_version || null, b.applies_managed || 'any']);
     res.json({ ok: true, id: r.rows[0].id });
   } catch (e) {
     if (e.code === '23505') return res.status(409).json({ error: 'a check with that engine + check_id already exists' });
@@ -8323,8 +8347,8 @@ app.put('/api/admin/va/checks/:id', async (req, res) => {
   const err = vaValidateCheck(b); if (err) return res.status(400).json({ error: err });
   try {
     const r = await pgPool.query(
-      `UPDATE va_check_defs SET engine=$2, check_id=$3, benchmark=$4, section=$5, title=$6, severity=$7, query=$8, expect=$9, remediation=$10, refs=$11, updated_at=now() WHERE id=$1 RETURNING id`,
-      [req.params.id, b.engine, b.check_id, b.benchmark || null, b.section || null, String(b.title).slice(0, 240), b.severity, b.query, JSON.stringify({ op: b.expect.op, column: b.expect.column || undefined, value: b.expect.value || undefined }), b.remediation || null, vaNormRefs(b.refs)]);
+      `UPDATE va_check_defs SET engine=$2, check_id=$3, benchmark=$4, section=$5, title=$6, severity=$7, query=$8, expect=$9, remediation=$10, refs=$11, min_version=$12, max_version=$13, applies_managed=$14, updated_at=now() WHERE id=$1 RETURNING id`,
+      [req.params.id, b.engine, b.check_id, b.benchmark || null, b.section || null, String(b.title).slice(0, 240), b.severity, b.query, JSON.stringify({ op: b.expect.op, column: b.expect.column || undefined, value: b.expect.value || undefined }), b.remediation || null, vaNormRefs(b.refs), b.min_version || null, b.max_version || null, b.applies_managed || 'any']);
     if (!r.rows.length) return res.status(404).json({ error: 'check not found' });
     res.json({ ok: true });
   } catch (e) {

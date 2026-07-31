@@ -284,11 +284,64 @@ func fetchPubKey(cfg Config) {
 	}
 }
 
-// resolveChecks pulls the curated pack, VERIFIES its Ed25519 signature, caches by version, and
-// falls back to the built-in library if the control plane is unreachable, the pack is empty, or
-// the signature can't be verified — so a tampered/unsigned pack is never executed.
-func resolveChecks(cfg Config) []vaCheck {
-	u := cfg.ControlPlane + "/api/va/checkpack?engine=" + url.QueryEscape(cfg.Engine) + "&token=" + url.QueryEscape(cfg.EnrollToken)
+// vaContext is the instance's applicability context the control plane filters checks against.
+type vaContext struct {
+	Version string
+	Managed string // self-managed | managed
+}
+
+// vaNumericVersion keeps the leading dotted-numeric run ("8.0.35-log" → "8.0.35").
+func vaNumericVersion(v string) string {
+	out := ""
+	for _, r := range strings.TrimSpace(v) {
+		if (r >= '0' && r <= '9') || r == '.' {
+			out += string(r)
+		} else {
+			break
+		}
+	}
+	return out
+}
+
+// detectVaContext reads the engine version and whether the DB is a managed/PaaS deployment.
+// Managed is auto-detected for SQL Server (EngineEdition 5=Azure SQL DB, 8=Managed Instance);
+// DB_MANAGED overrides for any engine; default self-managed.
+func detectVaContext(db *sql.DB, cfg Config) vaContext {
+	c := vaContext{Managed: strings.TrimSpace(env("DB_MANAGED", ""))}
+	q := map[string]string{
+		"mysql":      "SELECT VERSION()",
+		"postgresql": "SHOW server_version",
+		"mssql":      "SELECT CAST(SERVERPROPERTY('ProductVersion') AS varchar(64))",
+		"oracle":     "SELECT version FROM v$instance",
+	}[cfg.Engine]
+	if q != "" {
+		var v string
+		if db.QueryRow(tagAgentQuery(q)).Scan(&v) == nil {
+			c.Version = vaNumericVersion(v)
+		}
+	}
+	if c.Managed == "" && cfg.Engine == "mssql" {
+		var ed int
+		if db.QueryRow(tagAgentQuery("SELECT CAST(SERVERPROPERTY('EngineEdition') AS int)")).Scan(&ed) == nil {
+			if ed == 5 || ed == 8 {
+				c.Managed = "managed"
+			} else {
+				c.Managed = "self-managed"
+			}
+		}
+	}
+	if c.Managed == "" {
+		c.Managed = "self-managed"
+	}
+	return c
+}
+
+// resolveChecks pulls the curated pack (scoped to this agent's context), VERIFIES its Ed25519
+// signature, caches by version, and falls back to the built-in library if the control plane is
+// unreachable, the pack is empty, or the signature can't be verified.
+func resolveChecks(cfg Config, ctx vaContext) []vaCheck {
+	u := cfg.ControlPlane + "/api/va/checkpack?engine=" + url.QueryEscape(cfg.Engine) + "&token=" + url.QueryEscape(cfg.EnrollToken) +
+		"&engine_version=" + url.QueryEscape(ctx.Version) + "&managed=" + url.QueryEscape(ctx.Managed)
 	if vaPackCache.version != "" {
 		u += "&version=" + url.QueryEscape(vaPackCache.version)
 	}
@@ -357,8 +410,11 @@ func runVaScan(cfg Config) error {
 	if err := db.Ping(); err != nil {
 		return fmt.Errorf("VA scan connect failed: %w", err)
 	}
-	// Pull the curated pack from the control plane (falls back to the built-in library offline).
-	checks := resolveChecks(cfg)
+	// Detect this instance's context (version + deployment kind) so the control plane serves only
+	// the checks that apply here, then pull the curated pack.
+	ctx := detectVaContext(db, cfg)
+	log.Printf("VA context: engine=%s version=%s managed=%s", cfg.Engine, ctx.Version, ctx.Managed)
+	checks := resolveChecks(cfg, ctx)
 	findings := make([]vaFinding, 0, len(checks))
 	var pass, fail, errc int
 	for _, c := range checks {
