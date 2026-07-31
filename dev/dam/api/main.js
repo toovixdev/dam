@@ -1412,6 +1412,28 @@ async function runAdminMigration() {
     )`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_va_findings_tenant_db ON va_findings (tenant_id, database_id)`);
 
+    // VA benchmark content store (GLOBAL, platform-managed): the CIS check library lives here,
+    // not baked into the agent. Agents register their built-in checks on first contact and pull
+    // the curated (admin enable/disabled) pack per engine. Central update = no agent rollout.
+    await client.query(`CREATE TABLE IF NOT EXISTS va_check_defs (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      engine      VARCHAR(20) NOT NULL,            -- mysql|postgresql|mssql|oracle
+      check_id    VARCHAR(80) NOT NULL,
+      benchmark   VARCHAR(120),
+      section     VARCHAR(20),
+      title       VARCHAR(240),
+      severity    VARCHAR(15),
+      query       TEXT NOT NULL,
+      expect      JSONB NOT NULL DEFAULT '{}',     -- {op, column, value}
+      remediation TEXT,
+      refs        TEXT[],
+      enabled     BOOLEAN NOT NULL DEFAULT true,   -- admin curation
+      source      VARCHAR(20) DEFAULT 'agent',     -- agent | custom
+      updated_at  TIMESTAMPTZ DEFAULT now(),
+      created_at  TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (engine, check_id)
+    )`);
+
     const ff = await client.query('SELECT COUNT(*) AS n FROM feature_flags');
     if (parseInt(ff.rows[0].n) === 0) {
       // cols: key, name, description, stage, starter, business, enterprise, core, gated, target, error, sort
@@ -8158,6 +8180,64 @@ app.post('/api/va/findings/:id/waive', authRequired, featureRequired('va-scanner
   if (!r.rows.length) return res.status(404).json({ error: 'finding not found' });
   await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: waived ? 'va.finding.waive' : 'va.finding.unwaive', resourceType: 'va_finding', resourceId: req.params.id, details: { note: note || null } });
   res.json({ ok: true });
+});
+
+// ── VA benchmark content store (platform-managed CIS check library) ──────────
+// The check library lives centrally here, not baked into the agent. Agents register their
+// built-in checks on first contact; admins curate (enable/disable); agents pull the curated
+// pack per engine. Central update = no agent rollout. docs/va-scanner-design.md §3.
+function vaPackVersion(rows) {
+  const basis = rows.map((r) => `${r.check_id}:${r.updated_at instanceof Date ? r.updated_at.getTime() : r.updated_at}`).sort().join('|');
+  return crypto.createHash('sha256').update(basis).digest('hex').slice(0, 16);
+}
+// Agent self-registration: insert any checks we don't already have (ON CONFLICT DO NOTHING
+// preserves admin curation). Bootstraps + keeps the library current as agent versions ship.
+app.post('/api/va/checks/register', async (req, res) => {
+  const { token, engine, checks } = req.body || {};
+  const tenantId = await tenantFromEnrollToken(token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  if (!engine || !Array.isArray(checks)) return res.status(400).json({ error: 'engine + checks[] required' });
+  let added = 0;
+  for (const c of checks) {
+    if (!c.check_id || !c.query) continue;
+    const r = await pgPool.query(
+      `INSERT INTO va_check_defs (engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'agent') ON CONFLICT (engine, check_id) DO NOTHING`,
+      [engine, c.check_id, c.benchmark || null, c.section || null, (c.title || c.check_id).slice(0, 240), c.severity || 'medium', c.query, JSON.stringify(c.expect || {}), c.remediation || null, Array.isArray(c.refs) ? c.refs : []]);
+    if (r.rowCount) added++;
+  }
+  if (added) console.log(`[VA] agent registered ${added} new ${engine} check(s) (of ${checks.length})`);
+  res.json({ ok: true, registered: checks.length, added });
+});
+// Agent pull: the curated (enabled) pack for an engine + a version for change-detection.
+app.get('/api/va/checkpack', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.query.token || req.headers['x-enroll-token']);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const engine = String(req.query.engine || '');
+  const rows = (await pgPool.query(
+    `SELECT check_id, benchmark, section, title, severity, query, expect, remediation, refs, updated_at
+       FROM va_check_defs WHERE engine=$1 AND enabled=true ORDER BY check_id`, [engine])).rows;
+  const version = vaPackVersion(rows);
+  if (req.query.version && req.query.version === version) return res.json({ engine, version, unchanged: true });
+  res.json({ engine, version, count: rows.length, checks: rows.map((r) => ({ check_id: r.check_id, section: r.section, title: r.title, severity: r.severity, query: r.query, expect: r.expect, remediation: r.remediation, refs: r.refs || [] })) });
+});
+// Admin: browse + curate the platform check library.
+app.get('/api/admin/va/checks', async (req, res) => {
+  const rows = (await pgPool.query(
+    `SELECT id, engine, check_id, benchmark, section, title, severity, enabled, source, updated_at
+       FROM va_check_defs ORDER BY engine, CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, check_id`)).rows;
+  const byEngine = {};
+  for (const r of rows) (byEngine[r.engine] = byEngine[r.engine] || []).push(r);
+  const engines = Object.keys(byEngine).sort().map((e) => {
+    const on = byEngine[e].filter((r) => r.enabled);
+    return { engine: e, total: byEngine[e].length, enabled: on.length, version: vaPackVersion(on) };
+  });
+  res.json({ engines, checks: rows });
+});
+app.post('/api/admin/va/checks/:id/toggle', async (req, res) => {
+  const r = await pgPool.query('UPDATE va_check_defs SET enabled=$2, updated_at=now() WHERE id=$1 RETURNING engine, check_id, enabled', [req.params.id, !!(req.body && req.body.enabled)]);
+  if (!r.rows.length) return res.status(404).json({ error: 'check not found' });
+  res.json({ ok: true, ...r.rows[0] });
 });
 
 // ── Compliance Center ─────────────────────────────────────

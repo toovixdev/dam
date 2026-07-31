@@ -24,20 +24,22 @@ import (
 )
 
 type vaExpect struct {
-	Op     string // equals|notEquals|contains|notContains|empty|notEmpty|gte|lte|rowsZero|rowsNonZero
-	Column string // column of the first row to read (empty → first column)
-	Value  string
+	Op     string `json:"op"`               // equals|notEquals|contains|notContains|empty|notEmpty|gte|lte|rowsZero|rowsNonZero
+	Column string `json:"column,omitempty"` // column of the first row to read (empty → first column)
+	Value  string `json:"value,omitempty"`
 }
 
+// vaCheck is both the internal check record AND the wire shape for register/checkpack, so the
+// same struct round-trips to/from the control-plane content store.
 type vaCheck struct {
-	ID          string
-	Section     string
-	Title       string
-	Severity    string // critical|high|medium|low|info
-	Query       string
-	Expect      vaExpect
-	Remediation string
-	Refs        []string
+	ID          string   `json:"check_id"`
+	Section     string   `json:"section,omitempty"`
+	Title       string   `json:"title"`
+	Severity    string   `json:"severity"` // critical|high|medium|low|info
+	Query       string   `json:"query"`
+	Expect      vaExpect `json:"expect"`
+	Remediation string   `json:"remediation,omitempty"`
+	Refs        []string `json:"refs,omitempty"`
 }
 
 type vaFinding struct {
@@ -210,6 +212,79 @@ func vaDatabaseLabel(cfg Config) string {
 	return cfg.TargetHost
 }
 
+// builtinChecks is the compiled-in library for an engine — what we register centrally and the
+// fallback used when the control plane is unreachable (air-gapped / offline safety).
+func builtinChecks(engine string) []vaCheck {
+	switch engine {
+	case "mysql":
+		return mysqlVaChecks
+	case "postgresql":
+		return postgresVaChecks
+	case "mssql":
+		return mssqlVaChecks
+	case "oracle":
+		return oracleVaChecks
+	}
+	return nil
+}
+
+// registerBuiltinChecks posts the agent's built-in checks so the central library self-bootstraps
+// and stays current across agent versions (the control plane keeps any it already has).
+func registerBuiltinChecks(cfg Config) {
+	checks := builtinChecks(cfg.Engine)
+	if len(checks) == 0 {
+		return
+	}
+	body, _ := json.Marshal(map[string]interface{}{"token": cfg.EnrollToken, "engine": cfg.Engine, "checks": checks})
+	resp, err := http.Post(cfg.ControlPlane+"/api/va/checks/register", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("VA check register failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	log.Printf("VA checks registered: %s", strings.TrimSpace(string(b)))
+}
+
+var vaPackCache = struct {
+	version string
+	checks  []vaCheck
+}{}
+
+// resolveChecks pulls the curated (admin-enabled) pack from the control plane, caching by version
+// to avoid re-downloads. Falls back to the built-in library if the control plane is unreachable
+// or the pack is empty — so a scan always runs.
+func resolveChecks(cfg Config) []vaCheck {
+	u := cfg.ControlPlane + "/api/va/checkpack?engine=" + url.QueryEscape(cfg.Engine) + "&token=" + url.QueryEscape(cfg.EnrollToken)
+	if vaPackCache.version != "" {
+		u += "&version=" + url.QueryEscape(vaPackCache.version)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(u)
+	if err != nil {
+		log.Printf("VA checkpack fetch failed (%v) — using built-in checks", err)
+		return builtinChecks(cfg.Engine)
+	}
+	defer resp.Body.Close()
+	var pk struct {
+		Version   string    `json:"version"`
+		Unchanged bool      `json:"unchanged"`
+		Checks    []vaCheck `json:"checks"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&pk) != nil {
+		return builtinChecks(cfg.Engine)
+	}
+	if pk.Unchanged && len(vaPackCache.checks) > 0 {
+		return vaPackCache.checks
+	}
+	if len(pk.Checks) == 0 {
+		return builtinChecks(cfg.Engine)
+	}
+	vaPackCache.version = pk.Version
+	vaPackCache.checks = pk.Checks
+	log.Printf("VA checkpack: %d checks (version %s) from control plane", len(pk.Checks), pk.Version)
+	return pk.Checks
+}
+
 func runVaScan(cfg Config) error {
 	db, benchmark, err := vaConnect(cfg)
 	if err != nil {
@@ -220,17 +295,8 @@ func runVaScan(cfg Config) error {
 	if err := db.Ping(); err != nil {
 		return fmt.Errorf("VA scan connect failed: %w", err)
 	}
-	var checks []vaCheck
-	switch cfg.Engine {
-	case "mysql":
-		checks = mysqlVaChecks
-	case "postgresql":
-		checks = postgresVaChecks
-	case "mssql":
-		checks = mssqlVaChecks
-	case "oracle":
-		checks = oracleVaChecks
-	}
+	// Pull the curated pack from the control plane (falls back to the built-in library offline).
+	checks := resolveChecks(cfg)
 	findings := make([]vaFinding, 0, len(checks))
 	var pass, fail, errc int
 	for _, c := range checks {
@@ -267,7 +333,8 @@ func vaScanLoop(cfg Config) {
 	if every < time.Minute {
 		every = 12 * time.Hour
 	}
-	time.Sleep(20 * time.Second) // let enrollment settle
+	time.Sleep(20 * time.Second)   // let enrollment settle
+	registerBuiltinChecks(cfg)     // seed / keep-current the central check library
 	for {
 		if err := runVaScan(cfg); err != nil {
 			log.Printf("VA scan failed: %v", err)

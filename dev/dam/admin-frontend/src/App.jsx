@@ -17,6 +17,7 @@ import BreakGlass from './pages/BreakGlass';
 import Roles from './pages/Roles';
 import PlatformEmail from './pages/PlatformEmail';
 import Approvals from './pages/Approvals';
+import ContentPacks from './pages/ContentPacks';
 import Placeholder from './pages/Placeholder';
 import Login from './pages/Login';
 import { getToken } from './api/client';
@@ -58,6 +59,7 @@ export default function App() {
         <Route path="/roles" element={<RequireAuth><Roles /></RequireAuth>} />
         <Route path="/platform-email" element={<RequireAuth><PlatformEmail /></RequireAuth>} />
         <Route path="/approvals" element={<RequireAuth><Approvals /></RequireAuth>} />
+        <Route path="/content-packs" element={<RequireAuth><ContentPacks /></RequireAuth>} />
         {STUBS.map(([path, title]) => (
           <Route key={path} path={path} element={<RequireAuth><Placeholder title={title} /></RequireAuth>} />
         ))}
