@@ -1417,7 +1417,7 @@ async function runAdminMigration() {
     // skips 2016). The agent reports its context on pull and the control plane filters accordingly.
     await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS min_version VARCHAR(30)`);
     await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS max_version VARCHAR(30)`);
-    await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS applies_managed VARCHAR(20) DEFAULT 'any'`); -- any | self-managed | managed
+    await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS applies_managed VARCHAR(20) DEFAULT 'any'`); // any | self-managed | managed
     // Ed25519 signing key for the check pack — agents only run packs signed by this key, so a
     // compromised mirror / MITM can't inject checks that execute on customer DBs. Private key
     // encrypted at rest under the platform secrets key.
