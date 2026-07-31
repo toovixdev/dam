@@ -11,8 +11,12 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -250,10 +254,39 @@ var vaPackCache = struct {
 	version string
 	checks  []vaCheck
 }{}
+var vaPubKey ed25519.PublicKey
 
-// resolveChecks pulls the curated (admin-enabled) pack from the control plane, caching by version
-// to avoid re-downloads. Falls back to the built-in library if the control plane is unreachable
-// or the pack is empty — so a scan always runs.
+// fetchPubKey retrieves the pack-signing public key from the control plane (over TLS — the trust
+// anchor) and caches it. Agents verify every pulled pack against this key.
+func fetchPubKey(cfg Config) {
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Get(cfg.ControlPlane + "/api/va/checkpack/pubkey?token=" + url.QueryEscape(cfg.EnrollToken))
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	var pk struct {
+		PublicPem string `json:"public_pem"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&pk) != nil || pk.PublicPem == "" {
+		return
+	}
+	block, _ := pem.Decode([]byte(pk.PublicPem))
+	if block == nil {
+		return
+	}
+	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return
+	}
+	if ed, ok := pub.(ed25519.PublicKey); ok {
+		vaPubKey = ed
+		log.Printf("VA pack-signing key loaded (agent will verify every pack)")
+	}
+}
+
+// resolveChecks pulls the curated pack, VERIFIES its Ed25519 signature, caches by version, and
+// falls back to the built-in library if the control plane is unreachable, the pack is empty, or
+// the signature can't be verified — so a tampered/unsigned pack is never executed.
 func resolveChecks(cfg Config) []vaCheck {
 	u := cfg.ControlPlane + "/api/va/checkpack?engine=" + url.QueryEscape(cfg.Engine) + "&token=" + url.QueryEscape(cfg.EnrollToken)
 	if vaPackCache.version != "" {
@@ -269,19 +302,48 @@ func resolveChecks(cfg Config) []vaCheck {
 		Version   string    `json:"version"`
 		Unchanged bool      `json:"unchanged"`
 		Checks    []vaCheck `json:"checks"`
+		Payload   string    `json:"payload"`
+		Signature string    `json:"signature"`
 	}
 	if json.NewDecoder(resp.Body).Decode(&pk) != nil {
 		return builtinChecks(cfg.Engine)
 	}
 	if pk.Unchanged && len(vaPackCache.checks) > 0 {
-		return vaPackCache.checks
+		return vaPackCache.checks // already-verified cached pack
 	}
+	// Signed pack: verify signature over the exact payload, then parse the payload.
+	if pk.Signature != "" && pk.Payload != "" {
+		if vaPubKey == nil {
+			fetchPubKey(cfg)
+		}
+		if vaPubKey == nil {
+			log.Printf("VA checkpack is signed but no verify key available yet — using built-in checks this round")
+			return builtinChecks(cfg.Engine)
+		}
+		sig, _ := base64.StdEncoding.DecodeString(pk.Signature)
+		if !ed25519.Verify(vaPubKey, []byte(pk.Payload), sig) {
+			log.Printf("VA checkpack signature INVALID — refusing pack, using built-in checks")
+			return builtinChecks(cfg.Engine)
+		}
+		var vp struct {
+			Version string    `json:"version"`
+			Checks  []vaCheck `json:"checks"`
+		}
+		if json.Unmarshal([]byte(pk.Payload), &vp) != nil || len(vp.Checks) == 0 {
+			return builtinChecks(cfg.Engine)
+		}
+		vaPackCache.version = vp.Version
+		vaPackCache.checks = vp.Checks
+		log.Printf("VA checkpack: %d checks (version %s, signature verified)", len(vp.Checks), vp.Version)
+		return vp.Checks
+	}
+	// Unsigned response (signing not configured server-side) — accept for backward compatibility.
 	if len(pk.Checks) == 0 {
 		return builtinChecks(cfg.Engine)
 	}
 	vaPackCache.version = pk.Version
 	vaPackCache.checks = pk.Checks
-	log.Printf("VA checkpack: %d checks (version %s) from control plane", len(pk.Checks), pk.Version)
+	log.Printf("VA checkpack: %d checks (version %s, unsigned)", len(pk.Checks), pk.Version)
 	return pk.Checks
 }
 
@@ -335,6 +397,7 @@ func vaScanLoop(cfg Config) {
 	}
 	time.Sleep(20 * time.Second)   // let enrollment settle
 	registerBuiltinChecks(cfg)     // seed / keep-current the central check library
+	fetchPubKey(cfg)               // load the pack-signing key so pulled packs are verified
 	for {
 		if err := runVaScan(cfg); err != nil {
 			log.Printf("VA scan failed: %v", err)

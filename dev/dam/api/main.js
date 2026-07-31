@@ -1433,6 +1433,23 @@ async function runAdminMigration() {
       created_at  TIMESTAMPTZ DEFAULT now(),
       UNIQUE (engine, check_id)
     )`);
+    // Ed25519 signing key for the check pack — agents only run packs signed by this key, so a
+    // compromised mirror / MITM can't inject checks that execute on customer DBs. Private key
+    // encrypted at rest under the platform secrets key.
+    await client.query(`CREATE TABLE IF NOT EXISTS va_signing_key (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key_id VARCHAR(32), public_pem TEXT, private_pem_enc TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )`);
+    if (!(await client.query('SELECT 1 FROM va_signing_key LIMIT 1')).rows.length) {
+      const kp = crypto.generateKeyPairSync('ed25519');
+      const pub = kp.publicKey.export({ type: 'spki', format: 'pem' });
+      const priv = kp.privateKey.export({ type: 'pkcs8', format: 'pem' });
+      const keyId = crypto.createHash('sha256').update(pub).digest('hex').slice(0, 16);
+      const privStore = secrets.hasKey ? JSON.stringify({ enc: secrets.encSecret(priv) }) : priv;
+      await client.query('INSERT INTO va_signing_key (key_id, public_pem, private_pem_enc) VALUES ($1,$2,$3)', [keyId, pub, privStore]);
+      console.log(`[VA] generated Ed25519 pack-signing key ${keyId}`);
+    }
 
     const ff = await client.query('SELECT COUNT(*) AS n FROM feature_flags');
     if (parseInt(ff.rows[0].n) === 0) {
@@ -8190,6 +8207,20 @@ function vaPackVersion(rows) {
   const basis = rows.map((r) => `${r.check_id}:${r.updated_at instanceof Date ? r.updated_at.getTime() : r.updated_at}`).sort().join('|');
   return crypto.createHash('sha256').update(basis).digest('hex').slice(0, 16);
 }
+// Ed25519 signing key (cached). Private key decrypted from the store on first use.
+let _vaSignKey = null;
+async function vaSigningKey() {
+  if (_vaSignKey) return _vaSignKey;
+  const row = (await pgPool.query('SELECT key_id, public_pem, private_pem_enc FROM va_signing_key ORDER BY created_at LIMIT 1')).rows[0];
+  if (!row) return null;
+  let priv = row.private_pem_enc;
+  try { const o = JSON.parse(priv); if (o && o.enc) priv = secrets.decSecret(o.enc); } catch (e) { /* legacy plaintext */ }
+  _vaSignKey = { keyId: row.key_id, publicPem: row.public_pem, privatePem: priv };
+  return _vaSignKey;
+}
+function vaSign(privatePem, payload) {
+  return crypto.sign(null, Buffer.from(payload), crypto.createPrivateKey(privatePem)).toString('base64');
+}
 // Agent self-registration: insert any checks we don't already have (ON CONFLICT DO NOTHING
 // preserves admin curation). Bootstraps + keeps the library current as agent versions ship.
 app.post('/api/va/checks/register', async (req, res) => {
@@ -8219,7 +8250,20 @@ app.get('/api/va/checkpack', async (req, res) => {
        FROM va_check_defs WHERE engine=$1 AND enabled=true ORDER BY check_id`, [engine])).rows;
   const version = vaPackVersion(rows);
   if (req.query.version && req.query.version === version) return res.json({ engine, version, unchanged: true });
-  res.json({ engine, version, count: rows.length, checks: rows.map((r) => ({ check_id: r.check_id, section: r.section, title: r.title, severity: r.severity, query: r.query, expect: r.expect, remediation: r.remediation, refs: r.refs || [] })) });
+  const checks = rows.map((r) => ({ check_id: r.check_id, section: r.section, title: r.title, severity: r.severity, query: r.query, expect: r.expect, remediation: r.remediation, refs: r.refs || [] }));
+  // Sign the exact payload string the agent will verify + parse (avoids re-serialization drift).
+  const key = await vaSigningKey();
+  const payload = JSON.stringify({ engine, version, checks });
+  const signature = key ? vaSign(key.privatePem, payload) : null;
+  res.json({ engine, version, count: checks.length, checks, payload, signature, key_id: key ? key.keyId : null });
+});
+// The pack-signing public key — agents fetch it (over TLS) to verify pulled packs.
+app.get('/api/va/checkpack/pubkey', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.query.token || req.headers['x-enroll-token']);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const key = await vaSigningKey();
+  if (!key) return res.status(503).json({ error: 'signing key not ready' });
+  res.json({ key_id: key.keyId, public_pem: key.publicPem });
 });
 // Admin: browse + curate the platform check library.
 app.get('/api/admin/va/checks', async (req, res) => {
