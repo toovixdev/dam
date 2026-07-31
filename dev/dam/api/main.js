@@ -398,30 +398,9 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key`);
     await client.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='users_tenant_email_key') THEN ALTER TABLE users ADD CONSTRAINT users_tenant_email_key UNIQUE (tenant_id, email); END IF; END $$;`);
 
-    const userCheck = await client.query(
-      `SELECT id FROM users WHERE email = 'vikramsharma3107@gmail.com'`
-    );
-    if (userCheck.rows.length === 0) {
-      const hash = await bcrypt.hash('Admin@123', 10);
-      await client.query(
-        `INSERT INTO users (tenant_id, email, full_name, role, auth_provider, mfa_enabled, status, password_hash)
-         VALUES ((SELECT id FROM tenants LIMIT 1), 'vikramsharma3107@gmail.com', 'Vikram Sharma', 'tenant_admin', 'local', true, 'active', $1)`,
-        [hash]
-      );
-      console.log('[Auth] Created tenant_admin: vikramsharma3107@gmail.com / Admin@123');
-    } else {
-      const pwCheck = await client.query(
-        `SELECT password_hash FROM users WHERE email = 'vikramsharma3107@gmail.com'`
-      );
-      if (!pwCheck.rows[0].password_hash) {
-        const hash = await bcrypt.hash('Admin@123', 10);
-        await client.query(
-          `UPDATE users SET password_hash = $1 WHERE email = 'vikramsharma3107@gmail.com'`,
-          [hash]
-        );
-        console.log('[Auth] Set password for vikramsharma3107@gmail.com');
-      }
-    }
+    // SECURITY: the hardcoded-password seed for vikramsharma3107@gmail.com was removed.
+    // It seeded/reset a tenant_admin with a known password ('Admin@123') on every boot —
+    // a public-repo backdoor. Provision the first admin out-of-band; never seed a credential.
     // Compliance scores table
     await client.query(`CREATE TABLE IF NOT EXISTS compliance_scores (
       id SERIAL PRIMARY KEY, framework VARCHAR(40) NOT NULL, score INT NOT NULL DEFAULT 0, updated_at TIMESTAMPTZ DEFAULT now()
@@ -2544,15 +2523,20 @@ app.get('/api/health', async (req, res) => {
 });
 
 // ── Tenants ───────────────────────────────────────────────
-app.get('/api/tenants', async (req, res) => {
+// Auth-gated and tenant-scoped: a tenant user only sees their OWN tenant, and only
+// non-secret columns (never agent_enroll_token). The super-admin fleet list is a
+// separate, platform-guarded endpoint (/api/admin/tenants).
+const TENANT_PUBLIC_COLS = 'id, name, slug, tier, deployment_type, cloud_provider, data_region, status, created_at';
+app.get('/api/tenants', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
-    'SELECT id, name, slug, tier, deployment_type, cloud_provider, data_region, status, created_at FROM tenants ORDER BY created_at'
+    `SELECT ${TENANT_PUBLIC_COLS} FROM tenants WHERE id = $1`, [req.user.tenantId]
   );
   res.json(rows);
 });
 
-app.get('/api/tenants/:id', async (req, res) => {
-  const { rows } = await pgPool.query('SELECT * FROM tenants WHERE id = $1', [req.params.id]);
+app.get('/api/tenants/:id', authRequired, async (req, res) => {
+  if (req.params.id !== req.user.tenantId) return res.status(404).json({ error: 'Not found' });
+  const { rows } = await pgPool.query(`SELECT ${TENANT_PUBLIC_COLS} FROM tenants WHERE id = $1`, [req.params.id]);
   if (!rows.length) return res.status(404).json({ error: 'Not found' });
   res.json(rows[0]);
 });
@@ -4591,8 +4575,9 @@ const AGENT_ENROLL_TOKEN = process.env.AGENT_ENROLL_TOKEN || 'dev-agent-enroll-t
 // token maps to the reference/oldest tenant). Shared by enroll, scan-results, scan-pending.
 async function tenantFromEnrollToken(token) {
   if (!token) return null;
-  let id = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
-  if (!id && token === AGENT_ENROLL_TOKEN) id = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
+  // Strict: only a real per-tenant agent_enroll_token resolves. No global-default fallback
+  // (that let anyone with the public default token act as the first tenant).
+  const id = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
   return id;
 }
 
@@ -4603,9 +4588,7 @@ app.post('/api/agents/enroll', async (req, res) => {
   let tenantId = null;
   if (token) {
     tenantId = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
-    if (!tenantId && token === AGENT_ENROLL_TOKEN) {
-      tenantId = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
-    }
+    // (global-default → first-tenant fallback removed: strict per-tenant tokens only)
   }
   if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
   if (!host || !engine || !agent_type) return res.status(400).json({ error: 'host, engine and agent_type are required' });
@@ -4666,27 +4649,23 @@ app.post('/api/agents/:id/heartbeat', async (req, res) => {
 // Method is derived from the data class (tag); enforcement is the per-column is_masked flag.
 const MASK_METHOD = { pci: 'last-4', ssn: 'redact', aadhaar: 'redact', email: 'email', financial: 'last-4', phone: 'last-4', name: 'redact' };
 app.get('/api/agents/masking-policy', async (req, res) => {
-  if (req.query.token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid token' });
+  const tenantId = await tenantFromEnrollToken(req.query.token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid token' });
   try {
-    // Gate on the Dynamic Masking feature flag: only serve masked columns for tenants
-    // where it's effectively enabled (so disabling it in the Admin app turns masking OFF).
+    // Gate on the Dynamic Masking feature flag for THIS tenant only.
     const flag = (await pgPool.query("SELECT * FROM feature_flags WHERE key = 'dynamic-masking'")).rows[0];
-    const tenants = (await pgPool.query('SELECT id, tier FROM tenants')).rows;
-    const ovBy = {};
-    (await pgPool.query("SELECT tenant_id, status FROM feature_overrides WHERE feature_key = 'dynamic-masking'")).rows.forEach(o => { ovBy[o.tenant_id] = o.status; });
-    const maskingEnabled = new Set(tenants.filter(t => !flag || featureEnabled(flag, t.tier, ovBy[t.id])).map(t => t.id));
+    const t = (await pgPool.query('SELECT tier FROM tenants WHERE id = $1', [tenantId])).rows[0] || {};
+    const ov = (await pgPool.query("SELECT status FROM feature_overrides WHERE feature_key = 'dynamic-masking' AND tenant_id = $1", [tenantId])).rows[0];
+    if (flag && !featureEnabled(flag, t.tier, ov && ov.status)) return res.json({ columns: [], bypassByDb: {}, bypassGlobal: [] });
 
     const rows = (await pgPool.query(
-      `SELECT d.tenant_id, d.name db, o.object_name tbl, cc.column_name col, COALESCE(cc.tags[1],'sensitive') tag
+      `SELECT d.name db, o.object_name tbl, cc.column_name col, COALESCE(cc.tags[1],'sensitive') tag
        FROM classified_columns cc JOIN classified_objects o ON cc.object_id=o.id JOIN databases d ON cc.database_id=d.id
-       WHERE cc.is_masked = true AND NOT cc.masked_at_rest`)).rows;
-    const columns = rows
-      .filter(r => maskingEnabled.has(r.tenant_id)) // feature-flag gate
-      .map(r => ({ db: r.db, table: r.tbl, column: r.col, method: MASK_METHOD[r.tag] || 'redact' }));
-    // Bypass principals (DB usernames that see unmasked data), keyed by database name —
-    // every database has its own list, configured in Masking → Bypass. No default bypass.
+       WHERE cc.tenant_id = $1 AND cc.is_masked = true AND NOT cc.masked_at_rest`, [tenantId])).rows;
+    const columns = rows.map(r => ({ db: r.db, table: r.tbl, column: r.col, method: MASK_METHOD[r.tag] || 'redact' }));
+    // Bypass principals (DB usernames that see unmasked data) — scoped to this tenant.
     const byp = (await pgPool.query(
-      `SELECT d.name db, mb.principal FROM masking_bypass mb JOIN databases d ON mb.database_id = d.id`)).rows;
+      `SELECT d.name db, mb.principal FROM masking_bypass mb JOIN databases d ON mb.database_id = d.id WHERE d.tenant_id = $1`, [tenantId])).rows;
     const bypassByDb = {};
     for (const r of byp) (bypassByDb[r.db] ||= []).push(r.principal);
     // Optional org-wide bypass (applies to every DB) — empty unless explicitly set.
@@ -5226,12 +5205,12 @@ async function raiseAuditTamperAlert(tenantId, e) {
 
 app.post('/api/agents/alert', async (req, res) => {
   const { token, host, port, principal, summary, severity, raw_sql } = req.body;
-  if (token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid token' });
-  const tenantId = (await pgPool.query('SELECT id FROM tenants LIMIT 1')).rows[0].id;
+  const tenantId = await tenantFromEnrollToken(token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid token' });
   let databaseId = null;
   const inst = await pgPool.query(
-    `SELECT id FROM db_instances WHERE host = $1 AND port IS NOT DISTINCT FROM $2`,
-    [host, port || null]
+    `SELECT id FROM db_instances WHERE host = $1 AND port IS NOT DISTINCT FROM $2 AND tenant_id = $3`,
+    [host, port || null, tenantId]
   );
   if (inst.rows.length) {
     const d = await pgPool.query('SELECT id FROM databases WHERE instance_id = $1 LIMIT 1', [inst.rows[0].id]);
@@ -6392,11 +6371,12 @@ app.post('/api/quarantine/:id/kill', authRequired, (req, res) => resolveQuaranti
 // The inline agent polls this to ENFORCE account quarantine: any principal with a
 // held/terminated session is refused (its live session dropped) until released.
 app.get('/api/agents/quarantine-list', async (req, res) => {
-  if (req.query.token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid token' });
+  const tenantId = await tenantFromEnrollToken(req.query.token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid token' });
   try {
     const rows = (await pgPool.query(
       `SELECT DISTINCT principal, database_name FROM quarantine_sessions
-       WHERE status IN ('held','killed') AND principal IS NOT NULL AND principal <> ''`)).rows;
+       WHERE tenant_id = $1 AND status IN ('held','killed') AND principal IS NOT NULL AND principal <> ''`, [tenantId])).rows;
     res.json({ principals: rows.map((r) => r.principal), entries: rows });
   } catch (err) { res.status(500).json({ error: 'Failed to load quarantine list' }); }
 });
@@ -6457,8 +6437,8 @@ app.put('/api/quarantine/policy', authRequired, adminOnly, async (req, res) => {
 // governed by the auto-quarantine policy; default is block-only (no account lock).
 app.post('/api/quarantine', async (req, res) => {
   const { token, session_id, principal, database_name, query_preview, full_sql, engine, db_host, db_port, severity, reason, client_ip } = req.body;
-  if (token !== AGENT_ENROLL_TOKEN) return res.status(401).json({ error: 'Invalid enrollment token' });
-  const tenantId = (await pgPool.query('SELECT id FROM tenants LIMIT 1')).rows[0].id;
+  const tenantId = await tenantFromEnrollToken(token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
 
   // Consult the auto-quarantine policy. In block-only mode we do NOT create an
   // account-quarantine record (the statement was already blocked + alerted).
@@ -6506,10 +6486,8 @@ app.get('/api/discovery/agents', authRequired, async (req, res) => {
 // the legacy global dev token falls back to the reference/oldest tenant).
 async function tenantFromEnrollToken(token) {
   if (!token) return null;
-  let id = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
-  if (!id && token === AGENT_ENROLL_TOKEN) {
-    id = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
-  }
+  // Strict: only a real per-tenant agent_enroll_token resolves (no global-default fallback).
+  const id = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
   return id;
 }
 
@@ -7985,13 +7963,10 @@ app.post('/api/classification/scan-results', async (req, res) => {
   const { token, databases, host, port, engine } = req.body;
   if (!Array.isArray(databases)) return res.status(400).json({ error: 'databases[] required' });
   // Resolve the tenant FROM the token (per-tenant), mirroring /api/agents/enroll.
-  // The legacy global dev token still works and maps to the oldest tenant.
   let tenantId = null;
   if (token) {
     tenantId = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
-    if (!tenantId && token === AGENT_ENROLL_TOKEN) {
-      tenantId = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
-    }
+    // (global-default → first-tenant fallback removed: strict per-tenant tokens only)
   }
   if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
 
@@ -8109,7 +8084,7 @@ app.post('/api/va/scan-results', async (req, res) => {
   let tenantId = null;
   if (token) {
     tenantId = (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token = $1', [token])).rows[0]?.id || null;
-    if (!tenantId && token === AGENT_ENROLL_TOKEN) tenantId = (await pgPool.query('SELECT id FROM tenants ORDER BY created_at LIMIT 1')).rows[0]?.id || null;
+    // (global-default → first-tenant fallback removed: strict per-tenant tokens only)
   }
   if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
   const eng = engine || 'mysql';
@@ -8362,6 +8337,43 @@ app.delete('/api/admin/va/checks/:id', async (req, res) => {
   const r = await pgPool.query('DELETE FROM va_check_defs WHERE id=$1 RETURNING source', [req.params.id]);
   if (!r.rows.length) return res.status(404).json({ error: 'check not found' });
   res.json({ ok: true, reappears: r.rows[0].source === 'agent' });
+});
+// Bulk import a pack (array of checks, or { checks: [...] }) — the way to load CIS SecureSuite
+// content or a hand-authored batch at once. Upserts: existing checks are updated in place
+// (definition), their enabled/curation state preserved. Returns a per-check summary.
+app.post('/api/admin/va/checks/import', async (req, res) => {
+  const body = req.body || {};
+  const checks = Array.isArray(body) ? body : (Array.isArray(body.checks) ? body.checks : null);
+  if (!checks) return res.status(400).json({ error: 'expected an array of checks, or { checks: [...] }' });
+  let added = 0, updated = 0; const errors = [];
+  for (const c of checks) {
+    const err = vaValidateCheck(c);
+    if (err) { errors.push({ check_id: c.check_id || '(missing)', error: err }); continue; }
+    try {
+      const expect = JSON.stringify({ op: c.expect.op, column: c.expect.column || undefined, value: c.expect.value || undefined });
+      const r = await pgPool.query(
+        `INSERT INTO va_check_defs (engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, min_version, max_version, applies_managed, source, enabled)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'import',true)
+         ON CONFLICT (engine, check_id) DO UPDATE SET
+           benchmark=EXCLUDED.benchmark, section=EXCLUDED.section, title=EXCLUDED.title, severity=EXCLUDED.severity,
+           query=EXCLUDED.query, expect=EXCLUDED.expect, remediation=EXCLUDED.remediation, refs=EXCLUDED.refs,
+           min_version=EXCLUDED.min_version, max_version=EXCLUDED.max_version, applies_managed=EXCLUDED.applies_managed,
+           source='import', updated_at=now()
+         RETURNING (xmax = 0) AS inserted`,
+        [c.engine, c.check_id, c.benchmark || null, c.section || null, String(c.title).slice(0, 240), c.severity, c.query, expect, c.remediation || null, vaNormRefs(c.refs), c.min_version || null, c.max_version || null, c.applies_managed || 'any']);
+      if (r.rows[0].inserted) added++; else updated++;
+    } catch (e) { errors.push({ check_id: c.check_id, error: e.message }); }
+  }
+  console.log(`[VA] pack import: +${added} added, ${updated} updated, ${errors.length} error(s)`);
+  res.json({ ok: true, total: checks.length, added, updated, errors });
+});
+// Export the library (or one engine) as an importable pack — backup / versioning / sharing.
+app.get('/api/admin/va/checks/export', async (req, res) => {
+  const engine = req.query.engine;
+  const rows = (await pgPool.query(
+    `SELECT engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, min_version, max_version, applies_managed
+       FROM va_check_defs ${engine ? 'WHERE engine=$1' : ''} ORDER BY engine, check_id`, engine ? [engine] : [])).rows;
+  res.json({ exported_at: new Date().toISOString(), count: rows.length, checks: rows });
 });
 
 // ── Compliance Center ─────────────────────────────────────
