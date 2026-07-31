@@ -2487,3 +2487,26 @@ Extended the VA scanner beyond MySQL/PostgreSQL:
   DSN builders; agent VA gating now mysql|postgresql|mssql|oracle.
 - Every query validated against local SQL Server 2022 + Oracle-free 23c containers (syntax + columns
   correct; found real gaps e.g. UTL_TCP/UTL_HTTP executable by PUBLIC, non-system DBA grants).
+
+### VA Scanner — central benchmark content platform, Step 1 (2026-07-31)
+
+Moved the CIS check library from baked-into-the-agent to a **central, admin-curated, agent-pulled
+content store**, so updating checks is a central push, not a fleet rollout (the "antivirus
+definitions" model). Self-bootstrapping — no manual seeding.
+
+- **`va_check_defs`** (global, platform-managed): the check library. Bootstraps from agents.
+- **Agent self-registration** — `POST /api/va/checks/register`: on startup an agent posts its
+  built-in checks; `ON CONFLICT DO NOTHING` preserves admin curation. New agent versions add new
+  checks automatically.
+- **Agent pull** — `GET /api/va/checkpack?engine=`: returns the curated (enabled) pack + a version
+  hash for change-detection. Agent `resolveChecks()` pulls each scan, version-caches, and **falls
+  back to the built-in library if the control plane is unreachable** (air-gap safe).
+- **Admin curation** — `/api/admin/va/checks` (+ `/:id/toggle`), surfaced on the admin app's
+  **Content Packs** page (per-engine pack summary + version, full library with enable/disable).
+- **Proven live:** the jumpbox SQL-Server agent + dev MySQL agent registered 14 + 18 checks into
+  the store; the agent then pulled the curated pack (`VA checkpack: 14 checks (version …) from
+  control plane`) and scanned with it; disabling a check centrally changed the pulled pack (14→13)
+  and its version — agents pick it up on their next poll, no redeploy.
+
+Not yet (Step 2+): admin authoring of custom checks, pack signing, applicability metadata
+(version/edition/managed), and importing the fuller CIS core (e.g. CIS SecureSuite content).
