@@ -4418,9 +4418,11 @@ app.post('/api/databases', authRequired, async (req, res) => {
 
 // Decommission a single database (schema).
 app.delete('/api/databases/:id', authRequired, async (req, res) => {
+  const own = await pgPool.query('SELECT 1 FROM databases WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
+  if (!own.rowCount) return res.status(404).json({ error: 'Database not found' });
   await pgPool.query('UPDATE agents SET database_id = NULL WHERE database_id = $1', [req.params.id]);
   await pgPool.query('DELETE FROM alerts WHERE database_id = $1', [req.params.id]);
-  const { rowCount } = await pgPool.query('DELETE FROM databases WHERE id = $1', [req.params.id]);
+  const { rowCount } = await pgPool.query('DELETE FROM databases WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
   if (!rowCount) return res.status(404).json({ error: 'Database not found' });
   res.json({ message: 'Database removed' });
 });
@@ -4467,6 +4469,8 @@ app.post('/api/instances', authRequired, async (req, res) => {
 // Decommission a whole instance — removes its agents, databases, and the instance.
 app.delete('/api/instances/:id', authRequired, async (req, res) => {
   try {
+    const own = await pgPool.query('SELECT 1 FROM db_instances WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
+    if (!own.rowCount) return res.status(404).json({ error: 'Instance not found' });
     const dbIds = (await pgPool.query('SELECT id FROM databases WHERE instance_id = $1', [req.params.id])).rows.map((r) => r.id);
     await pgPool.query('DELETE FROM agents WHERE instance_id = $1', [req.params.id]);
     if (dbIds.length) {
@@ -4478,7 +4482,7 @@ app.delete('/api/instances/:id', authRequired, async (req, res) => {
       await pgPool.query('DELETE FROM classified_objects WHERE database_id = ANY($1)', [dbIds]);
       await pgPool.query('DELETE FROM databases WHERE instance_id = $1', [req.params.id]);
     }
-    const { rowCount } = await pgPool.query('DELETE FROM db_instances WHERE id = $1', [req.params.id]);
+    const { rowCount } = await pgPool.query('DELETE FROM db_instances WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
     if (!rowCount) return res.status(404).json({ error: 'Instance not found' });
     res.json({ message: 'Instance decommissioned', databases_removed: dbIds.length });
   } catch (e) {
@@ -4531,7 +4535,7 @@ app.post('/api/agents', authRequired, async (req, res) => {
 
 // Remove an agent (e.g. an offline placeholder, or a decommissioned agent).
 app.delete('/api/agents/:id', authRequired, async (req, res) => {
-  const { rowCount } = await pgPool.query('DELETE FROM agents WHERE id = $1', [req.params.id]);
+  const { rowCount } = await pgPool.query('DELETE FROM agents WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
   if (!rowCount) return res.status(404).json({ error: 'Agent not found' });
   await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'agent.remove', resourceType: 'agent', resourceId: req.params.id, details: {} });
   res.json({ message: 'Agent removed' });
@@ -4688,8 +4692,9 @@ app.get('/api/compliance/masking/bypass', authRequired, async (req, res) => {
          COUNT(cc.id) FILTER (WHERE cc.is_masked) AS masked_cols,
          COUNT(cc.id) FILTER (WHERE cc.sensitivity IN ('high','critical')) AS sensitive_cols
        FROM databases d LEFT JOIN classified_columns cc ON cc.database_id = d.id
-       GROUP BY d.id, d.name ORDER BY d.name`)).rows;
-    const byp = (await pgPool.query('SELECT id, database_id, principal, note FROM masking_bypass ORDER BY principal')).rows;
+       WHERE d.tenant_id = $1
+       GROUP BY d.id, d.name ORDER BY d.name`, [req.user.tenantId])).rows;
+    const byp = (await pgPool.query('SELECT mb.id, mb.database_id, mb.principal, mb.note FROM masking_bypass mb JOIN databases d ON mb.database_id = d.id WHERE d.tenant_id = $1 ORDER BY mb.principal', [req.user.tenantId])).rows;
     res.json(dbs.map(d => ({
       databaseId: d.id, db: d.name, maskedCols: +d.masked_cols, sensitiveCols: +d.sensitive_cols,
       principals: byp.filter(b => b.database_id === d.id).map(b => ({ id: b.id, principal: b.principal, note: b.note })),
@@ -4704,6 +4709,8 @@ app.post('/api/compliance/masking/bypass', authRequired, async (req, res) => {
   const { databaseId, principal, note } = req.body || {};
   if (!databaseId || !principal || !String(principal).trim()) return res.status(400).json({ error: 'databaseId and principal are required' });
   try {
+    const own = await pgPool.query('SELECT 1 FROM databases WHERE id = $1 AND tenant_id = $2', [databaseId, req.user.tenantId]);
+    if (!own.rowCount) return res.status(404).json({ error: 'Database not found' });
     const r = (await pgPool.query(
       `INSERT INTO masking_bypass (database_id, principal, note, created_by) VALUES ($1,$2,$3,$4)
        ON CONFLICT (database_id, principal) DO UPDATE SET note = EXCLUDED.note RETURNING id`,
@@ -4718,7 +4725,7 @@ app.post('/api/compliance/masking/bypass', authRequired, async (req, res) => {
 
 app.delete('/api/compliance/masking/bypass/:id', authRequired, async (req, res) => {
   try {
-    const r = (await pgPool.query('DELETE FROM masking_bypass WHERE id = $1 RETURNING database_id, principal', [req.params.id])).rows[0];
+    const r = (await pgPool.query('DELETE FROM masking_bypass WHERE id = $1 AND database_id IN (SELECT id FROM databases WHERE tenant_id = $2) RETURNING database_id, principal', [req.params.id, req.user.tenantId])).rows[0];
     if (!r) return res.status(404).json({ error: 'Not found' });
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'masking.bypass_revoke', resourceType: 'database', resourceId: r.database_id, details: { principal: r.principal } });
     res.json({ ok: true });
@@ -5339,10 +5346,10 @@ app.post('/api/deception', authRequired, adminOnly, async (req, res) => {
 
 app.delete('/api/deception/:id', authRequired, adminOnly, async (req, res) => {
   try {
-    const d = (await pgPool.query('SELECT * FROM decoys WHERE id=$1', [req.params.id])).rows[0];
+    const d = (await pgPool.query('SELECT * FROM decoys WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId])).rows[0];
     if (!d) return res.status(404).json({ error: 'Decoy not found' });
     if (d.table_created) { try { await dropDecoyTable(d.schema_name, d.table_name); } catch (e) { /* best-effort */ } }
-    await pgPool.query('DELETE FROM decoys WHERE id=$1', [req.params.id]);
+    await pgPool.query('DELETE FROM decoys WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId]);
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'deception.remove', resourceType: 'decoy', resourceId: d.id, details: { table: d.table_name } });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: 'Failed to remove decoy' }); }
@@ -6211,10 +6218,10 @@ app.post('/api/alerts/:id/escalate', authRequired, async (req, res) => {
 app.post('/api/alerts/:id/false-positive', authRequired, async (req, res) => {
   const scope = (req.body && req.body.scope) || 'both'; // principal | object | both | rule
   const reason = (req.body && req.body.reason) || null;
-  const a = (await pgPool.query('SELECT id, rule, principal, object_name FROM alerts WHERE id = $1', [req.params.id])).rows[0];
+  const a = (await pgPool.query('SELECT id, rule, principal, object_name FROM alerts WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
   if (!a) return res.status(404).json({ error: 'Alert not found' });
 
-  await pgPool.query(`UPDATE alerts SET status = 'false_positive', resolved_at = now() WHERE id = $1`, [a.id]);
+  await pgPool.query(`UPDATE alerts SET status = 'false_positive', resolved_at = now() WHERE id = $1 AND tenant_id = $2`, [a.id, req.user.tenantId]);
 
   // Build the suppression scope (NULL = wildcard).
   const supPrincipal = scope === 'principal' || scope === 'both' ? a.principal : null;
@@ -6349,8 +6356,8 @@ async function resolveQuarantine(id, status, res, req) {
   const fromStates = status === 'released' ? ['held', 'killed'] : ['held'];
   const { rows } = await pgPool.query(
     `UPDATE quarantine_sessions SET status = $2, resolved_at = now()
-     WHERE id = $1 AND status = ANY($3) RETURNING *`,
-    [id, status, fromStates]
+     WHERE id = $1 AND status = ANY($3) AND tenant_id = $4 RETURNING *`,
+    [id, status, fromStates, req.user.tenantId]
   );
   if (!rows.length) return res.status(404).json({ error: 'Session not found or not in a resolvable state' });
   const s = rows[0];
@@ -6618,7 +6625,7 @@ app.post('/api/discovery/scan', authRequired, async (req, res) => {
 // Approve a candidate → register it as an instance (+ its first database).
 app.post('/api/discovery/candidates/:id/approve', authRequired, async (req, res) => {
   try {
-    const c = (await pgPool.query('SELECT * FROM discovery_candidates WHERE id = $1', [req.params.id])).rows[0];
+    const c = (await pgPool.query('SELECT * FROM discovery_candidates WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
     if (!c) return res.status(404).json({ error: 'Candidate not found' });
     // Keep engine canonical (lowercase, as agents enroll) so UI-approve and agent-enroll
     // converge on the SAME instance instead of creating a duplicate.
@@ -6654,7 +6661,7 @@ app.post('/api/discovery/candidates/:id/approve', authRequired, async (req, res)
 });
 
 app.post('/api/discovery/candidates/:id/dismiss', authRequired, async (req, res) => {
-  const { rowCount } = await pgPool.query(`UPDATE discovery_candidates SET status = 'dismissed' WHERE id = $1`, [req.params.id]);
+  const { rowCount } = await pgPool.query(`UPDATE discovery_candidates SET status = 'dismissed' WHERE id = $1 AND tenant_id = $2`, [req.params.id, req.user.tenantId]);
   if (!rowCount) return res.status(404).json({ error: 'Candidate not found' });
   res.json({ message: 'Candidate dismissed' });
 });
@@ -6745,8 +6752,8 @@ app.post('/api/policies/:id/status', authRequired, async (req, res) => {
   const status = req.body && req.body.status;
   if (!['enabled', 'monitor', 'disabled'].includes(status)) return res.status(400).json({ error: 'invalid status' });
   const { rows } = await pgPool.query(
-    'UPDATE policies SET status = $2, updated_at = now() WHERE id = $1 RETURNING id, status',
-    [req.params.id, status]
+    'UPDATE policies SET status = $2, updated_at = now() WHERE id = $1 AND tenant_id = $3 RETURNING id, status',
+    [req.params.id, status, req.user.tenantId]
   );
   if (!rows.length) return res.status(404).json({ error: 'Policy not found' });
   await recordPolicyVersion(req.params.id, `Status → ${status}`, req.user.email);
@@ -7835,8 +7842,8 @@ app.delete('/api/policies/exceptions/:id', authRequired, async (req, res) => {
   try {
     const r = (await pgPool.query(
       `UPDATE alert_suppressions SET status = 'revoked', revoked_by = $2, revoked_at = now()
-       WHERE id = $1 AND status = 'active' RETURNING rule, object_name, principal`,
-      [req.params.id, req.user.email])).rows[0];
+       WHERE id = $1 AND status = 'active' AND tenant_id = $3 RETURNING rule, object_name, principal`,
+      [req.params.id, req.user.email, req.user.tenantId])).rows[0];
     if (!r) return res.status(404).json({ error: 'Not found or already revoked' });
     await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'policy.exception_revoke', resourceType: 'policy', resourceId: null, details: { rule: r.rule, object: r.object_name, principal: r.principal } });
     res.json({ ok: true });
@@ -8719,11 +8726,11 @@ app.post('/api/classification/columns/:id/mask', authRequired, async (req, res) 
   // A column already masked at rest is protected — dynamic masking would be redundant
   // double-masking, so we refuse to enable it (server-side guard; the UI also disables the toggle).
   if (masked) {
-    const cur = (await pgPool.query('SELECT masked_at_rest FROM classified_columns WHERE id = $1', [req.params.id])).rows[0];
+    const cur = (await pgPool.query('SELECT masked_at_rest FROM classified_columns WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
     if (!cur) return res.status(404).json({ error: 'Column not found' });
     if (cur.masked_at_rest) return res.status(409).json({ error: 'Column is already masked at rest — dynamic masking not needed' });
   }
-  const { rows } = await pgPool.query('UPDATE classified_columns SET is_masked = $2 WHERE id = $1 RETURNING id, is_masked', [req.params.id, masked]);
+  const { rows } = await pgPool.query('UPDATE classified_columns SET is_masked = $2 WHERE id = $1 AND tenant_id = $3 RETURNING id, is_masked', [req.params.id, masked, req.user.tenantId]);
   if (!rows.length) return res.status(404).json({ error: 'Column not found' });
   res.json(rows[0]);
 });
@@ -9066,14 +9073,14 @@ app.post('/api/report-schedules', authRequired, async (req, res) => {
 });
 app.post('/api/report-schedules/:id/toggle', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
-    `UPDATE report_schedules SET status = CASE WHEN status='on' THEN 'paused' ELSE 'on' END WHERE id = $1 RETURNING id, status`,
-    [req.params.id]
+    `UPDATE report_schedules SET status = CASE WHEN status='on' THEN 'paused' ELSE 'on' END WHERE id = $1 AND tenant_id = $2 RETURNING id, status`,
+    [req.params.id, req.user.tenantId]
   );
   if (!rows.length) return res.status(404).json({ error: 'Schedule not found' });
   res.json(rows[0]);
 });
 app.delete('/api/report-schedules/:id', authRequired, async (req, res) => {
-  const { rowCount } = await pgPool.query('DELETE FROM report_schedules WHERE id = $1', [req.params.id]);
+  const { rowCount } = await pgPool.query('DELETE FROM report_schedules WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
   if (!rowCount) return res.status(404).json({ error: 'Schedule not found' });
   res.json({ message: 'Schedule removed' });
 });
@@ -9400,7 +9407,7 @@ app.post('/api/dsar', authRequired, async (req, res) => {
 });
 
 app.post('/api/dsar/:id/discover', authRequired, async (req, res) => {
-  const r = (await pgPool.query('SELECT * FROM dsar_requests WHERE id = $1', [req.params.id])).rows[0];
+  const r = (await pgPool.query('SELECT * FROM dsar_requests WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
   if (!r) return res.status(404).json({ error: 'not found' });
   const hits = await discoverSubject(r.subject_identifier, r.subject_name);
   const { dbs, cols } = await persistDiscovery(r.id, hits);
@@ -9413,7 +9420,7 @@ app.post('/api/dsar/:id/discover', authRequired, async (req, res) => {
 // erasure here — that is gated behind DBA approval out-of-band; we record fulfilment.
 app.post('/api/dsar/:id/fulfill', authRequired, async (req, res) => {
   const r = (await pgPool.query(
-    `UPDATE dsar_requests SET status = 'fulfilled', fulfilled_at = now() WHERE id = $1 RETURNING *`, [req.params.id]
+    `UPDATE dsar_requests SET status = 'fulfilled', fulfilled_at = now() WHERE id = $1 AND tenant_id = $2 RETURNING *`, [req.params.id, req.user.tenantId]
   )).rows[0];
   if (!r) return res.status(404).json({ error: 'not found' });
   const hits = (await pgPool.query('SELECT database_name, schema_name, object_name, columns, tags, row_count FROM dsar_data_hits WHERE dsar_id = $1', [req.params.id])).rows;
@@ -10420,8 +10427,8 @@ app.post('/api/users/:id/resend-invite', authRequired, adminOnly, async (req, re
   const { rows } = await pgPool.query(
     `SELECT u.id, u.email, u.full_name, u.role, u.auth_provider, t.name AS tenant_name
      FROM users u JOIN tenants t ON u.tenant_id = t.id
-     WHERE u.id = $1 AND u.status = 'invited'`,
-    [req.params.id]
+     WHERE u.id = $1 AND u.status = 'invited' AND u.tenant_id = $2`,
+    [req.params.id, req.user.tenantId]
   );
   if (!rows.length) return res.status(404).json({ error: 'No pending invitation for this user' });
   const u = rows[0];
@@ -10454,7 +10461,8 @@ app.post('/api/users/:id/resend-invite', authRequired, adminOnly, async (req, re
 });
 
 app.delete('/api/users/:id', authRequired, adminOnly, async (req, res) => {
-  const { rowCount } = await pgPool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
+  if (req.params.id === req.user.userId) return res.status(400).json({ error: 'You cannot delete your own account' });
+  const { rowCount } = await pgPool.query('DELETE FROM users WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
   if (rowCount === 0) return res.status(404).json({ error: 'User not found' });
   res.json({ message: 'User deleted' });
 });
