@@ -673,7 +673,7 @@ The tender also mandates a full **ITIL®-4 Service Management** suite: Service C
 | G20 | **Mainframe DAM (Db2 z/OS, IMS)** | Kernel-level capture on z/OS — critical for large Indian banks. | Guardium (deep), Oracle | 🔵 |
 | G21 | **Agentless managed-DBaaS capture** | Consume cloud-native audit streams (AWS Database Activity Streams, Azure SQL Audit→Event Hubs, Atlas webhooks) where agents can't run. | Guardium External S-TAP, Imperva Sonar, AVDF | 🟢 *(already in arch — Audit Push Consumer)* |
 | G22 | **eBPF / in-memory container sensors** | Capture inside Kubernetes/OpenShift without breaking container purity. | Imperva (eBPF/UProbes), Trellix (memory sensor) | 🟢 *(already in arch — Host Agent)* |
-| G23 | **SQL-grammar allowlist / Trusted Path firewall** | Train approved SQL patterns + approved connection paths (IP/user/app); block deviations (positive security model). | Oracle DB Firewall, Imperva | 🟡 |
+| G23 | **SQL-grammar allowlist / Trusted Path firewall** | Train approved SQL patterns + approved connection paths (IP/user/app); block deviations (positive security model). | Oracle DB Firewall, Imperva | 🟢 **BUILT (beta) — Phase 1**: per-DB learn of normalized SQL grammars → deviation *alerting* + governed review (approve/block); inline *blocking* = Phase 2 (agent-side). See BUILD-LOG "SQL Grammar Allow-list". |
 
 ### F. Operations & Economics
 | # | Feature | What it is | Who has it | Verdict |
@@ -694,7 +694,7 @@ The tender also mandates a full **ITIL®-4 Service Management** suite: Service C
 
 ### Scope summary — what I'm folding in
 - **🟢 GA additions** (commit now): posture scorecards (G7), entitlement review/recertification (G11), separation-of-duties hardening (G13), before/after value capture (G15), agentless DBaaS capture (G21, already designed), eBPF container sensors (G22, already designed), immutable archive economics (G25), IaC/GitOps deploy (G26), **DPDPA + RBI packs (G29)**, threat-intel enrichment (G32) — plus the already-locked BYOK (G16/D8).
-- **🟡 Fast-follow** (next after GA): LLM activity monitoring (G1), DSPM agentless discovery (G5), service-account identity resolution (G9), SQL-grammar allowlist firewall (G23), SIEM cost optimization (G24), audit-volume insights (G28), ML/EDM classifiers (G30), framework scorecards (G31), explicit NoSQL/warehouse coverage (G19).
+- **🟡 Fast-follow** (next after GA): LLM activity monitoring (G1), DSPM agentless discovery (G5), service-account identity resolution (G9), ~~SQL-grammar allowlist firewall (G23)~~ **→ Phase 1 BUILT (beta)**, SIEM cost optimization (G24), audit-volume insights (G28), ML/EDM classifiers (G30), framework scorecards (G31), explicit NoSQL/warehouse coverage (G19).
 - **🔵 Post-GA** (differentiators): AI firewall/prompt protection (G2), vector-DB/RAG (G3), attack-path analysis (G6), JIT access workflows (G10), proxy-enforced RLS/CLS (G12), tokenization/FPE (G14), unstructured/file discovery (G18), mainframe z/OS (G20).
 - **⚪ Watch**: shadow-AI discovery (G4), data lineage (G8), post-quantum (G17), managed/MDR (G27).
 

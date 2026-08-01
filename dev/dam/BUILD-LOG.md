@@ -2614,3 +2614,37 @@ Central library now ~92 checks: mssql 36 · mysql 22 · oracle 17 · postgresql 
 All new queries ran with ZERO errors (authored queries validated correct against real instances).
 
 Central library now 120 checks: mssql 36 · mysql 36 · postgresql 31 · oracle 17.
+
+### SQL Grammar Allow-list — positive-security deviation detection (2026-08-01)
+
+Competitive gap **G23** (Oracle DB Firewall / Imperva positive-security model), Phase 1 shipped to
+beta. Default-deny per database: learn the normal set of SQL *grammars*, then flag any statement
+whose grammar isn't on the list.
+
+- **Fingerprint** (`sqlNormalizePattern`/`sqlFingerprint`, main.js): canonicalize each statement —
+  single-quoted strings, numbers, hex, bind params → `?`; `IN (?,?,?)` collapsed; comments +
+  whitespace stripped; identifiers (double-quote/backtick) preserved. sha1 of the pattern is the
+  fingerprint, now written to the long-declared-but-unused `events.sql_hash` at the ingest choke
+  point (`chInsertEvents`) — so it covers every engine + capture mode with no agent change.
+- **Schema**: `sql_allowlist_profiles` (per-db `learning|enforcing|off` + window/action/severity),
+  `sql_allowlist` (learned/approved/blocked grammars, unique per db+principal+fp),
+  `sql_allowlist_deviations` (dedup'd review queue).
+- **Engine** (`runAllowlistEngine`, own 90s-lag watermark, 8s tick): learning mode accumulates
+  grammars; enforcing mode flags grammars not in the learned/approved set → dedup'd deviation
+  (first sighting raises a `SQL Grammar Allowlist` alert). Auto-promotes learning→enforcing at
+  window end. Blocked entries always deviate (denylist-within).
+- **API**: `/api/allowlist/{profiles,entries,deviations}` — start-learn, promote, approve/block a
+  grammar, manual-add, approve (→bless) / dismiss a deviation. Reads tenant-scoped; mutations
+  admin-only + audited.
+- **UI**: new **Grammar Allow-list** tab in Policies — profiles table with mode controls, per-db
+  learned grammars (block/approve/manual-add), and deviation triage. Flag `sql-allowlist`
+  roadmap→beta (enterprise).
+- **Validated E2E on azuretest** (synthetic traffic, all 10 steps PASS): 3 statements differing only
+  in literals collapsed to ONE learned grammar (`select id, email from customers where region = ?`,
+  hits=3); after promotion, a matching statement with a new literal (`'LATAM'`) was correctly
+  allowed while `SELECT * FROM salaries WHERE 1=1` (→ `select * from salaries where ?=?`) was flagged
+  as a deviation + raised a high alert; approve moved it into the allow-list as `approved`.
+
+**Phase 2 (deferred)**: agent-side inline real-time BLOCKING — port the fingerprint to Go in the
+inline proxy so deviations are blocked, not just alerted (the `action: block` profile field already
+carries the intent).
