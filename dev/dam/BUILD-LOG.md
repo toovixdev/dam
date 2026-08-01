@@ -2602,3 +2602,15 @@ All 12 ran live on the Azure SQL VM (9 pass / 3 fail) — real findings incl. a 
 for CIS SQL Server (the rest are OS-file / manual-attestation items).
 
 Central library now ~92 checks: mssql 36 · mysql 22 · oracle 17 · postgresql 17.
+
+### VA — PostgreSQL + MySQL pushed toward automatable CIS core (2026-08-01)
+
+- PostgreSQL 17 → 31 (+14: log destination/truncate/checkpoints/lock-waits/min-error/temp-files,
+  ssl ciphers + prefer-server, track activities/counts, data checksums, pgaudit preload,
+  replication + bypassrls role attrs). Live on dev PG 16: 13 pass / 18 fail, 0 error.
+- MySQL 22 → 36 (+14: repl-slave/client/event/create-tablespace/show-db privileges, secure_file_priv,
+  general_log off, auth plugin, binlog/redo/undo encryption, password history/reuse/require-current).
+  Live on dev MySQL 8: 25 pass / 11 fail, 0 error.
+All new queries ran with ZERO errors (authored queries validated correct against real instances).
+
+Central library now 120 checks: mssql 36 · mysql 36 · postgresql 31 · oracle 17.
