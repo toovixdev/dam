@@ -2573,3 +2573,20 @@ and export the library for backup/versioning.
 
 VA content platform COMPLETE: 1 central store/pull/fallback · 2 authoring · 3 Ed25519 signing ·
 4 applicability · 5 bulk import/export. (Growing to full CIS coverage is now content-loading.)
+
+### VA content platform — engine coverage expansion (2026-08-01)
+
+Grew the central check library across all engines, each populated + LIVE-VALIDATED via a real agent:
+- SQL Server: +7 via import (CIS SQL Server expansion) → 24, validated on the Azure SQL VM (caught the
+  IaaS-extension CONTROL SERVER grant + sa-not-renamed).
+- PostgreSQL: a real PG agent against dev client-postgres registered the 15 built-ins → 17 total;
+  scanned live (6 pass / 11 fail on a fresh PG 16).
+- Oracle: a real Oracle agent against a local oracle-free 23c registered the 14 built-ins → 17 total;
+  scanned live (6 pass / 11 fail).
+- MySQL already 22 (dev-registered + imported).
+Central library now 80 checks across mysql/postgresql/mssql/oracle. One-off validation containers
+(dam-va-pg, dam-va-ora, va-oracle) removed; registered checks persist in va_check_defs.
+
+Note (post-security-hardening): 'dev-agent-enroll-token' now maps to no tenant, so the dev MySQL
+agent + one-off validators use real per-tenant tokens. Operator login is MFA-protected; admins drive
+imports from the Content Packs UI.
