@@ -182,13 +182,14 @@ function SsoModal({ provider, azure, okta, google, onClose, onSaved }) {
   const info = { azure, okta, google }[provider];
   const isOkta = provider === 'okta';
   const isGoogle = provider === 'google';
-  const isTenantCfg = isOkta || isGoogle; // credentials configured in the GUI (not env)
+  const isAzure = provider === 'azure';
+  const isTenantCfg = isOkta || isGoogle || isAzure; // credentials configured in the GUI (not env)
   const providerName = isGoogle ? 'Google' : isOkta ? 'Okta' : 'Azure AD';
   // Credential form (per-tenant, GUI-configured). Prefill from status (secret never returned).
-  const [cfgForm, setCfgForm] = useState({ domain: '', clientId: '', clientSecret: '' });
+  const [cfgForm, setCfgForm] = useState({ domain: '', clientId: '', clientSecret: '', directoryId: '' });
   const [savingCfg, setSavingCfg] = useState(false);
   useEffect(() => {
-    if (isTenantCfg && info) setCfgForm({ domain: info.domain || '', clientId: info.clientId || '', clientSecret: '' });
+    if (isTenantCfg && info) setCfgForm({ domain: info.domain || '', clientId: info.clientId || '', clientSecret: '', directoryId: info.directoryId || info.tenantId || '' });
   }, [isTenantCfg, info]);
   if (!provider) return null;
   const meta = SSO_META[provider];
@@ -213,10 +214,12 @@ function SsoModal({ provider, azure, okta, google, onClose, onSaved }) {
 
   async function saveConfig() {
     if (isOkta && !cfgForm.domain.trim()) return toast('Okta domain is required', 'err');
+    if (isAzure && !cfgForm.directoryId.trim()) return toast('Directory (tenant) ID is required', 'err');
     if (!cfgForm.clientId.trim()) return toast('Client ID is required', 'err');
     setSavingCfg(true);
     const body = { clientId: cfgForm.clientId.trim(), clientSecret: cfgForm.clientSecret };
     if (isOkta) body.domain = cfgForm.domain.trim();
+    if (isAzure) body.directoryId = cfgForm.directoryId.trim();
     const res = await apiPut(`/integrations/sso/${provider}/config`, body);
     setSavingCfg(false);
     if (res?.ok) { toast(`${providerName} credentials saved`, 'ok'); setCfgForm((f) => ({ ...f, clientSecret: '' })); onSaved && onSaved(); }
@@ -249,14 +252,19 @@ function SsoModal({ provider, azure, okta, google, onClose, onSaved }) {
       {isTenantCfg && (
         <div style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px', marginBottom: 14 }}>
           <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 2 }}>{providerName} credentials</div>
-          <div className="muted" style={{ fontSize: 11.5, marginBottom: 12 }}>{isGoogle ? 'From your Google Cloud OAuth client (Web application). Stored securely for this workspace.' : 'From your Okta app (OIDC Web Application). Stored securely for this workspace.'}</div>
+          <div className="muted" style={{ fontSize: 11.5, marginBottom: 12 }}>{isGoogle ? 'From your Google Cloud OAuth client (Web application). Stored securely for this workspace.' : isAzure ? 'From your Azure AD (Entra ID) app registration. Each workspace brings its own app + directory. Stored securely.' : 'From your Okta app (OIDC Web Application). Stored securely for this workspace.'}</div>
           {isOkta && (
             <div className="form-field"><label>Okta domain</label>
               <input style={field} value={cfgForm.domain} onChange={(e) => setCfgForm((f) => ({ ...f, domain: e.target.value }))} placeholder="dev-12345.okta.com" disabled={!isAdmin} />
             </div>
           )}
-          <div className="form-field"><label>Client ID</label>
-            <input style={field} value={cfgForm.clientId} onChange={(e) => setCfgForm((f) => ({ ...f, clientId: e.target.value }))} placeholder={isGoogle ? '…apps.googleusercontent.com' : '0oa...'} disabled={!isAdmin} />
+          {isAzure && (
+            <div className="form-field"><label>Directory (tenant) ID</label>
+              <input style={field} value={cfgForm.directoryId} onChange={(e) => setCfgForm((f) => ({ ...f, directoryId: e.target.value }))} placeholder="00000000-0000-0000-0000-000000000000" disabled={!isAdmin} />
+            </div>
+          )}
+          <div className="form-field"><label>{isAzure ? 'Application (client) ID' : 'Client ID'}</label>
+            <input style={field} value={cfgForm.clientId} onChange={(e) => setCfgForm((f) => ({ ...f, clientId: e.target.value }))} placeholder={isGoogle ? '…apps.googleusercontent.com' : isAzure ? '00000000-0000-0000-0000-000000000000' : '0oa...'} disabled={!isAdmin} />
           </div>
           <div className="form-field"><label>Client secret</label>
             <input style={field} type="password" value={cfgForm.clientSecret} onChange={(e) => setCfgForm((f) => ({ ...f, clientSecret: e.target.value }))} placeholder={info?.secretConfigured ? '•••••••• (unchanged — leave blank to keep)' : `Paste your ${providerName} client secret`} disabled={!isAdmin} />

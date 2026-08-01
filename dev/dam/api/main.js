@@ -1455,7 +1455,7 @@ async function runAdminMigration() {
         ('sql-allowlist','SQL Grammar Allowlist','Roadmap — learned SQL allowlist + deviation blocking','roadmap', false, false, true,  false, false, NULL, NULL, 12),
         ('deception','Deception Console','Honeypot tables, decoy records, trap detection','beta',        false, false, true,  false, false, '100% by Q4 2026', '0.01%', 13),
         ('jit-access','JIT Access','Just-in-time privileged access, auto-expiry, approvals','alpha',     false, false, true,  false, false, NULL, NULL, 14),
-        ('sso','SSO (OIDC)','Azure AD & Okta · per-tenant IdP on the roadmap','beta',                    false, true,  true,  false, true,  NULL, NULL, 15),
+        ('sso','SSO (OIDC)','Per-tenant OIDC — Azure AD, Okta & Google, each workspace brings its own IdP','ga',                    false, true,  true,  false, true,  NULL, NULL, 15),
         ('onprem','On-Prem / Air-Gapped','Customer-managed Docker/K8s · air-gap & offline licensing on the roadmap','beta', false, false, true,  false, true,  NULL, NULL, 16)`);
       console.log('[Admin] Seeded feature_flags catalog (16 features)');
     }
@@ -1472,6 +1472,9 @@ async function runAdminMigration() {
     await client.query(
       `UPDATE feature_flags SET stage='ga', description=$1 WHERE key='va-scanner' AND stage <> 'ga'`,
       ['Read-only CIS database security assessment — config, privilege, auth & TLS checks']);
+    await client.query(
+      `UPDATE feature_flags SET stage='ga', description=$1 WHERE key='sso' AND stage <> 'ga'`,
+      ['Per-tenant OIDC — Azure AD, Okta & Google, each workspace brings its own IdP']);
 
     // Resource quotas: plan-tier defaults + per-tenant overrides (isolated admin tables).
     // NULL limit = unlimited / custom (per-contract). storage in GB.
@@ -1883,10 +1886,28 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
 // Okta: credentials are configured PER TENANT in the GUI (Integrations → Okta),
 // stored in the integration row's `config`; the platform env is only a fallback.
 const SSO_PROVIDERS = {
-  azure: { name: 'Azure AD', type: 'sso_azure', ready: () => !!(AZURE_CLIENT_ID && AZURE_TENANT_ID) },
+  azure: { name: 'Azure AD', type: 'sso_azure', tenantConfigurable: true, ready: (cfg) => !!azureEffective(cfg) },
   okta: { name: 'Okta', type: 'sso_okta', tenantConfigurable: true, ready: (cfg) => !!oktaEffective(cfg) },
   google: { name: 'Google', type: 'sso_google', tenantConfigurable: true, ready: (cfg) => !!googleEffective(cfg) },
 };
+// Merge a tenant's stored Azure AD config with the env fallback → the effective client. Each
+// tenant brings its OWN Azure app registration + directory (bring-your-own-IdP).
+function azureEffective(cfg) {
+  cfg = decIntegrationConfig('sso_azure', cfg || {});
+  const clientId = (cfg.client_id || AZURE_CLIENT_ID || '').trim();
+  const clientSecret = cfg.client_secret || AZURE_CLIENT_SECRET || '';
+  const directory = (cfg.azure_tenant_id || AZURE_TENANT_ID || '').trim(); // the customer's Azure AD tenant/directory id
+  if (!clientId || !clientSecret || !directory) return null;
+  return {
+    clientId, clientSecret, directory,
+    authority: `https://login.microsoftonline.com/${directory}`,
+    redirectUri: cfg.redirect_uri || AZURE_REDIRECT_URI,
+  };
+}
+async function azureConfigFor(tenantId) {
+  const row = (await pgPool.query("SELECT config FROM integrations WHERE tenant_id = $1 AND type = 'sso_azure'", [tenantId])).rows[0];
+  return azureEffective(row && row.config);
+}
 // Merge a tenant's stored Google config with the env fallback → the effective client.
 function googleEffective(cfg) {
   cfg = decIntegrationConfig('sso_google', cfg || {});
@@ -2175,12 +2196,9 @@ const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
 
 // Step 1: Redirect user to Azure AD login
 app.get('/auth/azure', async (req, res) => {
-  if (!AZURE_CLIENT_ID || !AZURE_TENANT_ID) {
-    return res.status(500).json({ error: 'Azure AD not configured' });
-  }
-  // Workspace-first: the login page passes ?tenant=<slug>. Resolve it and confirm
-  // this tenant actually has Azure SSO enabled, then carry the slug through `state`
-  // so the callback routes the user back to THIS workspace (not `tenants LIMIT 1`).
+  // Workspace-first: the login page passes ?tenant=<slug>. Resolve it and use THIS tenant's
+  // own Azure app registration (bring-your-own-IdP); carry the slug through `state` so the
+  // callback routes the user back to this workspace (not `tenants LIMIT 1`).
   const slug = String(req.query.tenant || '').toLowerCase().trim();
   if (!slug) return res.redirect('/login?error=' + encodeURIComponent('Choose your workspace before using SSO.'));
   const t = (await pgPool.query('SELECT id, slug FROM tenants WHERE slug = $1', [slug])).rows[0];
@@ -2188,11 +2206,13 @@ app.get('/auth/azure', async (req, res) => {
   const providers = await ssoProvidersFor(t.id);
   if (!providers.some((p) => p.key === 'azure'))
     return res.redirect('/login?error=' + encodeURIComponent('Azure AD sign-in is not enabled for this workspace.'));
+  const cfg = await azureConfigFor(t.id);
+  if (!cfg) return res.redirect('/login?error=' + encodeURIComponent('Azure AD sign-in is not configured for this workspace.'));
   const state = Buffer.from(JSON.stringify({ ts: Date.now(), slug: t.slug })).toString('base64');
   const params = new URLSearchParams({
-    client_id: AZURE_CLIENT_ID,
+    client_id: cfg.clientId,
     response_type: 'code',
-    redirect_uri: AZURE_REDIRECT_URI,
+    redirect_uri: cfg.redirectUri,
     response_mode: 'query',
     scope: 'openid profile email',
     state: state,
@@ -2201,7 +2221,7 @@ app.get('/auth/azure', async (req, res) => {
   // sign-in" action uses this so the Microsoft login is always shown instead of
   // silently completing via an existing session.
   if (['select_account', 'login', 'consent'].includes(req.query.prompt)) params.set('prompt', req.query.prompt);
-  res.redirect(`${AZURE_AUTHORITY}/oauth2/v2.0/authorize?${params.toString()}`);
+  res.redirect(`${cfg.authority}/oauth2/v2.0/authorize?${params.toString()}`);
 });
 
 // Step 2: Handle callback from Azure AD
@@ -2219,17 +2239,24 @@ app.get('/auth/callback', async (req, res) => {
   // Recover the workspace the sign-in started from (embedded in `state`).
   let stateSlug = '';
   try { stateSlug = JSON.parse(Buffer.from(String(req.query.state || ''), 'base64').toString()).slug || ''; } catch { /* legacy/no state */ }
+  if (!stateSlug) return res.redirect('/login?error=' + encodeURIComponent('Choose your workspace before using SSO.'));
 
   try {
-    // Exchange authorization code for tokens
-    const tokenRes = await fetch(`${AZURE_AUTHORITY}/oauth2/v2.0/token`, {
+    // Resolve the workspace + its own Azure app registration (bring-your-own-IdP) BEFORE the
+    // token exchange, so we use THIS tenant's client credentials + directory authority.
+    const tRow = (await pgPool.query('SELECT id FROM tenants WHERE slug = $1', [stateSlug])).rows[0];
+    if (!tRow) return res.redirect('/login?error=' + encodeURIComponent('That workspace no longer exists.'));
+    const cfg = await azureConfigFor(tRow.id);
+    if (!cfg) return res.redirect('/login?error=' + encodeURIComponent('Azure AD sign-in is not configured for this workspace.'));
+    // Exchange authorization code for tokens (this tenant's Azure app + directory)
+    const tokenRes = await fetch(`${cfg.authority}/oauth2/v2.0/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
-        client_id: AZURE_CLIENT_ID,
-        client_secret: AZURE_CLIENT_SECRET,
+        client_id: cfg.clientId,
+        client_secret: cfg.clientSecret,
         code: code,
-        redirect_uri: AZURE_REDIRECT_URI,
+        redirect_uri: cfg.redirectUri,
         grant_type: 'authorization_code',
         scope: 'openid profile email',
       }).toString(),
@@ -2254,13 +2281,8 @@ app.get('/auth/callback', async (req, res) => {
       return res.redirect('/login?error=No+email+in+Azure+AD+token');
     }
 
-    // Resolve the workspace this sign-in was for (from `state`). The user must exist
-    // IN that specific tenant — an Azure identity valid for one workspace must not be
-    // silently accepted into another.
-    if (!stateSlug) return res.redirect('/login?error=' + encodeURIComponent('Choose your workspace before using SSO.'));
-    const tRow = (await pgPool.query('SELECT id FROM tenants WHERE slug = $1', [stateSlug])).rows[0];
-    if (!tRow) return res.redirect('/login?error=' + encodeURIComponent('That workspace no longer exists.'));
-
+    // The user must exist IN this specific tenant — an Azure identity valid for one workspace
+    // must not be silently accepted into another. (tRow resolved above, before the exchange.)
     // Find the user within THIS tenant (scoped by tenant_id, not global-by-email).
     let { rows } = await pgPool.query(
       `SELECT u.id, u.email, u.full_name, u.role, u.status, u.mfa_enabled, t.id as tenant_id, t.name as tenant_name
@@ -5887,6 +5909,52 @@ app.put('/api/integrations/sso/google/config', authRequired, adminOnly, async (r
   } catch (err) { console.error('[SSO] google config save failed:', err.message); res.status(500).json({ error: 'Failed to save Google config' }); }
 });
 
+// Per-tenant Azure AD credentials (GUI-configured, bring-your-own app registration). The client
+// secret is write-only: a blank secret keeps the stored one, so the masked form re-saves cleanly.
+app.put('/api/integrations/sso/azure/config', authRequired, adminOnly, async (req, res) => {
+  const clientId = String(req.body?.clientId || '').trim();
+  const directory = String(req.body?.directoryId || req.body?.azureTenantId || '').trim();
+  const secretIn = req.body?.clientSecret;
+  const redirectUri = String(req.body?.redirectUri || '').trim() || AZURE_REDIRECT_URI;
+  if (!clientId || !directory) return res.status(400).json({ error: 'Azure application (client) ID and directory (tenant) ID are required' });
+  try {
+    const existing = (await pgPool.query("SELECT id, config FROM integrations WHERE tenant_id = $1 AND type = 'sso_azure'", [req.user.tenantId])).rows[0];
+    const prev = (existing && existing.config) || {};
+    const clientSecret = (secretIn !== undefined && secretIn !== null && String(secretIn).trim() !== '') ? String(secretIn).trim() : (prev.client_secret || '');
+    const config = { client_id: clientId, client_secret: clientSecret, azure_tenant_id: directory, redirect_uri: redirectUri };
+    const encCfg = encIntegrationConfig('sso_azure', config);
+    if (existing) await pgPool.query('UPDATE integrations SET config = $2 WHERE id = $1', [existing.id, encCfg]);
+    else await pgPool.query("INSERT INTO integrations (tenant_id, name, type, config, status) VALUES ($1,'Azure AD SSO','sso_azure',$2,'inactive')", [req.user.tenantId, encCfg]);
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'sso.azure.configure', resourceType: 'integration', resourceId: null, details: { directory, hasSecret: !!clientSecret } });
+    res.json({ ok: true });
+  } catch (err) { console.error('[SSO] azure config save failed:', err.message); res.status(500).json({ error: 'Failed to save Azure AD config' }); }
+});
+// Azure AD SSO status (secret masked, never returned).
+app.get('/api/integrations/sso/azure', authRequired, async (req, res) => {
+  try {
+    const s = (await pgPool.query("SELECT COUNT(*) AS n, MAX(last_login_at) AS last FROM users WHERE auth_provider = 'azure_ad' AND tenant_id = $1", [req.user.tenantId])).rows[0];
+    const row = (await pgPool.query("SELECT config, status FROM integrations WHERE tenant_id = $1 AND type = 'sso_azure'", [req.user.tenantId])).rows[0];
+    const cfg = decIntegrationConfig('sso_azure', (row && row.config) || {});
+    const eff = azureEffective((row && row.config) || {});
+    const slug = (await pgPool.query('SELECT slug FROM tenants WHERE id = $1', [req.user.tenantId])).rows[0]?.slug || null;
+    res.json({
+      configured: !!eff,
+      secretConfigured: !!(cfg.client_secret || AZURE_CLIENT_SECRET),
+      enabledForTenant: row ? row.status === 'active' : false,
+      slug,
+      clientId: cfg.client_id || AZURE_CLIENT_ID || '',
+      directoryId: cfg.azure_tenant_id || AZURE_TENANT_ID || '',
+      tenantId: cfg.azure_tenant_id || AZURE_TENANT_ID || '', // alias (Azure directory id) for the status display
+      authority: (cfg.azure_tenant_id || AZURE_TENANT_ID) ? `https://login.microsoftonline.com/${cfg.azure_tenant_id || AZURE_TENANT_ID}` : null,
+      redirectUri: cfg.redirect_uri || AZURE_REDIRECT_URI,
+      tenantConfigurable: true,
+      signInUrl: '/auth/azure',
+      usersProvisioned: parseInt(s.n) || 0,
+      lastLogin: s.last,
+    });
+  } catch (err) { console.error('[Integrations] azure status failed:', err.message); res.status(500).json({ error: 'Failed to load Azure AD status' }); }
+});
+
 app.get('/api/integrations/sso/google', authRequired, async (req, res) => {
   try {
     const s = (await pgPool.query("SELECT COUNT(*) AS n, MAX(last_login_at) AS last FROM users WHERE auth_provider = 'google' AND tenant_id = $1", [req.user.tenantId])).rows[0];
@@ -5957,31 +6025,7 @@ app.post('/api/integrations/:type/test', authRequired, async (req, res) => {
   }
 });
 
-// Azure AD / Entra ID SSO — read-only status of the (env-configured) connection
-// + live usage. The auth flow itself (/auth/azure, /auth/callback) is unchanged.
-app.get('/api/integrations/sso/azure', authRequired, async (req, res) => {
-  try {
-    const s = (await pgPool.query("SELECT COUNT(*) AS n, MAX(last_login_at) AS last FROM users WHERE auth_provider = 'azure_ad' AND tenant_id = $1", [req.user.tenantId])).rows[0];
-    const enabledRow = (await pgPool.query("SELECT status FROM integrations WHERE tenant_id = $1 AND type = 'sso_azure'", [req.user.tenantId])).rows[0];
-    const slug = (await pgPool.query('SELECT slug FROM tenants WHERE id = $1', [req.user.tenantId])).rows[0]?.slug || null;
-    res.json({
-      configured: !!(AZURE_CLIENT_ID && AZURE_TENANT_ID),
-      secretConfigured: !!AZURE_CLIENT_SECRET,
-      enabledForTenant: enabledRow ? enabledRow.status === 'active' : false, // per-tenant: shows the button on THIS workspace's login
-      slug, // this tenant's workspace slug (SSO sign-in must be scoped to it)
-      tenantId: AZURE_TENANT_ID || null,
-      clientId: AZURE_CLIENT_ID || null, // OAuth client_id is public, not a secret
-      redirectUri: AZURE_REDIRECT_URI,
-      authority: AZURE_AUTHORITY,
-      signInUrl: '/auth/azure',
-      usersProvisioned: parseInt(s.n) || 0,
-      lastLogin: s.last,
-    });
-  } catch (err) {
-    console.error('[Integrations] azure status failed:', err.message);
-    res.status(500).json({ error: 'Failed to load Azure AD status' });
-  }
-});
+// (Azure AD SSO status is served by the per-tenant GET /api/integrations/sso/azure above.)
 
 // Okta SSO — read-only status of the (env-configured) connection + live usage,
 // mirroring the Azure AD card. A full sign-in flow needs OKTA_* env credentials.
@@ -6877,7 +6921,7 @@ const tenantCrypto = makeTenantCrypto({ pgPool, secrets, vault: VAULT_ADDR ? { f
 // not-yet-encrypted rows, so it's cheap and safe to leave in.
 // Which fields inside integrations.config are secrets, per integration type. Alert
 // connectors declare it themselves (fields[].secret); the rest are listed here.
-const INTEGRATION_SECRET_FIELDS = { email: ['pass'], sso_okta: ['client_secret'], sso_google: ['client_secret'], llm: ['api_key'] };
+const INTEGRATION_SECRET_FIELDS = { email: ['pass'], sso_okta: ['client_secret'], sso_google: ['client_secret'], sso_azure: ['client_secret'], llm: ['api_key'] };
 function integrationSecretFields(type) {
   if (INTEGRATION_SECRET_FIELDS[type]) return INTEGRATION_SECRET_FIELDS[type];
   const c = CONNECTORS[type];
