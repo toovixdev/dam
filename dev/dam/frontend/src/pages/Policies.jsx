@@ -52,6 +52,7 @@ export default function Policies() {
     { id: 'anomaly', label: 'Anomaly', count: rows.filter(p => p.rule_type === 'anomaly').length },
     { id: 'monitor', label: 'Monitor', count: monitor },
     { id: 'exceptions', label: allowlistOn ? 'Exceptions' : 'Exceptions 🔒' },
+    { id: 'allowlist', label: allowlistOn ? 'Grammar Allow-list' : 'Grammar Allow-list 🔒' },
   ];
   const filtered = rows.filter(p =>
     tab === 'all' ? true
@@ -112,6 +113,8 @@ export default function Policies() {
 
       {tab === 'exceptions' ? (
         allowlistOn ? <ExceptionsPanel rules={rows} /> : <UpsellPanel name="SQL grammar allow-list / governed exceptions" inline />
+      ) : tab === 'allowlist' ? (
+        allowlistOn ? <GrammarAllowlistPanel /> : <UpsellPanel name="SQL grammar allow-list — positive-security deviation detection" inline />
       ) : (
         <div className="card">
           <div className="card-header">
@@ -434,5 +437,253 @@ function AddException({ rules, databases, onClose, onCreated }) {
         <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Adding…' : 'Add exception'}</button>
       </div>
     </>
+  );
+}
+
+// ── SQL Grammar Allow-list (positive security) ────────────────────────────────
+function ModeBadge({ mode }) {
+  const m = { learning: { cls: 'blue', label: 'learning' }, enforcing: { cls: 'green', label: 'enforcing' }, off: { cls: '', label: 'off' } }[mode] || { cls: '', label: mode };
+  return <span className={`badge ${m.cls} dot`}>{m.label}</span>;
+}
+
+function GrammarAllowlistPanel() {
+  const { data, refetch } = useApiData('/allowlist/profiles', { poll: 0 });
+  const profiles = Array.isArray(data?.profiles) ? data.profiles : [];
+  const available = Array.isArray(data?.available) ? data.available : [];
+  const [sel, setSel] = useState(null);      // selected database_name (detail)
+  const [adding, setAdding] = useState(false);
+  const fmtD = (d) => d ? fmtTs(d, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+
+  const setMode = async (p, mode) => {
+    const res = await apiPut(`/allowlist/profiles/${p.id}`, { mode });
+    if (res?.ok) { toast(`${p.database_name} → ${mode}`, 'ok'); refetch(); } else toast(res?.data?.error || 'Failed', 'err');
+  };
+  const del = async (p) => {
+    if (!window.confirm(`Remove the grammar allow-list for ${p.database_name}? Learned grammars and deviation history are discarded.`)) return;
+    const res = await apiDelete(`/allowlist/profiles/${p.id}`);
+    if (res?.ok) { toast('Allow-list removed', 'ok'); if (sel === p.database_name) setSel(null); refetch(); } else toast('Failed', 'err');
+  };
+
+  return (
+    <>
+      <div style={{ background: 'var(--info-soft)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', marginBottom: 14, fontSize: 12.5, lineHeight: 1.5, display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+        <div><b>Positive security (default-deny).</b> Put a database in <b>learning</b> to capture its normal set of SQL query
+          <i> grammars</i> (statements with literals collapsed to <span className="mono">?</span>). Promote to <b>enforcing</b> and any
+          statement whose grammar isn't on the list is a <b>deviation</b> — raised as an alert and queued for review. Inline blocking is on the roadmap.</div>
+        <button className="btn-primary" style={{ flex: 'none' }} disabled={!available.length} onClick={() => setAdding(true)}
+          title={available.length ? '' : 'All monitored databases already have a profile'}>＋ Start learning</button>
+      </div>
+
+      <div className="card"><div className="card-body no-pad">
+        <table className="data-table" style={{ width: '100%' }}>
+          <thead><tr>
+            <th>Database</th><th>Mode</th><th style={{ textAlign: 'right' }}>Allowed</th>
+            <th style={{ textAlign: 'right' }}>Blocked</th><th style={{ textAlign: 'right' }}>Open deviations</th>
+            <th>Window</th><th style={{ width: 260 }} />
+          </tr></thead>
+          <tbody>
+            {profiles.length === 0 && <tr><td colSpan={7} className="muted" style={{ padding: 18, textAlign: 'center' }}>No databases under a grammar allow-list yet. Start learning on one to begin.</td></tr>}
+            {profiles.map((p) => (
+              <tr key={p.id} style={{ cursor: 'pointer', background: sel === p.database_name ? 'var(--surface-2)' : undefined }} onClick={() => setSel(sel === p.database_name ? null : p.database_name)}>
+                <td><b>{p.database_name}</b></td>
+                <td><ModeBadge mode={p.mode} /></td>
+                <td style={{ textAlign: 'right' }}>{p.allowed_count}</td>
+                <td style={{ textAlign: 'right' }}>{p.blocked_count ? <span style={{ color: 'var(--danger)' }}>{p.blocked_count}</span> : '—'}</td>
+                <td style={{ textAlign: 'right' }}>{p.open_deviations ? <span style={{ color: 'var(--amber)', fontWeight: 600 }}>{p.open_deviations}</span> : '—'}</td>
+                <td className="muted" style={{ fontSize: 11.5 }}>{p.mode === 'learning' ? (p.learn_until ? `auto-enforce ${fmtD(p.learn_until)}` : 'manual') : `since ${fmtD(p.learn_started_at)}`}</td>
+                <td style={{ textAlign: 'right' }} onClick={(e) => e.stopPropagation()}>
+                  <div style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                    {p.mode !== 'enforcing' && <button className="btn-secondary" style={btnXs} onClick={() => setMode(p, 'enforcing')}>Enforce</button>}
+                    {p.mode !== 'learning' && <button className="btn-secondary" style={btnXs} onClick={() => setMode(p, 'learning')}>Re-learn</button>}
+                    {p.mode !== 'off' && <button className="btn-secondary" style={btnXs} onClick={() => setMode(p, 'off')}>Off</button>}
+                    <button className="btn-secondary" style={{ ...btnXs, color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={() => del(p)}>Delete</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div></div>
+
+      {sel && <AllowlistDetail database={sel} onChanged={refetch} />}
+
+      <Modal open={adding} onClose={() => setAdding(false)} title="Start learning a database" width={520}>
+        <StartLearning available={available} onClose={() => setAdding(false)} onCreated={() => { setAdding(false); refetch(); }} />
+      </Modal>
+    </>
+  );
+}
+
+const btnXs = { padding: '3px 9px', fontSize: 11 };
+
+function StartLearning({ available, onClose, onCreated }) {
+  const [databaseName, setDatabaseName] = useState(available[0] || '');
+  const [learnDays, setLearnDays] = useState(7);
+  const [severity, setSeverity] = useState('high');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!databaseName) return toast('Pick a database', 'err');
+    setBusy(true);
+    const res = await apiPost('/allowlist/profiles', { databaseName, learnDays: Number(learnDays) || 0, severity });
+    setBusy(false);
+    if (res?.ok) { toast(`Learning started on ${databaseName}`, 'ok'); onCreated(); } else toast(res?.data?.error || 'Failed', 'err');
+  };
+  return (
+    <>
+      <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>
+        DAM will watch this database's traffic and record every distinct query grammar it sees. When the window ends it flips to
+        <b> enforcing</b> automatically (or promote it yourself anytime). Choose a window that covers a full business cycle.
+      </p>
+      <div className="form-field"><label>Database</label>
+        <select value={databaseName} onChange={(e) => setDatabaseName(e.target.value)}>
+          {available.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </div>
+      <div className="form-row">
+        <div className="form-field"><label>Learning window</label>
+          <select value={learnDays} onChange={(e) => setLearnDays(e.target.value)}>
+            <option value={0}>Manual (promote myself)</option>
+            <option value={1}>1 day</option>
+            <option value={7}>7 days</option>
+            <option value={14}>14 days</option>
+            <option value={30}>30 days</option>
+          </select>
+        </div>
+        <div className="form-field"><label>Deviation severity</label>
+          <select value={severity} onChange={(e) => setSeverity(e.target.value)}>
+            {['low', 'medium', 'high', 'critical'].map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+        <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Starting…' : 'Start learning'}</button>
+      </div>
+    </>
+  );
+}
+
+function AllowlistDetail({ database, onChanged }) {
+  const [sub, setSub] = useState('learned');
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <div className="card-header" style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <span className="card-title">{database}</span>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className={sub === 'learned' ? 'btn-primary' : 'btn-secondary'} style={{ padding: '4px 12px', fontSize: 12 }} onClick={() => setSub('learned')}>Learned grammars</button>
+          <button className={sub === 'deviations' ? 'btn-primary' : 'btn-secondary'} style={{ padding: '4px 12px', fontSize: 12 }} onClick={() => setSub('deviations')}>Deviations</button>
+        </div>
+      </div>
+      <div className="card-body no-pad">
+        {sub === 'learned' ? <LearnedGrammars database={database} onChanged={onChanged} /> : <DeviationList database={database} onChanged={onChanged} />}
+      </div>
+    </div>
+  );
+}
+
+const stateBadgeCls = { approved: 'green', learned: 'blue', blocked: '' };
+function LearnedGrammars({ database, onChanged }) {
+  const { data, refetch } = useApiData(`/allowlist/entries?database=${encodeURIComponent(database)}`, { poll: 0 });
+  const [adding, setAdding] = useState(false);
+  const rows = Array.isArray(data) ? data : [];
+  const act = async (fn) => { const res = await fn(); if (res?.ok) { toast('Updated', 'ok'); refetch(); onChanged?.(); } else toast(res?.data?.error || 'Failed', 'err'); };
+  return (
+    <>
+      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--line)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span className="muted" style={{ fontSize: 12 }}>{rows.length} grammar(s). Blocked shapes always deviate; approve to bless a shape permanently.</span>
+        <button className="btn-secondary" style={btnXs} onClick={() => setAdding(true)}>＋ Add grammar</button>
+      </div>
+      <table className="data-table" style={{ width: '100%', tableLayout: 'fixed' }}>
+        <thead><tr>
+          <th style={{ width: '48%' }}>Grammar</th><th style={{ width: '10%' }}>Op</th><th style={{ width: '15%' }}>Principal</th>
+          <th style={{ width: '9%', textAlign: 'right' }}>Hits</th><th style={{ width: '9%' }}>State</th><th style={{ width: '9%' }} />
+        </tr></thead>
+        <tbody>
+          {rows.length === 0 && <tr><td colSpan={6} className="muted" style={{ padding: 16, textAlign: 'center' }}>No grammars learned yet.</td></tr>}
+          {rows.map((e) => {
+            const ell = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+            return (
+              <tr key={e.id} style={{ opacity: e.state === 'blocked' ? 0.7 : 1 }}>
+                <td className="mono" style={{ fontSize: 11.5, ...ell }} title={e.pattern}>{e.pattern}</td>
+                <td><span className="badge">{e.operation || '—'}</span></td>
+                <td className="muted" style={{ fontSize: 11.5, ...ell }} title={e.principal}>{e.principal || '—'}</td>
+                <td style={{ textAlign: 'right' }}>{Number(e.hit_count || 0).toLocaleString()}</td>
+                <td><span className={`badge ${stateBadgeCls[e.state] || ''}`}>{e.state}</span></td>
+                <td style={{ textAlign: 'right' }}>
+                  {e.state === 'blocked'
+                    ? <button className="btn-secondary" style={btnXs} onClick={() => act(() => apiPost(`/allowlist/entries/${e.id}/state`, { state: 'approved' }))}>Unblock</button>
+                    : <button className="btn-secondary" style={{ ...btnXs, color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={() => act(() => apiPost(`/allowlist/entries/${e.id}/state`, { state: 'blocked' }))}>Block</button>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <Modal open={adding} onClose={() => setAdding(false)} title="Add an allowed grammar" width={560}>
+        <AddGrammar database={database} onClose={() => setAdding(false)} onCreated={() => { setAdding(false); refetch(); onChanged?.(); }} />
+      </Modal>
+    </>
+  );
+}
+
+function AddGrammar({ database, onClose, onCreated }) {
+  const [sql, setSql] = useState('');
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (!sql.trim()) return toast('Paste a sample statement', 'err');
+    setBusy(true);
+    const res = await apiPost('/allowlist/entries', { databaseName: database, sql: sql.trim() });
+    setBusy(false);
+    if (res?.ok) { toast('Grammar approved', 'ok'); onCreated(); } else toast(res?.data?.error || 'Failed', 'err');
+  };
+  return (
+    <>
+      <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 12px' }}>
+        Paste a representative statement. DAM normalizes it to its grammar (literals → <span className="mono">?</span>) and adds that shape as <b>approved</b> — every parameterization of it is then allowed.
+      </p>
+      <div className="form-field"><label>Sample SQL for {database}</label>
+        <textarea value={sql} onChange={(e) => setSql(e.target.value)} rows={4} style={{ width: '100%', fontFamily: 'var(--font-mono, monospace)', fontSize: 12.5 }} placeholder="SELECT id, email FROM customers WHERE region = 'APAC'" />
+      </div>
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', paddingTop: 12, borderTop: '1px solid var(--line)' }}>
+        <button className="btn-secondary" onClick={onClose}>Cancel</button>
+        <button className="btn-primary" disabled={busy} onClick={save}>{busy ? 'Adding…' : 'Approve grammar'}</button>
+      </div>
+    </>
+  );
+}
+
+function DeviationList({ database, onChanged }) {
+  const { data, refetch } = useApiData(`/allowlist/deviations?database=${encodeURIComponent(database)}&status=open`, { poll: 0 });
+  const rows = Array.isArray(data) ? data : [];
+  const fmtD = (d) => d ? fmtTs(d, getTimezone(), { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+  const act = async (fn) => { const res = await fn(); if (res?.ok) { toast('Done', 'ok'); refetch(); onChanged?.(); } else toast(res?.data?.error || 'Failed', 'err'); };
+  return (
+    <table className="data-table" style={{ width: '100%', tableLayout: 'fixed' }}>
+      <thead><tr>
+        <th style={{ width: '42%' }}>Deviating grammar</th><th style={{ width: '9%' }}>Op</th><th style={{ width: '14%' }}>Principal</th>
+        <th style={{ width: '8%', textAlign: 'right' }}>Hits</th><th style={{ width: '12%' }}>Last seen</th><th style={{ width: '15%' }} />
+      </tr></thead>
+      <tbody>
+        {rows.length === 0 && <tr><td colSpan={6} className="muted" style={{ padding: 16, textAlign: 'center' }}>No open deviations. Everything this database ran matched the allow-list.</td></tr>}
+        {rows.map((d) => {
+          const ell = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
+          return (
+            <tr key={d.id}>
+              <td className="mono" style={{ fontSize: 11.5, ...ell }} title={d.sample_sql || d.pattern}>{d.pattern}</td>
+              <td><span className="badge">{d.operation || '—'}</span></td>
+              <td className="muted" style={{ fontSize: 11.5, ...ell }} title={d.principal}>{d.principal || '—'}</td>
+              <td style={{ textAlign: 'right' }}>{Number(d.hit_count || 0).toLocaleString()}</td>
+              <td className="muted" style={{ fontSize: 11.5 }}>{fmtD(d.last_seen)}</td>
+              <td style={{ textAlign: 'right' }}>
+                <div style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button className="btn-secondary" style={{ ...btnXs, color: 'var(--green)', borderColor: 'var(--green)' }} onClick={() => act(() => apiPost(`/allowlist/deviations/${d.id}/approve`))}>Approve</button>
+                  <button className="btn-secondary" style={btnXs} onClick={() => act(() => apiPost(`/allowlist/deviations/${d.id}/dismiss`))}>Dismiss</button>
+                </div>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }

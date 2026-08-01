@@ -674,6 +674,61 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE alert_suppressions ADD COLUMN IF NOT EXISTS revoked_at TIMESTAMPTZ`);
     await client.query(`UPDATE alert_suppressions SET status = 'active' WHERE status IS NULL`);
 
+    // ── SQL Grammar Allow-list (positive-security / default-deny per database) ──
+    // A profile per (tenant, database): a learning window captures the normal set of query
+    // GRAMMARS, then enforcing mode flags any statement whose shape isn't in the learned set.
+    await client.query(`CREATE TABLE IF NOT EXISTS sql_allowlist_profiles (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     UUID REFERENCES tenants(id),
+      database_name VARCHAR(160) NOT NULL,
+      mode          VARCHAR(16) NOT NULL DEFAULT 'learning',  -- learning | enforcing | off
+      action        VARCHAR(16) NOT NULL DEFAULT 'alert',     -- alert | block (block = Phase 2, agent-inline)
+      severity      VARCHAR(16) NOT NULL DEFAULT 'high',       -- deviation alert severity
+      learn_started_at TIMESTAMPTZ DEFAULT now(),
+      learn_until   TIMESTAMPTZ,                               -- NULL = promote manually; else auto-flip to enforcing
+      created_by    VARCHAR(200),
+      created_at    TIMESTAMPTZ DEFAULT now(),
+      updated_at    TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (tenant_id, database_name)
+    )`);
+    // The learned/approved grammar entries. A statement is allowed in enforcing mode iff a
+    // non-blocked entry with its fingerprint exists for the database.
+    await client.query(`CREATE TABLE IF NOT EXISTS sql_allowlist (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     UUID REFERENCES tenants(id),
+      database_name VARCHAR(160) NOT NULL,
+      principal     VARCHAR(160),                 -- which identity was seen running it (metadata)
+      fingerprint   VARCHAR(64) NOT NULL,         -- sha1 of the normalized grammar
+      pattern       TEXT,                         -- the human-readable normalized signature
+      operation     VARCHAR(24),
+      state         VARCHAR(16) NOT NULL DEFAULT 'learned',  -- learned | approved | blocked
+      source        VARCHAR(16) NOT NULL DEFAULT 'auto',     -- auto | manual
+      hit_count     BIGINT DEFAULT 0,
+      first_seen    TIMESTAMPTZ DEFAULT now(),
+      last_seen     TIMESTAMPTZ DEFAULT now(),
+      added_by      VARCHAR(200),
+      UNIQUE (tenant_id, database_name, principal, fingerprint)
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_sql_allowlist_lookup ON sql_allowlist (tenant_id, database_name, fingerprint)`);
+    // Deviations seen in enforcing mode — a dedup'd review queue (one row per new shape per
+    // db+principal). First sighting raises an alert; repeats just bump the counter.
+    await client.query(`CREATE TABLE IF NOT EXISTS sql_allowlist_deviations (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     UUID REFERENCES tenants(id),
+      database_name VARCHAR(160) NOT NULL,
+      principal     VARCHAR(160),
+      fingerprint   VARCHAR(64) NOT NULL,
+      pattern       TEXT,
+      operation     VARCHAR(24),
+      sample_sql    TEXT,
+      hit_count     BIGINT DEFAULT 1,
+      status        VARCHAR(16) NOT NULL DEFAULT 'open',      -- open | approved | dismissed
+      alert_id      UUID,
+      first_seen    TIMESTAMPTZ DEFAULT now(),
+      last_seen     TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (tenant_id, database_name, principal, fingerprint)
+    )`);
+
     // Analyst notes / disposition timeline for an alert (who ack'd/resolved, with notes).
     // A separate table so the core `alerts` table is untouched.
     await client.query(`CREATE TABLE IF NOT EXISTS alert_notes (
@@ -1452,7 +1507,7 @@ async function runAdminMigration() {
         ('llm-monitoring','LLM Monitoring','Roadmap — monitor DB queries from AI/LLM apps','roadmap', false, false, true,  false, false, NULL, NULL, 9),
         ('dsar','DSAR Module','Data subject access/erasure requests, GDPR/DPDPA','ga',                   false, false, true,  false, false, NULL, NULL, 10),
         ('byok','BYOK / Customer KMS','Customer-managed encryption key — HashiCorp Vault, AWS KMS, Azure Key Vault, GCP Cloud KMS','ga', false, false, true,  false, false, NULL, NULL, 11),
-        ('sql-allowlist','SQL Grammar Allowlist','Roadmap — learned SQL allowlist + deviation blocking','roadmap', false, false, true,  false, false, NULL, NULL, 12),
+        ('sql-allowlist','SQL Grammar Allowlist','Positive-security allow-list — learns each database''s normal SQL grammars, then flags deviations (inline blocking on the roadmap)','beta', false, false, true,  false, false, NULL, NULL, 12),
         ('deception','Deception Console','Honeypot tables, decoy records, trap detection','beta',        false, false, true,  false, false, '100% by Q4 2026', '0.01%', 13),
         ('jit-access','JIT Access','Just-in-time privileged access, auto-expiry, approvals','alpha',     false, false, true,  false, false, NULL, NULL, 14),
         ('sso','SSO (OIDC)','Per-tenant OIDC — Azure AD, Okta & Google, each workspace brings its own IdP','ga',                    false, true,  true,  false, true,  NULL, NULL, 15),
@@ -1475,6 +1530,9 @@ async function runAdminMigration() {
     await client.query(
       `UPDATE feature_flags SET stage='ga', description=$1 WHERE key='sso' AND stage <> 'ga'`,
       ['Per-tenant OIDC — Azure AD, Okta & Google, each workspace brings its own IdP']);
+    await client.query(
+      `UPDATE feature_flags SET stage='beta', description=$1 WHERE key='sql-allowlist' AND stage = 'roadmap'`,
+      ["Positive-security allow-list — learns each database's normal SQL grammars, then flags deviations (inline blocking on the roadmap)"]);
 
     // Resource quotas: plan-tier defaults + per-tenant overrides (isolated admin tables).
     // NULL limit = unlimited / custom (per-contract). storage in GB.
@@ -7897,6 +7955,171 @@ app.delete('/api/policies/exceptions/:id', authRequired, async (req, res) => {
   }
 });
 
+// ── SQL Grammar Allow-list (positive-security) ─────────────────────────────
+// Per-database profiles + learned grammars + deviation review queue. Reads are tenant-scoped;
+// mutations are admin-only (this is a blocking-policy surface). See runAllowlistEngine().
+app.get('/api/allowlist/profiles', authRequired, async (req, res) => {
+  try {
+    const profiles = (await pgPool.query(
+      `SELECT p.id, p.database_name, p.mode, p.action, p.severity, p.learn_started_at, p.learn_until, p.created_by, p.created_at, p.updated_at,
+        (SELECT count(*) FROM sql_allowlist a WHERE a.tenant_id=p.tenant_id AND a.database_name=p.database_name AND a.state IN ('learned','approved'))::int AS allowed_count,
+        (SELECT count(*) FROM sql_allowlist a WHERE a.tenant_id=p.tenant_id AND a.database_name=p.database_name AND a.state='blocked')::int AS blocked_count,
+        (SELECT count(*) FROM sql_allowlist_deviations d WHERE d.tenant_id=p.tenant_id AND d.database_name=p.database_name AND d.status='open')::int AS open_deviations
+       FROM sql_allowlist_profiles p WHERE p.tenant_id=$1 ORDER BY p.database_name`, [req.user.tenantId])).rows;
+    const covered = new Set(profiles.map((p) => p.database_name));
+    // Monitored databases without a profile yet — the UI offers to start learning on these.
+    const available = (await pgPool.query('SELECT name FROM databases WHERE tenant_id=$1 ORDER BY name', [req.user.tenantId]))
+      .rows.map((d) => d.name).filter((n) => n && !covered.has(n));
+    res.json({ profiles, available });
+  } catch (err) { console.error('[Allowlist] profiles failed:', err.message); res.status(500).json({ error: 'Failed to load profiles' }); }
+});
+
+// Start learning on a database (or re-arm an existing profile back to learning).
+app.post('/api/allowlist/profiles', authRequired, adminOnly, async (req, res) => {
+  const databaseName = String(req.body?.databaseName || '').trim();
+  const severity = ['low', 'medium', 'high', 'critical'].includes(req.body?.severity) ? req.body.severity : 'high';
+  const learnDays = parseInt(req.body?.learnDays); // NULL/0 → manual promotion
+  if (!databaseName) return res.status(400).json({ error: 'databaseName is required' });
+  try {
+    const until = learnDays > 0 ? `now() + make_interval(days => ${learnDays})` : 'NULL';
+    const r = (await pgPool.query(
+      `INSERT INTO sql_allowlist_profiles (tenant_id, database_name, mode, severity, learn_started_at, learn_until, created_by)
+       VALUES ($1,$2,'learning',$3, now(), ${until}, $4)
+       ON CONFLICT (tenant_id, database_name)
+       DO UPDATE SET mode='learning', severity=$3, learn_started_at=now(), learn_until=${until}, updated_at=now()
+       RETURNING id`, [req.user.tenantId, databaseName, severity, req.user.email])).rows[0];
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'allowlist.learn_start', resourceType: 'database', resourceId: null, details: { database: databaseName, learnDays: learnDays > 0 ? learnDays : null, severity } });
+    res.status(201).json({ ok: true, id: r.id });
+  } catch (err) { console.error('[Allowlist] create profile failed:', err.message); res.status(500).json({ error: 'Failed to create profile' }); }
+});
+
+// Change mode (promote to enforcing / re-learn / off), action (alert|block), severity, or window.
+app.put('/api/allowlist/profiles/:id', authRequired, adminOnly, async (req, res) => {
+  const sets = [], vals = []; let i = 1;
+  if (['learning', 'enforcing', 'off'].includes(req.body?.mode)) { sets.push(`mode=$${i++}`); vals.push(req.body.mode); }
+  if (['alert', 'block'].includes(req.body?.action)) { sets.push(`action=$${i++}`); vals.push(req.body.action); }
+  if (['low', 'medium', 'high', 'critical'].includes(req.body?.severity)) { sets.push(`severity=$${i++}`); vals.push(req.body.severity); }
+  if (req.body?.clearWindow) { sets.push(`learn_until=NULL`); }
+  if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
+  vals.push(req.params.id, req.user.tenantId);
+  try {
+    const r = (await pgPool.query(
+      `UPDATE sql_allowlist_profiles SET ${sets.join(', ')}, updated_at=now() WHERE id=$${i++} AND tenant_id=$${i} RETURNING database_name, mode, action, severity`,
+      vals)).rows[0];
+    if (!r) return res.status(404).json({ error: 'Profile not found' });
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'allowlist.profile_update', resourceType: 'database', resourceId: null, details: { database: r.database_name, mode: r.mode, action: r.action, severity: r.severity } });
+    res.json({ ok: true, ...r });
+  } catch (err) { console.error('[Allowlist] update profile failed:', err.message); res.status(500).json({ error: 'Failed to update profile' }); }
+});
+
+// Remove a profile entirely, along with its learned grammars + deviations for that database.
+app.delete('/api/allowlist/profiles/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const p = (await pgPool.query('SELECT database_name FROM sql_allowlist_profiles WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId])).rows[0];
+    if (!p) return res.status(404).json({ error: 'Profile not found' });
+    await pgPool.query('DELETE FROM sql_allowlist WHERE tenant_id=$1 AND database_name=$2', [req.user.tenantId, p.database_name]);
+    await pgPool.query('DELETE FROM sql_allowlist_deviations WHERE tenant_id=$1 AND database_name=$2', [req.user.tenantId, p.database_name]);
+    await pgPool.query('DELETE FROM sql_allowlist_profiles WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId]);
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'allowlist.profile_delete', resourceType: 'database', resourceId: null, details: { database: p.database_name } });
+    res.json({ ok: true });
+  } catch (err) { console.error('[Allowlist] delete profile failed:', err.message); res.status(500).json({ error: 'Failed to delete profile' }); }
+});
+
+// Learned/approved/blocked grammars for a database.
+app.get('/api/allowlist/entries', authRequired, async (req, res) => {
+  const db = String(req.query.database || '').trim();
+  if (!db) return res.status(400).json({ error: 'database query param required' });
+  try {
+    const rows = (await pgPool.query(
+      `SELECT id, principal, fingerprint, pattern, operation, state, source, hit_count, first_seen, last_seen, added_by
+       FROM sql_allowlist WHERE tenant_id=$1 AND database_name=$2
+       ORDER BY (state='blocked') DESC, hit_count DESC, last_seen DESC LIMIT 1000`, [req.user.tenantId, db])).rows;
+    res.json(rows);
+  } catch (err) { console.error('[Allowlist] entries failed:', err.message); res.status(500).json({ error: 'Failed to load entries' }); }
+});
+
+// Manually bless a query grammar (from a sample statement). state=approved, source=manual.
+app.post('/api/allowlist/entries', authRequired, adminOnly, async (req, res) => {
+  const db = String(req.body?.databaseName || '').trim();
+  const sql = String(req.body?.sql || '').trim();
+  const principal = String(req.body?.principal || '').trim() || 'manual';
+  if (!db || !sql) return res.status(400).json({ error: 'databaseName and sql are required' });
+  const pattern = sqlNormalizePattern(sql);
+  const fp = sqlFingerprint(sql);
+  if (!fp) return res.status(400).json({ error: 'Could not derive a grammar from that statement' });
+  const op = (sql.match(/^\s*(\w+)/) || [, 'OTHER'])[1].toUpperCase();
+  try {
+    await pgPool.query(
+      `INSERT INTO sql_allowlist (tenant_id, database_name, principal, fingerprint, pattern, operation, state, source, hit_count, added_by)
+       VALUES ($1,$2,$3,$4,$5,$6,'approved','manual',0,$7)
+       ON CONFLICT (tenant_id, database_name, principal, fingerprint)
+       DO UPDATE SET state='approved', pattern=$5, added_by=$7`, [req.user.tenantId, db, principal, fp, pattern, op, req.user.email]);
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'allowlist.entry_add', resourceType: 'database', resourceId: null, details: { database: db, fingerprint: fp, pattern: pattern.slice(0, 120) } });
+    res.status(201).json({ ok: true, fingerprint: fp, pattern });
+  } catch (err) { console.error('[Allowlist] add entry failed:', err.message); res.status(500).json({ error: 'Failed to add entry' }); }
+});
+
+// Govern an entry: approve (bless), block (force-deviate), or delete.
+app.post('/api/allowlist/entries/:id/state', authRequired, adminOnly, async (req, res) => {
+  const state = req.body?.state;
+  if (!['learned', 'approved', 'blocked'].includes(state)) return res.status(400).json({ error: 'state must be learned|approved|blocked' });
+  try {
+    const r = (await pgPool.query(`UPDATE sql_allowlist SET state=$1 WHERE id=$2 AND tenant_id=$3 RETURNING database_name, fingerprint`, [state, req.params.id, req.user.tenantId])).rows[0];
+    if (!r) return res.status(404).json({ error: 'Entry not found' });
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'allowlist.entry_state', resourceType: 'database', resourceId: null, details: { database: r.database_name, fingerprint: r.fingerprint, state } });
+    res.json({ ok: true });
+  } catch (err) { console.error('[Allowlist] entry state failed:', err.message); res.status(500).json({ error: 'Failed to update entry' }); }
+});
+app.delete('/api/allowlist/entries/:id', authRequired, adminOnly, async (req, res) => {
+  try {
+    const r = (await pgPool.query('DELETE FROM sql_allowlist WHERE id=$1 AND tenant_id=$2 RETURNING database_name', [req.params.id, req.user.tenantId])).rows[0];
+    if (!r) return res.status(404).json({ error: 'Entry not found' });
+    res.json({ ok: true });
+  } catch (err) { console.error('[Allowlist] delete entry failed:', err.message); res.status(500).json({ error: 'Failed to delete entry' }); }
+});
+
+// Deviation review queue.
+app.get('/api/allowlist/deviations', authRequired, async (req, res) => {
+  const db = String(req.query.database || '').trim();
+  const status = ['open', 'approved', 'dismissed'].includes(req.query.status) ? req.query.status : 'open';
+  try {
+    const rows = (await pgPool.query(
+      `SELECT id, database_name, principal, fingerprint, pattern, operation, sample_sql, hit_count, status, alert_id, first_seen, last_seen
+       FROM sql_allowlist_deviations WHERE tenant_id=$1 AND status=$2 ${db ? 'AND database_name=$3' : ''}
+       ORDER BY last_seen DESC LIMIT 500`, db ? [req.user.tenantId, status, db] : [req.user.tenantId, status])).rows;
+    res.json(rows);
+  } catch (err) { console.error('[Allowlist] deviations failed:', err.message); res.status(500).json({ error: 'Failed to load deviations' }); }
+});
+
+// Approve a deviation → promote its grammar into the allow-list (approved) and close the row.
+app.post('/api/allowlist/deviations/:id/approve', authRequired, adminOnly, async (req, res) => {
+  try {
+    const d = (await pgPool.query(`SELECT * FROM sql_allowlist_deviations WHERE id=$1 AND tenant_id=$2 AND status='open'`, [req.params.id, req.user.tenantId])).rows[0];
+    if (!d) return res.status(404).json({ error: 'Deviation not found or already handled' });
+    await pgPool.query(
+      `INSERT INTO sql_allowlist (tenant_id, database_name, principal, fingerprint, pattern, operation, state, source, hit_count, added_by, last_seen)
+       VALUES ($1,$2,$3,$4,$5,$6,'approved','manual',$7,$8, now())
+       ON CONFLICT (tenant_id, database_name, principal, fingerprint)
+       DO UPDATE SET state='approved', added_by=$8`,
+      [req.user.tenantId, d.database_name, d.principal, d.fingerprint, d.pattern, d.operation, d.hit_count, req.user.email]);
+    await pgPool.query(`UPDATE sql_allowlist_deviations SET status='approved' WHERE id=$1`, [d.id]);
+    if (d.alert_id) await pgPool.query(`UPDATE alerts SET status='resolved' WHERE id=$1 AND tenant_id=$2`, [d.alert_id, req.user.tenantId]);
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'allowlist.deviation_approve', resourceType: 'database', resourceId: null, details: { database: d.database_name, fingerprint: d.fingerprint, pattern: (d.pattern || '').slice(0, 120) } });
+    res.json({ ok: true });
+  } catch (err) { console.error('[Allowlist] approve deviation failed:', err.message); res.status(500).json({ error: 'Failed to approve deviation' }); }
+});
+
+// Dismiss a deviation → won't re-alert (stays out of the allow-list; accepted noise).
+app.post('/api/allowlist/deviations/:id/dismiss', authRequired, adminOnly, async (req, res) => {
+  try {
+    const d = (await pgPool.query(`UPDATE sql_allowlist_deviations SET status='dismissed' WHERE id=$1 AND tenant_id=$2 AND status='open' RETURNING database_name, fingerprint, alert_id`, [req.params.id, req.user.tenantId])).rows[0];
+    if (!d) return res.status(404).json({ error: 'Deviation not found or already handled' });
+    if (d.alert_id) await pgPool.query(`UPDATE alerts SET status='dismissed' WHERE id=$1 AND tenant_id=$2`, [d.alert_id, req.user.tenantId]);
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'allowlist.deviation_dismiss', resourceType: 'database', resourceId: null, details: { database: d.database_name, fingerprint: d.fingerprint } });
+    res.json({ ok: true });
+  } catch (err) { console.error('[Allowlist] dismiss deviation failed:', err.message); res.status(500).json({ error: 'Failed to dismiss deviation' }); }
+});
+
 // ── Classification ────────────────────────────────────────
 // Object-level inventory (tables / collections).
 app.get('/api/classification/objects', authRequired, async (req, res) => {
@@ -10535,11 +10758,42 @@ async function chInsertEvent(ev) {
 // unknown value can never split the data set into silently-invisible rows.
 const EVENT_CLASSES = new Set(['statement', 'auth', 'audit_config']);
 
+// ── SQL grammar fingerprinting (positive-security allow-list) ─────────────────
+// Normalize a statement to its canonical GRAMMAR — literals collapse to `?`, whitespace
+// and comments are stripped — so every parameterization of the same query shape maps to one
+// signature. This is the unit the allow-list learns and the deviation engine compares against.
+//   SELECT * FROM orders WHERE id = 42 AND s = 'paid'  →  select * from orders where id = ? and s = ?
+// Only SINGLE-quoted strings are collapsed (string literals in every dialect); double-quote /
+// backtick are left alone (they're identifiers in ANSI/PG/Oracle & MySQL), so table names survive.
+function sqlNormalizePattern(sql) {
+  if (!sql) return '';
+  let s = String(sql);
+  s = s.replace(/\/\*[\s\S]*?\*\//g, ' ')   // /* block comments */
+       .replace(/--[^\n]*/g, ' ')            // -- line comments
+       .replace(/#[^\n]*/g, ' ');            // # line comments (MySQL)
+  s = s.toLowerCase();
+  s = s.replace(/'(?:[^']|'')*'/g, '?');     // string literals
+  s = s.replace(/\b0x[0-9a-f]+\b/g, '?');    // hex literals
+  s = s.replace(/\b\d+(?:\.\d+)?\b/g, '?');  // numeric literals
+  s = s.replace(/[$:@]\w+/g, '?');           // bind params  $1  :name  @p
+  s = s.replace(/\?(?:\s*,\s*\?)+/g, '?');   // collapse IN (?, ?, ?) list → ?
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.slice(0, 400);
+}
+// The signature stored on the event + keyed in the allow-list. Empty when there's no statement
+// text (LOGIN/heartbeat/agentless-without-sql), so those never pollute the learned grammar.
+function sqlFingerprint(sql) {
+  const p = sqlNormalizePattern(sql);
+  return p ? crypto.createHash('sha1').update(p).digest('hex') : '';
+}
+
 async function chInsertEvents(tenantId, evs) {
   if (!evs.length) return;
   const db = await eventsDbFor(tenantId);
-  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, event_class, sql_text, anomaly_score, tags, agent_type, source_host) FORMAT JSONEachRow`;
-  const body = evs.map((e) => JSON.stringify({ ...e, tenant_id: tenantId })).join('\n');
+  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, event_class, sql_text, sql_hash, anomaly_score, tags, agent_type, source_host) FORMAT JSONEachRow`;
+  // sql_hash carries the grammar fingerprint (declared in the schema but historically unwritten) so
+  // the allow-list engine + UI can group by query shape ClickHouse-side, not just recompute in JS.
+  const body = evs.map((e) => JSON.stringify({ ...e, tenant_id: tenantId, sql_hash: e.sql_hash || sqlFingerprint(e.sql_text) })).join('\n');
   await fetch(`${CH_URL}/?${CH_AUTH}&query=${encodeURIComponent(q)}`, { method: 'POST', body });
 }
 
@@ -11415,6 +11669,115 @@ async function runDetectionEngine() {
 }
 setInterval(runDetectionEngine, 7000);
 setTimeout(runDetectionEngine, 9000);
+
+// ── SQL Grammar Allow-list engine (positive security) ─────────────────────────
+// Two jobs on one incremental pass over recent events, per active per-database profile:
+//   learning  → accumulate the normal set of query GRAMMARS into sql_allowlist
+//   enforcing → any statement whose grammar isn't in the learned/approved set is a DEVIATION
+//               → dedup'd into the review queue; first sighting raises an alert
+// (Real-time BLOCKING of deviations is Phase 2 — the agent-inline path; here we alert.)
+let allowlistWatermark = null;
+async function runAllowlistEngine() {
+  try {
+    const profs = (await pgPool.query(
+      `SELECT id, tenant_id, database_name, mode, action, severity, learn_until
+       FROM sql_allowlist_profiles WHERE mode IN ('learning','enforcing')`)).rows;
+    if (!profs.length) return;
+    // Auto-promote learning → enforcing once the window elapses (NULL learn_until = manual).
+    for (const p of profs) {
+      if (p.mode === 'learning' && p.learn_until && new Date(p.learn_until) <= new Date()) {
+        await pgPool.query(`UPDATE sql_allowlist_profiles SET mode='enforcing', updated_at=now() WHERE id=$1 AND mode='learning'`, [p.id]);
+        p.mode = 'enforcing';
+      }
+    }
+    const hi = (await chQuery(`SELECT toString(now() - INTERVAL 90 SECOND)`, 'TabSeparated')).trim();
+    if (!allowlistWatermark) allowlistWatermark = (await chQuery(`SELECT toString(now() - INTERVAL 12 MINUTE)`, 'TabSeparated')).trim();
+    const lo = allowlistWatermark;
+    if (!hi || hi <= lo) return;
+
+    const byTenant = new Map();
+    for (const p of profs) { if (!byTenant.has(p.tenant_id)) byTenant.set(p.tenant_id, new Map()); byTenant.get(p.tenant_id).set(p.database_name, p); }
+
+    for (const [tenantId, dbMap] of byTenant) {
+      const evDb = await eventsDbFor(tenantId);
+      const dbNames = [...dbMap.keys()];
+      const inList = dbNames.map((d) => `'${chEsc(d)}'`).join(',');
+      let evs;
+      try {
+        evs = await chQuery(`SELECT principal, database_name, operation, sql_text, sql_hash
+                             FROM ${evDb}.events
+                             WHERE tenant_id = '${chEsc(tenantId)}' AND timestamp > '${chEsc(lo)}' AND timestamp <= '${chEsc(hi)}'
+                               AND event_class = 'statement' AND sql_text != '' AND database_name IN (${inList})
+                             ORDER BY timestamp LIMIT 3000`);
+      } catch (e) { continue; }
+      if (!Array.isArray(evs) || !evs.length) continue;
+
+      // Preload allowed/blocked fingerprint sets per enforcing db (learned + approved = allowed).
+      const enforcingDbs = dbNames.filter((d) => dbMap.get(d).mode === 'enforcing');
+      const allowSet = new Map(); const blockSet = new Map();
+      if (enforcingDbs.length) {
+        const rows = (await pgPool.query(
+          `SELECT database_name, fingerprint, state FROM sql_allowlist WHERE tenant_id=$1 AND database_name = ANY($2)`,
+          [tenantId, enforcingDbs])).rows;
+        for (const r of rows) {
+          const tgt = r.state === 'blocked' ? blockSet : allowSet;
+          if (!tgt.has(r.database_name)) tgt.set(r.database_name, new Set());
+          tgt.get(r.database_name).add(r.fingerprint);
+        }
+      }
+      const dbByName = {};
+      (await pgPool.query('SELECT id, name FROM databases WHERE tenant_id=$1', [tenantId])).rows.forEach((d) => { dbByName[d.name] = d.id; });
+
+      for (const ev of evs) {
+        const op = (ev.operation || '').toUpperCase();
+        if (op === 'LOGIN' || op === 'LOGOUT') continue;
+        const fp = ev.sql_hash || sqlFingerprint(ev.sql_text);
+        if (!fp) continue;
+        const prof = dbMap.get(ev.database_name);
+        const principal = ev.principal || 'unknown';
+        const pattern = sqlNormalizePattern(ev.sql_text);
+
+        if (prof.mode === 'learning') {
+          await pgPool.query(
+            `INSERT INTO sql_allowlist (tenant_id, database_name, principal, fingerprint, pattern, operation, state, source, hit_count, first_seen, last_seen)
+             VALUES ($1,$2,$3,$4,$5,$6,'learned','auto',1, now(), now())
+             ON CONFLICT (tenant_id, database_name, principal, fingerprint)
+             DO UPDATE SET hit_count = sql_allowlist.hit_count + 1, last_seen = now()`,
+            [tenantId, ev.database_name, principal, fp, pattern, op]);
+          continue;
+        }
+        // enforcing
+        const allowed = (allowSet.get(ev.database_name)?.has(fp)) && !(blockSet.get(ev.database_name)?.has(fp));
+        if (allowed) continue;
+        const dev = (await pgPool.query(
+          `INSERT INTO sql_allowlist_deviations (tenant_id, database_name, principal, fingerprint, pattern, operation, sample_sql)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (tenant_id, database_name, principal, fingerprint)
+           DO UPDATE SET hit_count = sql_allowlist_deviations.hit_count + 1, last_seen = now()
+           RETURNING id, hit_count, status`,
+          [tenantId, ev.database_name, principal, fp, pattern, op, String(ev.sql_text || '').slice(0, 500)])).rows[0];
+        // Alert only on the FIRST sighting of an OPEN deviation (hit_count === 1); repeats just tally.
+        if (!dev || Number(dev.hit_count) !== 1 || dev.status !== 'open') continue;
+        const sev = prof.severity || 'high';
+        const score = Math.min(99, sevBaseScore(sev) + 20);
+        const summary = `Unrecognized SQL grammar on ${ev.database_name}`;
+        const why = `Statement grammar not in the learned allow-list for ${ev.database_name} (default-deny). Shape: ${pattern.slice(0, 160)}`;
+        const ins = await pgPool.query(
+          `INSERT INTO alerts (tenant_id, database_id, policy_id, severity, principal, summary, raw_sql, anomaly_score, status,
+                               rule, action, subtype, object_name, client_ip, why)
+           VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,'open','SQL Grammar Allowlist',$8,'grammar_deviation',$9,$10,$11) RETURNING id, created_at`,
+          [tenantId, dbByName[ev.database_name] || null, sev, principal, summary, String(ev.sql_text || '').slice(0, 500), score,
+           prof.action === 'block' ? 'block' : 'alert', pattern.slice(0, 160), '', why]);
+        await pgPool.query('UPDATE sql_allowlist_deviations SET alert_id=$1 WHERE id=$2', [ins.rows[0].id, dev.id]);
+        try { broadcast({ type: 'alert', alert: { id: ins.rows[0].id, severity: sev, principal, database: ev.database_name, summary, anomaly_score: score, timestamp: ins.rows[0].created_at } }); } catch (e) { /* WS optional */ }
+        dispatchAlert({ tenantId, severity: sev, principal, summary, database: ev.database_name, raw_sql: ev.sql_text, ts: ins.rows[0].created_at });
+      }
+    }
+    allowlistWatermark = hi; // advance only after a full successful pass
+  } catch (e) { console.log('[Allowlist] engine failed:', e.message); }
+}
+setInterval(runAllowlistEngine, 8000);
+setTimeout(runAllowlistEngine, 11000);
 
 // Per-database risk score (0–100), recomputed from real signals so the "Top risky
 // databases" widget, the Databases list, and fleet risk all stay live:
