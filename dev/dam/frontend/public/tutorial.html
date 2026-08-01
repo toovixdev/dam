@@ -227,6 +227,7 @@
     <a href="#alerts-c">Alerts & severity</a>
     <a href="#respond">Responding to threats</a>
     <a href="#classify">Sensitive data & compliance</a>
+    <a href="#va-concept">Vulnerability assessment</a>
     <a href="#deploy-topos">Deployment topologies</a>
     <a href="#deploy-discovery">Deploying a discovery agent</a>
     <div class="toc-title">Part 3 · Using TooVix DAM</div>
@@ -241,8 +242,9 @@
     <a href="#s-policies">4 · Tune policies</a>
     <a href="#s-alerts">5 · Triage alerts</a>
     <a href="#s-quarantine">6 · Quarantine</a>
-    <a href="#s-compliance">7 · Compliance & reports</a>
-    <a href="#s-copilot">8 · The AI Copilot</a>
+    <a href="#s-va">7 · Vulnerability scan</a>
+    <a href="#s-compliance">8 · Compliance & reports</a>
+    <a href="#s-copilot">9 · The AI Copilot</a>
     <a href="#encryption">Encryption &amp; BYOK</a>
     <a href="#admin">Admin: users & setup</a>
     <div class="toc-title">Part 4 · Wrap-up</div>
@@ -491,6 +493,23 @@
       <div class="note">The <b>Audit Trail</b> is deliberately tamper-evident — even admins can't quietly rewrite history. That's what makes it trustworthy to a regulator.</div>
     </section>
 
+    <!-- ══ Vulnerability Assessment (concept) ══ -->
+    <section id="va-concept">
+      <span class="part-badge">Part 2 · How DAM works</span>
+      <h2>Assessing the database itself — Vulnerability Assessment</h2>
+      <p>Everything so far watches <em>activity</em> — who did what, and whether it looked risky. <b>Vulnerability Assessment (VA)</b> asks a different question: <b>is the database itself configured securely?</b> It's the difference between the CCTV watching the vault (monitoring) and an inspector checking that the vault door, locks and alarms are actually up to standard (posture).</p>
+      <p>A VA scan logs into the database as a <b>read-only reader</b> and runs a library of checks derived from the <b>CIS Database Benchmarks</b> — the industry-standard hardening baselines. Nothing is changed and nothing is exploited; it only <em>reads</em> configuration and catalog settings. Typical checks include:</p>
+      <ul>
+        <li><b>Misconfiguration</b> — auditing turned off, TLS not enforced, risky features like <code>local_infile</code> left on, insecure defaults.</li>
+        <li><b>Privilege &amp; access</b> — excessive grants, <code>PUBLIC</code>/wildcard-host grants, unused or default accounts, too many superusers.</li>
+        <li><b>Authentication</b> — empty or default passwords, deprecated auth plugins, weak password-lifetime policy.</li>
+        <li><b>Encryption</b> — at-rest encryption, TLS version and ciphers, secure-transport enforcement.</li>
+      </ul>
+      <p>Each check produces a <b>finding</b> with a result (<b>pass</b>, <b>fail</b>, or <b>error</b> if the reader can't see that setting), a <b>severity</b>, the <b>evidence</b> (the actual value found), and <b>remediation</b> (how to fix it). Findings roll up into a single <b>posture score</b> — the severity-weighted percentage of checks that passed — so you can track hardening over time.</p>
+      <div class="note"><b>Scope, honestly.</b> VA here means <b>database</b> security posture — the engine and instance. It is <em>not</em> OS/host CIS, network port scanning, or web-app scanning, and it doesn't exploit anything. It's read-only, authenticated assessment, the same category as Oracle DBSAT or the CIS Database Benchmarks.</div>
+      <div class="tip">VA and Classification take the same read-only path into the database, so a monitoring agent that already has a DB login can run scans with no extra plumbing. VA findings also feed the <span class="nav-chip">Compliance Center</span> — a database with open <b>critical</b> findings, or one that hasn't been scanned recently, shows up as a compliance gap.</div>
+    </section>
+
     <!-- ══ Deployment topologies ══ -->
     <section id="deploy-topos">
       <span class="part-badge">Part 2 · How DAM works</span>
@@ -683,6 +702,7 @@
         <li><b>Tune policies</b> so the right things raise alerts.</li>
         <li><b>Triage alerts</b> as they come in.</li>
         <li><b>Quarantine</b> anything genuinely malicious.</li>
+        <li><b>Run a vulnerability assessment</b> to check the database's own security posture.</li>
         <li><b>Report</b> to prove compliance.</li>
       </ol>
       <div class="warn">Button labels below in <span class="ui">purple</span> are the <b>exact</b> text you'll click in the app. Grey <span class="ui g">chips</span> are secondary buttons. If a screen looks slightly different, you may be on a newer build — the sidebar names are your reliable anchor.</div>
@@ -991,8 +1011,30 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
       <div class="warn"><b>Terminate vs Release:</b> Terminate = "stop this now, stay blocked." Release = "all clear, let them back in." When in doubt, Terminate and investigate — you can always Release afterwards.</div>
     </section>
 
-    <section id="s-compliance">
+    <section id="s-va">
       <span class="part-badge">Step 7</span>
+      <h2>Run a vulnerability assessment</h2>
+      <p>Everything up to here watched <em>activity</em>. This step checks the database's own <b>security posture</b> — see <a href="#va-concept">Vulnerability assessment</a> for the concept. Open <span class="nav-chip">Vulnerability Assessment</span> from the sidebar.</p>
+      <ol class="steps">
+        <li><b>Make sure a database is reachable.</b> A scan runs through a monitoring agent that already has a read-only database login — the same connection used for capture and classification. If you've deployed an agent, you're ready; if not, the page shows an empty state asking you to deploy one first.</li>
+        <li>Click <span class="ui">Run scan</span>. The scan is queued to the agent, which runs the read-only <b>CIS</b> checks on its next poll (~15&nbsp;seconds) and reports findings back — nothing on the database is changed or exploited.</li>
+        <li><b>Read the posture strip.</b> Five KPIs summarise where you stand: <span class="ui g">Posture score</span> (severity-weighted % of checks passed), <span class="ui g">Critical open</span>, <span class="ui g">High open</span>, <span class="ui g">Open findings</span> (with how many are waived), and <span class="ui g">Databases scanned</span> with the last-scan time.</li>
+        <li><b>Work the findings table.</b> Toggle between <span class="ui g">Failing</span> (open fails only — the default) and <span class="ui g">All checks</span> (including passes and n/a). Click any row to expand its <b>evidence</b> (the actual value found), <b>remediation</b> (how to fix it), <b>references</b>, and when it was first/last seen.</li>
+        <li><b>A result reads one of three ways:</b>
+          <ul>
+            <li><span class="ui g">pass</span> — the control is configured securely.</li>
+            <li><span class="ui g">fail</span> — a real gap; use the remediation to close it, then re-scan.</li>
+            <li><span class="ui g">n/a</span> — the check couldn't run because the read-only reader lacks the privilege to see that setting. Grant the reader the missing view, or accept it's unmeasurable.</li>
+          </ul>
+        </li>
+        <li><b>Accept a risk you can't fix (admins).</b> On a failing finding, admins see <span class="ui g">Waive (accept risk)</span> — add a reason and it drops out of the open count (use <span class="ui g">Remove waiver</span> to reverse). Waiving is an auditable decision, not a way to hide a gap.</li>
+      </ol>
+      <div class="tip">Findings feed the <span class="nav-chip">Compliance Center</span>: a database with open <b>critical</b> findings, or one not scanned in 90 days, shows up as a compliance gap. Re-scan after remediating so your posture score and compliance status both reflect the fix.</div>
+      <div class="warn">A scan needs a deployed agent with a database login — it can't reach a database you're only monitoring agentlessly through cloud audit logs. No agent, no scan.</div>
+    </section>
+
+    <section id="s-compliance">
+      <span class="part-badge">Step 8</span>
       <h2>Compliance & reports</h2>
       <p>Turn all that monitoring into proof.</p>
       <ul>
@@ -1004,7 +1046,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
     </section>
 
     <section id="s-copilot">
-      <span class="part-badge">Step 8</span>
+      <span class="part-badge">Step 9</span>
       <h2>Meet the AI Copilot</h2>
       <p>Open <span class="nav-chip">Copilot</span> (or the <span class="ui g">✦ Ask TooVix AI</span> button in the top bar). It has two tabs:</p>
       <div class="grid">
