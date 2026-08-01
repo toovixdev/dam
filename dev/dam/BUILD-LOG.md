@@ -2556,3 +2556,20 @@ Checks now target the right environments, so the library scales across mixed est
 
 Content platform complete: Step 1 central store/pull/fallback · Step 2 authoring · Step 3 Ed25519
 signing · Step 4 applicability. Remaining: bulk CIS import (e.g. CIS SecureSuite) to grow coverage.
+
+### VA content platform — bulk import/export, Step 5 (2026-08-01)
+
+The way to load large curated packs (CIS SecureSuite content or hand-authored batches) at once,
+and export the library for backup/versioning.
+- `POST /api/admin/va/checks/import` (array or {checks:[...]}): validates + upserts each; existing
+  checks updated in place, enabled/curation preserved; per-check summary {added, updated, errors}.
+  `GET /api/admin/va/checks/export` returns the library (or one engine) as an importable pack.
+- Admin Content Packs page: Import (paste JSON) + Export (download) buttons.
+- Starter pack docs/va-packs/cis-core-expansion.json (+11 checks across all 4 engines, incl. an
+  applicability example: mssql-contained-db-auth = self-managed only).
+- **Proven:** imported the 11-check pack (+11, 0 errors) → library grew (mssql 17, mysql 22, oracle 3,
+  postgresql 2) → the self-managed SQL-Server agent pulled the 17-check signed pack (signature
+  verified) and the two imported SQL Server checks RAN live (both passed, correct evidence).
+
+VA content platform COMPLETE: 1 central store/pull/fallback · 2 authoring · 3 Ed25519 signing ·
+4 applicability · 5 bulk import/export. (Growing to full CIS coverage is now content-loading.)
