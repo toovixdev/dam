@@ -1,0 +1,27 @@
+{
+  "pack": "CIS SQL Server expansion",
+  "note": "Additional CIS SQL Server checks loaded via the bulk-import pipeline.",
+  "checks": [
+    { "engine": "mssql", "check_id": "mssql-user-options", "benchmark": "CIS SQL Server", "section": "2.x", "title": "'user options' is 0", "severity": "low",
+      "query": "SELECT CAST(value_in_use AS INT) v FROM sys.configurations WHERE name='user options'", "expect": { "op": "equals", "column": "v", "value": "0" },
+      "remediation": "EXEC sp_configure 'user options',0; RECONFIGURE;", "refs": ["CIS SQL Server §2"] },
+    { "engine": "mssql", "check_id": "mssql-database-mail-xps", "benchmark": "CIS SQL Server", "section": "2.x", "title": "'Database Mail XPs' is disabled", "severity": "medium",
+      "query": "SELECT CAST(value_in_use AS INT) v FROM sys.configurations WHERE name='Database Mail XPs'", "expect": { "op": "equals", "column": "v", "value": "0" },
+      "remediation": "EXEC sp_configure 'Database Mail XPs',0; RECONFIGURE; (unless DB Mail is used).", "refs": ["CIS SQL Server §2"] },
+    { "engine": "mssql", "check_id": "mssql-clr-strict-security", "benchmark": "CIS SQL Server", "section": "2.x", "title": "'clr strict security' is enabled", "severity": "medium",
+      "query": "SELECT CAST(value_in_use AS INT) v FROM sys.configurations WHERE name='clr strict security'", "expect": { "op": "equals", "column": "v", "value": "1" },
+      "remediation": "EXEC sp_configure 'clr strict security',1; RECONFIGURE;", "refs": ["CIS SQL Server §2"], "min_version": "14.0", "applies_managed": "self-managed" },
+    { "engine": "mssql", "check_id": "mssql-sa-renamed", "benchmark": "CIS SQL Server", "section": "3.x", "title": "The 'sa' login has been renamed", "severity": "low",
+      "query": "SELECT name FROM sys.server_principals WHERE principal_id=1", "expect": { "op": "notEquals", "column": "name", "value": "sa" },
+      "remediation": "ALTER LOGIN [sa] WITH NAME=[<newname>]; — rename the well-known sa account.", "refs": ["CIS SQL Server §3"] },
+    { "engine": "mssql", "check_id": "mssql-control-server", "benchmark": "CIS SQL Server", "section": "3.x", "title": "CONTROL SERVER not granted to logins other than sysadmins", "severity": "high",
+      "query": "SELECT p.name FROM sys.server_permissions sp JOIN sys.server_principals p ON p.principal_id=sp.grantee_principal_id WHERE sp.permission_name='CONTROL SERVER' AND sp.state IN ('G','W') AND p.name NOT LIKE '##%'", "expect": { "op": "rowsZero" },
+      "remediation": "REVOKE CONTROL SERVER FROM [<login>]; — it is equivalent to sysadmin.", "refs": ["CIS SQL Server §3", "PCI-DSS 7.2"] },
+    { "engine": "mssql", "check_id": "mssql-securityadmin-members", "benchmark": "CIS SQL Server", "section": "3.x", "title": "securityadmin role membership limited", "severity": "medium",
+      "query": "SELECT p.name FROM sys.server_role_members m JOIN sys.server_principals p ON p.principal_id=m.member_principal_id JOIN sys.server_principals r ON r.principal_id=m.role_principal_id WHERE r.name='securityadmin' AND p.name NOT LIKE '##%'", "expect": { "op": "rowsZero" },
+      "remediation": "ALTER SERVER ROLE securityadmin DROP MEMBER [<login>]; — it can grant any permission.", "refs": ["CIS SQL Server §3"] },
+    { "engine": "mssql", "check_id": "mssql-server-audit-enabled", "benchmark": "CIS SQL Server", "section": "5.x", "title": "A SQL Server Audit is enabled", "severity": "medium",
+      "query": "SELECT name FROM sys.server_audits WHERE is_state_enabled=1", "expect": { "op": "rowsNonZero" },
+      "remediation": "Create + enable a Server Audit (login success/failure, permission changes) per CIS §5.", "refs": ["CIS SQL Server §5", "PCI-DSS 10.2"] }
+  ]
+}
