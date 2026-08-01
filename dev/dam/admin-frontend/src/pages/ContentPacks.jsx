@@ -4,7 +4,7 @@ import KpiCard from '../components/KpiCard';
 import PageHeader from '../components/shared/PageHeader';
 import { toast } from '../components/shared/Toast';
 import useApiData from '../hooks/useApiData';
-import { apiPost, apiPut, apiDelete } from '../api/client';
+import { apiFetch, apiPost, apiPut, apiDelete } from '../api/client';
 
 const ENGINE_LABEL = { mysql: 'MySQL / MariaDB', postgresql: 'PostgreSQL', mssql: 'SQL Server', oracle: 'Oracle' };
 const ENGINES = ['mysql', 'postgresql', 'mssql', 'oracle'];
@@ -74,6 +74,30 @@ export default function ContentPacks() {
   const [filter, setFilter] = useState('all');
   const [busy, setBusy] = useState('');
   const [editing, setEditing] = useState(null);
+  const [importing, setImporting] = useState(false);
+  const [importText, setImportText] = useState('');
+
+  async function doImport() {
+    let parsed;
+    try { parsed = JSON.parse(importText); } catch { return toast('Paste valid JSON (an array of checks, or { "checks": [...] })', 'err'); }
+    const res = await apiPost('/admin/va/checks/import', parsed);
+    if (res.ok) {
+      const d = res.data;
+      toast(`Imported: +${d.added} added, ${d.updated} updated${d.errors?.length ? `, ${d.errors.length} error(s)` : ''}`, d.errors?.length ? 'err' : 'ok');
+      if (d.errors?.length) console.warn('VA import errors:', d.errors);
+      setImporting(false); setImportText(''); refetch();
+    } else toast(res.data?.error || 'Import failed', 'err');
+  }
+  async function doExport() {
+    try {
+      const data = await apiFetch('/admin/va/checks/export');
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob); a.download = 'va-checks-pack.json'; a.click();
+      URL.revokeObjectURL(a.href);
+      toast(`Exported ${data.count} checks`, 'ok');
+    } catch (e) { toast('Export failed', 'err'); }
+  }
 
   const engines = data?.engines || [];
   const checks = data?.checks || [];
@@ -105,8 +129,25 @@ export default function ContentPacks() {
   return (
     <Layout lastRefresh={lastRefresh} onRefresh={refetch}>
       <PageHeader title="Content Packs — VA Benchmarks" meta={['CIS database checks', 'centrally managed · agents pull the curated pack']}>
+        <button className="btn-secondary" onClick={() => setImporting((v) => !v)}>Import pack</button>
+        <button className="btn-secondary" onClick={doExport}>Export</button>
         <button className="btn-primary" onClick={() => setEditing(blankCheck())}>+ Add check</button>
       </PageHeader>
+
+      {importing && (
+        <div className="card" style={{ marginBottom: 14, border: '1px solid var(--primary)' }}>
+          <div className="card-header"><span className="card-title">Import a benchmark pack</span>
+            <span className="card-sub">paste an array of checks, or {'{ "checks": [...] }'} — new checks added, existing ones updated in place (curation preserved)</span></div>
+          <div className="card-body">
+            <textarea value={importText} onChange={(e) => setImportText(e.target.value)} placeholder='[{"engine":"mssql","check_id":"mssql-x","title":"…","severity":"low","query":"SELECT …","expect":{"op":"equals","column":"v","value":"0"}}]'
+              style={{ width: '100%', minHeight: 160, fontFamily: 'monospace', fontSize: 12 }} />
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button className="btn-primary" onClick={doImport}>Import</button>
+              <button className="btn-secondary" onClick={() => { setImporting(false); setImportText(''); }}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <section className="kpi-grid">
         <KpiCard icon="▤" iconBg="var(--primary-soft)" iconColor="var(--primary)" label="Checks" value={totals.total} detail={`${engines.length} engines`} />

@@ -1,0 +1,42 @@
+{
+  "pack": "CIS core expansion (starter)",
+  "note": "Additional CIS-derived checks beyond the agent's built-in set. Import via Admin → Content Packs → Import pack. Validate per engine before relying on them.",
+  "checks": [
+    { "engine": "mysql", "check_id": "mysql-have-symlink", "benchmark": "CIS MySQL 8.0", "section": "6.x", "title": "Symbolic links are disabled (have_symlink)", "severity": "medium",
+      "query": "SHOW VARIABLES LIKE 'have_symlink'", "expect": { "op": "equals", "column": "Value", "value": "DISABLED" },
+      "remediation": "Add symbolic-links=0 to my.cnf and restart — prevents table-file redirection attacks.", "refs": ["CIS MySQL 8.0 §6"] },
+    { "engine": "mysql", "check_id": "mysql-shutdown-priv", "benchmark": "CIS MySQL 8.0", "section": "8.x", "title": "SHUTDOWN privilege limited to admins", "severity": "high",
+      "query": "SELECT user, host FROM mysql.user WHERE Shutdown_priv='Y' AND user NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')", "expect": { "op": "rowsZero" },
+      "remediation": "REVOKE SHUTDOWN ON *.* FROM '<u>'@'<h>'; — SHUTDOWN can stop the server.", "refs": ["CIS MySQL 8.0 §8"] },
+    { "engine": "mysql", "check_id": "mysql-create-user-priv", "benchmark": "CIS MySQL 8.0", "section": "8.x", "title": "CREATE USER privilege limited", "severity": "medium",
+      "query": "SELECT user, host FROM mysql.user WHERE Create_user_priv='Y' AND user NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')", "expect": { "op": "rowsZero" },
+      "remediation": "REVOKE CREATE USER ON *.* FROM '<u>'@'<h>';", "refs": ["CIS MySQL 8.0 §8", "PCI-DSS 7.2"] },
+    { "engine": "mysql", "check_id": "mysql-reload-priv", "benchmark": "CIS MySQL 8.0", "section": "8.x", "title": "RELOAD privilege limited", "severity": "low",
+      "query": "SELECT user, host FROM mysql.user WHERE Reload_priv='Y' AND user NOT IN ('root','mysql.sys','mysql.session','mysql.infoschema')", "expect": { "op": "rowsZero" },
+      "remediation": "REVOKE RELOAD ON *.* FROM '<u>'@'<h>';", "refs": ["CIS MySQL 8.0 §8"] },
+
+    { "engine": "postgresql", "check_id": "pg-log-error-verbosity", "benchmark": "CIS PostgreSQL", "section": "3.1.x", "title": "log_error_verbosity is not 'terse'", "severity": "low",
+      "query": "SHOW log_error_verbosity", "expect": { "op": "notEquals", "value": "terse" },
+      "remediation": "Set log_error_verbosity='default' (or 'verbose') so errors carry enough context.", "refs": ["CIS PostgreSQL §3.1"] },
+    { "engine": "postgresql", "check_id": "pg-log-line-prefix-user", "benchmark": "CIS PostgreSQL", "section": "3.1.x", "title": "log_line_prefix records the user", "severity": "low",
+      "query": "SHOW log_line_prefix", "expect": { "op": "contains", "value": "%u" },
+      "remediation": "Include %u (and %d, %m) in log_line_prefix for attribution.", "refs": ["CIS PostgreSQL §3.1", "PCI-DSS 10.2"] },
+
+    { "engine": "mssql", "check_id": "mssql-contained-db-auth", "benchmark": "CIS SQL Server", "section": "2.x", "title": "'contained database authentication' is disabled", "severity": "medium",
+      "query": "SELECT CAST(value_in_use AS INT) v FROM sys.configurations WHERE name='contained database authentication'", "expect": { "op": "equals", "column": "v", "value": "0" },
+      "remediation": "EXEC sp_configure 'contained database authentication',0; RECONFIGURE; (unless contained DBs are required).", "refs": ["CIS SQL Server §2"], "applies_managed": "self-managed" },
+    { "engine": "mssql", "check_id": "mssql-trustworthy-dbs", "benchmark": "CIS SQL Server", "section": "3.x", "title": "No user database has TRUSTWORTHY on", "severity": "high",
+      "query": "SELECT name FROM sys.databases WHERE is_trustworthy_on=1 AND name<>'msdb'", "expect": { "op": "rowsZero" },
+      "remediation": "ALTER DATABASE [<db>] SET TRUSTWORTHY OFF; — TRUSTWORTHY enables privilege escalation paths.", "refs": ["CIS SQL Server §3"] },
+
+    { "engine": "oracle", "check_id": "ora-o7-dict-accessibility", "benchmark": "CIS Oracle", "section": "2.x", "title": "O7_DICTIONARY_ACCESSIBILITY is FALSE", "severity": "high",
+      "query": "SELECT value FROM v$parameter WHERE name='O7_DICTIONARY_ACCESSIBILITY'", "expect": { "op": "equals", "column": "value", "value": "FALSE" },
+      "remediation": "ALTER SYSTEM SET O7_DICTIONARY_ACCESSIBILITY=FALSE SCOPE=SPFILE; — keeps SYS dictionary out of ANY-privilege reach.", "refs": ["CIS Oracle §2"] },
+    { "engine": "oracle", "check_id": "ora-audit-sys-operations", "benchmark": "CIS Oracle", "section": "2.x", "title": "audit_sys_operations is TRUE", "severity": "medium",
+      "query": "SELECT value FROM v$parameter WHERE name='audit_sys_operations'", "expect": { "op": "equals", "column": "value", "value": "TRUE" },
+      "remediation": "ALTER SYSTEM SET audit_sys_operations=TRUE SCOPE=SPFILE; — audits SYSDBA/SYSOPER actions.", "refs": ["CIS Oracle §2", "PCI-DSS 10.2"] },
+    { "engine": "oracle", "check_id": "ora-password-verify-function", "benchmark": "CIS Oracle", "section": "3.x", "title": "DEFAULT profile sets a PASSWORD_VERIFY_FUNCTION", "severity": "medium",
+      "query": "SELECT limit FROM dba_profiles WHERE profile='DEFAULT' AND resource_name='PASSWORD_VERIFY_FUNCTION'", "expect": { "op": "notEquals", "column": "limit", "value": "NULL" },
+      "remediation": "ALTER PROFILE DEFAULT LIMIT PASSWORD_VERIFY_FUNCTION <fn>; — enforce password complexity.", "refs": ["CIS Oracle §3", "PCI-DSS 8.3.6"] }
+  ]
+}
