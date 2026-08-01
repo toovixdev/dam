@@ -2590,3 +2590,15 @@ Central library now 80 checks across mysql/postgresql/mssql/oracle. One-off vali
 Note (post-security-hardening): 'dev-agent-enroll-token' now maps to no tenant, so the dev MySQL
 agent + one-off validators use real per-tenant tokens. Operator login is MFA-protected; admins drive
 imports from the Content Packs UI.
+
+### VA — SQL Server pushed toward full automatable CIS core (2026-08-01)
+
+Worked example of growing one engine to (near) its full query-automatable CIS coverage via the
+import pipeline + live validation. SQL Server 24 → 36 checks: +12 (fixed-server-role membership
+serveradmin/setupadmin/bulkadmin/diskadmin/dbcreator/processadmin, Windows-auth-only, external
+scripts, server audit specification, TDE on user DBs, symmetric/asymmetric keys in master).
+All 12 ran live on the Azure SQL VM (9 pass / 3 fail) — real findings incl. a DB named
+'SensitiveTestDB' without TDE, and SQL-auth mode enabled. ~36 is near the automatable ceiling
+for CIS SQL Server (the rest are OS-file / manual-attestation items).
+
+Central library now ~92 checks: mssql 36 · mysql 22 · oracle 17 · postgresql 17.
