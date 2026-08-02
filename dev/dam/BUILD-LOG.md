@@ -2648,3 +2648,34 @@ whose grammar isn't on the list.
 **Phase 2 (deferred)**: agent-side inline real-time BLOCKING — port the fingerprint to Go in the
 inline proxy so deviations are blocked, not just alerted (the `action: block` profile field already
 carries the intent).
+
+### Super-admin console — data-authenticity sweep (2026-08-02)
+
+Made the platform (super-admin) screens run on real, measured data; removed fabricated numbers or
+flagged genuine estimates. Two recurring bugs fixed throughout: (a) endpoints that read only the
+shared `dam_analytics` ClickHouse plane, ignoring every paid tenant's dedicated `tenant_<id>` DB —
+now aggregated via `adminPlaneMap()`; (b) synthetic figures derived from magic multipliers.
+
+- **Infrastructure Health**: storage summed across all planes; real region name; new "Tenant Data
+  Planes" table (plane type, DBs, agents, events/hr, rows, dedicated-plane storage, last-ingest lag).
+- **Noisy Neighbor**: removed fabricated CPU/mem/IO + the fictional Event-Hub/Kubernetes layers
+  (no k8s in this deployment); real event share, rows, dedicated-plane storage, and `system.query_log`
+  load; contention model corrected (only shared-plane tenants can be flagged; dedicated = isolated).
+- **Capacity Planning**: all-plane storage; real MRR from the billing engine (was
+  `dbs*100+agents*50+tenants*500`); real MoM event-volume growth (was hardcoded 8%); real partition
+  count + region.
+- **Billing**: all-plane hot-storage; feed from real `platform_audit` billing activity (was fake
+  INV numbers + back-dated timestamps).
+- **Quotas**: measured ClickHouse bytes per tenant (per-plane bytes × row share) — dropped the flat
+  1 KB/event estimate.
+- **Trial Conversion**: real report counts (`report_schedules`), real verified-email funnel
+  (users ≠ 'unverified'), avg active-trial age; dropped hardcoded convertedThisMonth/avgDuration
+  (no conversion-timestamp column) in favour of honest totals.
+- **Customer Success**: real Time-to-Value (median/best/worst days to first DB/agent/alert/policy/
+  report from real timestamps) replacing the static TTV table; real contract renewal dates where a
+  negotiated contract exists, else flagged `est` (signup + 1yr).
+- **Canary**: no per-deployment latency/error telemetry exists, so removed the fabricated p99-latency
+  card + seeded error-rate KPI; surface real fleet blast-radius signals (agents online, open critical
+  alerts 24h, per-tenant pool health).
+Audited-clean (already real): PlatformDashboard, Tenants, Approvals, BreakGlass/Impersonation,
+PlatformAudit, Roles, PlatformEmail, TenantHealth, FeatureFlags, ContentPacks.
