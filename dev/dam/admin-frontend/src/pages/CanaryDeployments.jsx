@@ -27,12 +27,13 @@ function ago(iso) {
 
 export default function CanaryDeployments() {
   const { data, loading, lastRefresh, refetch } = useApiData('/admin/canary', { poll: 20000 });
-  const { data: tenants } = useApiData('/admin/tenants', { poll: 0 });
   const [startOpen, setStartOpen] = useState(false);
 
   if (loading && !data) return <div className="loading-screen"><div className="loading-spinner" /><p>Loading rollouts…</p></div>;
   const a = data?.active;
   const history = data?.history || [];
+  const ph = data?.poolHealth || {};
+  const pool = data?.pool || [];
 
   async function act(action) {
     const res = await apiPost(`/admin/canary/${a.id}/action`, { action });
@@ -51,11 +52,11 @@ export default function CanaryDeployments() {
           value={a ? a.version : '—'} detail={a ? a.type : 'none in progress'} />
         <KpiCard icon="⏱" iconBg="var(--amber-soft)" iconColor="var(--amber)" label="Phase"
           value={a ? `${a.status === 'active' ? 'Canary' : a.status} — ${a.phasePct}%` : '—'} detail={a ? `started ${ago(a.startedAt)}` : ''} />
-        <KpiCard icon="●" iconBg="var(--green-soft)" iconColor="var(--green)" label="Error rate"
-          value={<span style={{ color: a && a.errorRate > 0.1 ? 'var(--danger)' : 'var(--green)' }}>{a ? `${a.errorRate}%` : '—'}</span>}
-          detail="threshold 0.1%" detailType={a && a.errorRate <= 0.1 ? 'up' : 'down'} />
-        <KpiCard icon="↻" iconBg="var(--info-soft)" iconColor="var(--info)" label="Rollback ready"
-          value={<span style={{ color: 'var(--green)' }}>Yes</span>} detail="auto-rollback enabled" />
+        <KpiCard icon="●" iconBg={ph.openCritical ? 'var(--danger-soft)' : 'var(--green-soft)'} iconColor={ph.openCritical ? 'var(--danger)' : 'var(--green)'} label="Open critical (24h)"
+          value={<span style={{ color: ph.openCritical ? 'var(--danger)' : 'var(--green)' }}>{ph.openCritical ?? 0}</span>}
+          detail="fleet blast-radius signal" detailType={ph.openCritical ? 'down' : 'up'} />
+        <KpiCard icon="↻" iconBg="var(--info-soft)" iconColor="var(--info)" label="Agents online"
+          value={<span style={{ color: (ph.agentsOnline === ph.agentsTotal) ? 'var(--green)' : 'var(--amber)' }}>{ph.agentsOnline ?? 0}/{ph.agentsTotal ?? 0}</span>} detail="across the fleet" />
       </section>
 
       {a && (
@@ -90,21 +91,22 @@ export default function CanaryDeployments() {
           </div>
 
           <div className="card">
-            <div className="card-header"><span className="card-title">Canary Metrics</span></div>
+            <div className="card-header"><span className="card-title">Canary Pool Health</span><span className="card-sub">real fleet signals during rollout</span></div>
             <div className="card-body">
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-                <Metric label="Error rate (canary)" value={`${a.errorRate}%`} color={a.errorRate > 0.1 ? 'var(--danger)' : 'var(--green)'} />
-                <Metric label="Error rate (baseline)" value="0.01%" color="var(--green)" />
-                <Metric label="p99 latency (canary)" value="45 ms" color="var(--amber)" />
-                <Metric label="p99 latency (baseline)" value="41 ms" color="var(--green)" />
+                <Metric label="Agents online" value={`${ph.agentsOnline ?? 0}/${ph.agentsTotal ?? 0}`} color={ph.agentsOnline === ph.agentsTotal ? 'var(--green)' : 'var(--amber)'} />
+                <Metric label="Open critical (24h)" value={`${ph.openCritical ?? 0}`} color={ph.openCritical ? 'var(--danger)' : 'var(--green)'} />
+                <Metric label="Open alerts (24h)" value={`${ph.openAlerts24h ?? 0}`} color={ph.openAlerts24h ? 'var(--amber)' : 'var(--green)'} />
+                <Metric label="Tenants in fleet" value={`${ph.tenants ?? 0}`} color="var(--muted)" />
               </div>
-              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Affected tenants (canary pool)</div>
-              {(tenants || []).slice(0, 4).map(t => (
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Affected tenants (fleet)</div>
+              {pool.slice(0, 6).map(t => (
                 <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 4 }}>
-                  <span>{t.name}</span><span className="badge status-green">healthy</span>
+                  <span>{t.name} <small className="muted">· {t.agentsOnline}/{t.agentsTotal} agents{t.openCritical ? ` · ${t.openCritical} crit` : ''}</small></span>
+                  <span className={`badge ${t.healthy ? 'status-green' : 'sev-high'}`}>{t.healthy ? 'healthy' : 'degraded'}</span>
                 </div>
               ))}
-              {(!tenants || tenants.length === 0) && <span className="muted" style={{ fontSize: 12 }}>No tenants in canary pool</span>}
+              {pool.length === 0 && <span className="muted" style={{ fontSize: 12 }}>No tenants in fleet</span>}
             </div>
           </div>
         </section>

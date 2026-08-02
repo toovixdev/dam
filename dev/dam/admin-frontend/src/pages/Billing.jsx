@@ -141,7 +141,7 @@ export default function Billing() {
       </div>
 
       <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-header"><span className="card-title">Recent Billing Events</span><span className="card-sub">derived from current invoices</span></div>
+        <div className="card-header"><span className="card-title">Recent Billing Events</span><span className="card-sub">platform billing activity · audit log</span></div>
         <div className="card-body no-pad">
           <table className="data-table">
             <thead><tr><th>Date</th><th>Tenant</th><th>Event</th><th>Details</th><th className="num">Amount</th><th>Status</th></tr></thead>

@@ -24,9 +24,9 @@ export default function TrialConversion() {
 
       <section className="kpi-grid">
         <KpiCard icon="⏱" iconBg="var(--amber-soft)" iconColor="var(--amber)" label="Active trials" value={k.activeTrials} detail="in evaluation" />
-        <KpiCard icon="▲" iconBg="var(--green-soft)" iconColor="var(--green)" label="Converted this month" value={k.convertedThisMonth} detail="trial → paid" detailType="up" />
+        <KpiCard icon="▲" iconBg="var(--green-soft)" iconColor="var(--green)" label="Converted" value={k.converted} detail="trial → paid (total)" detailType="up" />
         <KpiCard icon="▦" iconBg="var(--primary-soft)" iconColor="var(--primary)" label="Conversion rate" value={`${k.conversionRate}%`} detail="signup → active" detailType="up" />
-        <KpiCard icon="≈" iconBg="var(--info-soft)" iconColor="var(--info)" label="Avg trial duration" value={k.avgDuration} detail="to conversion" />
+        <KpiCard icon="≈" iconBg="var(--info-soft)" iconColor="var(--info)" label="Avg trial age" value={k.avgTrialAge} detail="active trials" />
       </section>
 
       <div className="card" style={{ marginBottom: 14 }}>

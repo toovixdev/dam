@@ -11,12 +11,6 @@ const REC = { red: { b: 'var(--danger)', bg: 'var(--danger-soft)' }, amber: { b:
 function usdK(n) { return n >= 1000 ? '$' + (n / 1000).toFixed(0) + 'K' : '$' + (n ?? 0); }
 function Trend({ t }) { return t === 'up' ? <span style={{ color: 'var(--green)' }}>▲</span> : t === 'down' ? <span style={{ color: 'var(--danger)' }}>▼</span> : <span className="muted">▶</span>; }
 
-const TTV = [
-  ['First DB connected', 0.8, 0.1, 4.2, 'good'], ['First alert fired', 1.2, 0.3, 6.0, 'good'],
-  ['First compliance report', 3.4, 1.0, 14.0, 'improve'], ['First custom policy', 5.8, 2.0, 21.0, 'improve'],
-  ['SSO configured', 2.1, 0.5, 8.0, 'good'], ['SIEM integration live', 7.2, 1.0, 30.0, 'improve'],
-];
-
 export default function CustomerSuccess() {
   const { data, loading, lastRefresh, refetch } = useApiData('/admin/success', { poll: 30000 });
   if (loading && !data) return <div className="loading-screen"><div className="loading-spinner" /><p>Scoring accounts…</p></div>;
@@ -25,6 +19,7 @@ export default function CustomerSuccess() {
   const accounts = data?.accounts || [];
   const adoption = data?.adoption || [];
   const expansion = data?.expansion || [];
+  const ttv = data?.ttv || [];
 
   return (
     <Layout lastRefresh={lastRefresh} onRefresh={refetch}>
@@ -57,7 +52,7 @@ export default function CustomerSuccess() {
                   <td className="num">{a.ackPct}%</td>
                   <td className="num">{a.features}</td>
                   <td>{a.signal ? <span style={{ fontSize: 12, color: a.risk === 'red' ? 'var(--danger)' : 'var(--amber)' }}>{a.signal}</span> : <span className="muted">—</span>}</td>
-                  <td>{a.renewal}<br /><small className="muted">{usdK(a.arr)} ARR</small></td>
+                  <td>{a.renewal}{a.renewalEstimated ? <small className="muted" title="No contract on file — estimated as signup + 1 year"> ·est</small> : ''}<br /><small className="muted">{usdK(a.arr)} ARR</small></td>
                 </tr>
               ))}
             </tbody>
@@ -100,7 +95,10 @@ export default function CustomerSuccess() {
         <div className="card-body no-pad">
           <table className="data-table">
             <thead><tr><th>Milestone</th><th className="num">Median (days)</th><th className="num">Best</th><th className="num">Worst</th><th>Benchmark</th></tr></thead>
-            <tbody>{TTV.map(r => <tr key={r[0]}><td><b>{r[0]}</b></td><td className="num">{r[1]}</td><td className="num">{r[2]}</td><td className="num">{r[3]}</td><td><span className={`badge ${r[4] === 'good' ? 'status-green' : 'sev-high'}`}>{r[4]}</span></td></tr>)}</tbody>
+            <tbody>
+              {ttv.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 16 }}>Not enough activity yet to measure time-to-value.</td></tr>}
+              {ttv.map(r => <tr key={r.label}><td><b>{r.label}</b><br /><small className="muted">n={r.n}</small></td><td className="num">{r.median}</td><td className="num">{r.best}</td><td className="num">{r.worst}</td><td><span className={`badge ${r.status === 'good' ? 'status-green' : 'sev-high'}`}>{r.status}</span></td></tr>)}
+            </tbody>
           </table>
         </div>
       </div>

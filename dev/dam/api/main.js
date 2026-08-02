@@ -3163,8 +3163,30 @@ app.post('/api/admin/features/:key/overrides/:tenantId', async (req, res) => {
 // ── Admin · Resource Quotas (Super-Admin console) ──────────
 // Limits = per-tenant override (isolated quota_overrides) falling back to the
 // plan-tier default (quota_plans). Actuals are REAL: DB count from Postgres,
-// events/day + a storage estimate from ClickHouse. NULL limit = unlimited.
-const AVG_EVENT_BYTES = 1024; // rough per-event footprint for the storage estimate
+// events/day + measured ClickHouse storage from system.parts. NULL limit = unlimited.
+
+// Measured storage bytes per tenant: each data plane's real on-disk bytes attributed to a
+// tenant by its row share within that plane (exact for a dedicated single-tenant plane,
+// proportional on the shared plane). Replaces the old flat 1 KB/event estimate.
+async function storageBytesByTenant() {
+  const planes = await adminPlaneMap();
+  const planeDbs = [...new Set(['dam_analytics', ...Object.keys(planes)])];
+  const inList = planeDbs.map((d) => `'${String(d).replace(/[^a-zA-Z0-9_]/g, '')}'`).join(',');
+  const store = {};
+  const st = await chSafe(`SELECT database, sum(bytes_on_disk) AS b, sum(rows) AS r FROM system.parts WHERE active AND database IN (${inList}) GROUP BY database`);
+  if (Array.isArray(st)) st.forEach((x) => { store[x.database] = { bytes: parseInt(x.b) || 0, rows: parseInt(x.r) || 0 }; });
+  const out = {};
+  for (const db of planeDbs) {
+    const planeBytes = store[db]?.bytes || 0, planeRows = store[db]?.rows || 0;
+    if (!planeBytes) continue;
+    const rows = await chSafe(`SELECT tenant_id, count() AS cnt FROM ${db}.events GROUP BY tenant_id`);
+    if (Array.isArray(rows)) rows.forEach((r) => {
+      const share = planeRows > 0 ? parseInt(r.cnt) / planeRows : 0;
+      out[r.tenant_id] = (out[r.tenant_id] || 0) + planeBytes * share;
+    });
+  }
+  return out;
+}
 function quotaTier(tier) {
   if (tier === 'enterprise') return 'enterprise';
   if (tier === 'business') return 'business';
@@ -3195,7 +3217,7 @@ async function buildQuotaRows() {
   const overrides = {};
   (await pgPool.query('SELECT * FROM quota_overrides')).rows.forEach(o => { overrides[o.tenant_id] = o; });
   const eventsToday = await eventsByTenantToday();
-  const eventsTotal = await eventsTotalByTenant();
+  const storageBytes = await storageBytesByTenant();
 
   return tenants.map(t => {
     const plan = plans[quotaTier(t.tier)] || {};
@@ -3207,7 +3229,7 @@ async function buildQuotaRows() {
 
     const evActual = eventsToday[t.id] || 0;
     const dbActual = parseInt(t.db_count) || 0;
-    const stActualGb = +(((eventsTotal[t.id] || 0) * AVG_EVENT_BYTES) / (1024 ** 3)).toFixed(3);
+    const stActualGb = +(((storageBytes[t.id] || 0)) / (1024 ** 3)).toFixed(3);
 
     const evPct = pctOf(evActual, evLimit);
     const dbPct = pctOf(dbActual, dbLimit);
@@ -3719,26 +3741,36 @@ app.get('/api/admin/infra/capacity', async (req, res) => {
     const [freeStr, totalStr] = disk.split('\t');
     const free = parseInt(freeStr) || 0, total = parseInt(totalStr) || 1;
     const usedPct = Math.round(((total - free) / total) * 100);
-    const dataBytes = parseInt(await chOne("SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database='dam_analytics'")) || 0;
+    // Storage across EVERY data plane (shared + each dedicated tenant DB), not just dam_analytics.
+    const planeDbs = [...new Set(['dam_analytics', ...Object.keys(await adminPlaneMap())])];
+    const inList = planeDbs.map((d) => `'${String(d).replace(/[^a-zA-Z0-9_]/g, '')}'`).join(',');
+    const dataBytes = parseInt(await chOne(`SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database IN (${inList})`)) || 0;
+    const totalRows = parseInt(await chOne(`SELECT sum(rows) FROM system.parts WHERE active AND database IN (${inList})`)) || 1;
+    const partitions = parseInt(await chOne(`SELECT uniqExact((database, partition)) FROM system.parts WHERE active AND database IN (${inList})`)) || 0;
 
     // Growth: bytes/day ≈ today's events × bytes/event. Forecast days to 90%.
     const evToday = await adminEventsCount('timestamp >= today()'); // across all data planes
-    const totalRows = parseInt(await chOne("SELECT sum(rows) FROM system.parts WHERE active AND database='dam_analytics'")) || 1;
     const bytesPerRow = dataBytes / totalRows || 32;
     const bytesPerDay = evToday * bytesPerRow;
     const bytesTo90 = total * 0.9 - (total - free);
     const daysTo90 = bytesPerDay > 0 ? Math.round(bytesTo90 / bytesPerDay) : null;
 
-    const tenants = parseInt((await pgPool.query('SELECT COUNT(*) n FROM tenants')).rows[0].n);
-    const dbs = parseInt((await pgPool.query('SELECT COUNT(*) n FROM databases')).rows[0].n);
-    const agents = parseInt((await pgPool.query('SELECT COUNT(*) n FROM agents')).rows[0].n);
-    const monthlyCost = dbs * 100 + agents * 50 + tenants * 500;
-    const growthRate = 0.08; // 8%/mo assumption for projection
+    // REAL month-over-month event-volume growth (was a hardcoded 8% assumption).
+    const recent30 = await adminEventsCount('timestamp >= now()-2592000');
+    const prior30 = await adminEventsCount('timestamp >= now()-5184000 AND timestamp < now()-2592000');
+    const growthRate = prior30 > 0 ? Math.max(-0.99, +((recent30 - prior30) / prior30).toFixed(3)) : 0;
 
+    // REAL platform revenue (MRR) from the billing engine — replaces the synthetic
+    // dbs*100 + agents*50 + tenants*500 cost formula.
+    const invoices = await computeInvoices();
+    const monthlyCost = Math.round(invoices.filter((i) => i.status !== 'trial').reduce((s, i) => s + i.total, 0));
+
+    const rr = (await pgPool.query("SELECT data_region FROM tenants WHERE data_region IS NOT NULL AND data_region <> '' LIMIT 1")).rows[0];
+    const regionName = process.env.DAM_REGION || process.env.DATA_REGION || rr?.data_region || 'primary';
     const region = {
-      name: 'local (dev)', chNodes: 1,
+      name: regionName, chNodes: 1,
       diskUsed: formatBytes(total - free), diskTotal: formatBytes(total), diskPct: usedPct,
-      partitions: 16, cores: require('os').cpus().length,
+      partitions, cores: require('os').cpus().length,
       utilization: usedPct,
       forecastFull: daysTo90 == null || daysTo90 > 365 ? '> 1 year' : `~${daysTo90} days`,
       status: usedPct >= 85 ? 'expansion' : 'ok',
@@ -3796,7 +3828,25 @@ app.get('/api/admin/canary', async (req, res) => {
     const rows = (await pgPool.query('SELECT * FROM canary_rollouts ORDER BY started_at DESC')).rows;
     const shaped = rows.map(shapeRollout);
     const active = shaped.find(r => r.status === 'active' || r.status === 'paused') || null;
-    res.json({ active, history: shaped });
+    // A platform rollout affects the whole fleet, and there is NO per-deployment latency/error
+    // telemetry pipeline — so instead of fabricated p99 latencies we surface REAL fleet-health
+    // signals (agent liveness + open critical alerts) as the canary blast-radius view.
+    const ag = (await pgPool.query("SELECT COUNT(*) total, COUNT(*) FILTER (WHERE status='online') online FROM agents")).rows[0];
+    const al = (await pgPool.query("SELECT COUNT(*) FILTER (WHERE severity='critical' AND status='open') crit, COUNT(*) FILTER (WHERE status='open') open FROM alerts WHERE created_at >= now() - interval '24 hours'")).rows[0];
+    const pool = (await pgPool.query(`
+      SELECT t.id, t.name,
+        (SELECT COUNT(*) FROM agents a WHERE a.tenant_id = t.id) AS total,
+        (SELECT COUNT(*) FROM agents a WHERE a.tenant_id = t.id AND a.status='online') AS online,
+        (SELECT COUNT(*) FROM alerts x WHERE x.tenant_id = t.id AND x.status='open' AND x.severity='critical') AS crit
+      FROM tenants t ORDER BY t.created_at`)).rows.map(r => ({
+        id: r.id, name: r.name, agentsOnline: parseInt(r.online), agentsTotal: parseInt(r.total), openCritical: parseInt(r.crit),
+        healthy: (parseInt(r.total) === 0 || parseInt(r.online) === parseInt(r.total)) && parseInt(r.crit) === 0,
+      }));
+    const poolHealth = {
+      tenants: pool.length, agentsOnline: parseInt(ag.online), agentsTotal: parseInt(ag.total),
+      openCritical: parseInt(al.crit), openAlerts24h: parseInt(al.open),
+    };
+    res.json({ active, history: shaped, poolHealth, pool });
   } catch (err) {
     console.error('[Admin] canary list failed:', err.message);
     res.status(500).json({ error: 'Failed to load rollouts' });
@@ -3882,7 +3932,10 @@ async function computeInvoices() {
   const tenants = (await pgPool.query('SELECT id, name, slug, tier, status, data_region, created_at FROM tenants ORDER BY created_at')).rows;
   const rowsByTenant = await adminEventsByTenant(); // all-time per tenant, across data planes
   const totalRows = Object.values(rowsByTenant).reduce((s, n) => s + n, 0);
-  const globalHotBytes = parseInt(await chSafe("SELECT sum(bytes_on_disk) FROM system.parts WHERE database = 'dam_analytics' AND active", 'TabSeparated')) || 0;
+  // Hot storage across EVERY data plane (shared + each dedicated tenant DB), not just dam_analytics.
+  const billPlaneDbs = [...new Set(['dam_analytics', ...Object.keys(await adminPlaneMap())])];
+  const billInList = billPlaneDbs.map((d) => `'${String(d).replace(/[^a-zA-Z0-9_]/g, '')}'`).join(',');
+  const globalHotBytes = parseInt(await chSafe(`SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN (${billInList}) AND active`, 'TabSeparated')) || 0;
   let globalCold = { bytes: 0, objects: 0 };
   try { if (archive && archive.usage) globalCold = await archive.usage(); } catch { /* archive offline */ }
 
@@ -3919,11 +3972,17 @@ app.get('/api/admin/billing', async (req, res) => {
     const overages = inv.filter(i => i.billing === 'Overage pending').length;
     const byRegion = {};
     inv.forEach(i => { byRegion[i.region] = (byRegion[i.region] || 0) + i.total; });
-    const recentEvents = inv.filter(i => i.status !== 'trial').map((i, n) => ({
-      date: new Date(Date.now() - n * 86400000).toISOString(),
-      tenant: i.name, event: i.overage > 0 ? 'Overage' : 'Invoice generated',
-      details: i.overage > 0 ? `Usage overage on ${i.tier} plan` : `Monthly invoice #INV-${2026000 + n + 1}`,
-      amount: i.overage > 0 ? i.overage : i.total, status: i.billing,
+    // REAL billing activity from the platform audit log (rate-card + negotiated-contract
+    // changes) — replaces the previously synthesized feed with fabricated INV numbers and
+    // back-dated timestamps. Empty until real billing actions are taken (honest).
+    const EVENT_LABEL = { 'billing.rates.update': 'Rate card updated', 'billing.contract.update': 'Contract updated', 'billing.contract.remove': 'Contract removed' };
+    const auditRows = (await pgPool.query(
+      `SELECT ts, actor, action, tenant_name, details FROM platform_audit
+       WHERE action LIKE 'billing.%' ORDER BY ts DESC LIMIT 20`)).rows;
+    const recentEvents = auditRows.map((r) => ({
+      date: r.ts, tenant: r.tenant_name || 'Platform',
+      event: EVENT_LABEL[r.action] || r.action,
+      details: r.details || '', amount: null, status: 'Applied',
     }));
     res.json({
       kpis: {
@@ -3944,6 +4003,8 @@ app.get('/api/admin/trials', async (req, res) => {
     const tenants = (await pgPool.query(`SELECT t.id, t.name, t.slug, t.tier, t.status, t.data_region, t.created_at,
         (SELECT COUNT(*) FROM databases d WHERE d.tenant_id = t.id) AS dbs,
         (SELECT COUNT(*) FROM alerts a WHERE a.tenant_id = t.id) AS alerts,
+        (SELECT COUNT(*) FROM report_schedules r WHERE r.tenant_id = t.id) AS reports,
+        (SELECT COUNT(*) FROM users u WHERE u.tenant_id = t.id AND u.status <> 'unverified') AS verified_users,
         (SELECT COUNT(*) FROM databases d WHERE d.tenant_id = t.id AND EXISTS (SELECT 1 FROM agents ag WHERE ag.instance_id = d.instance_id)) AS monitored
       FROM tenants t ORDER BY t.created_at`)).rows;
     const trials = tenants.filter(t => t.status === 'trial').map(t => {
@@ -3953,22 +4014,26 @@ app.get('/api/admin/trials', async (req, res) => {
       if (dbs > 0 && alerts === 0) { milestone = 'Fire first alert rule'; health = 'on-track'; }
       else if (alerts > 0 && dbs < 3) { milestone = 'Add more databases'; health = 'on-track'; }
       else if (alerts > 5) { milestone = 'Ready to convert'; health = 'excellent'; }
-      return { id: t.id, name: t.name, slug: t.slug, region: t.data_region || 'local', day, dbs, alerts, reports: 0, milestone, health };
+      return { id: t.id, name: t.name, slug: t.slug, region: t.data_region || 'local', day, dbs, alerts, reports: parseInt(t.reports) || 0, milestone, health };
     });
     const totalTenants = tenants.length;
+    const verified = tenants.filter(t => parseInt(t.verified_users) > 0).length; // real: ≥1 verified user
     const withDb = tenants.filter(t => parseInt(t.dbs) > 0).length;
     const withAlert = tenants.filter(t => parseInt(t.alerts) > 0).length;
     const converted = tenants.filter(t => t.status === 'active').length;
+    // Average AGE of the currently-active trials (real). Conversion duration isn't derivable —
+    // there's no conversion-timestamp column — so we report trial age rather than fabricate one.
+    const avgTrialAge = trials.length ? Math.round(trials.reduce((s, x) => s + x.day, 0) / trials.length) : 0;
     const funnel = [
       { label: 'Signed up', value: totalTenants, color: 'var(--primary)' },
-      { label: 'Verified email', value: totalTenants, color: 'var(--info)' },
+      { label: 'Verified email', value: verified, color: 'var(--info)' },
       { label: 'Connected 1st DB', value: withDb, color: 'var(--info)' },
       { label: 'First alert', value: withAlert, color: 'var(--amber)' },
       { label: 'Converted', value: converted, color: 'var(--green)' },
       { label: 'Active trial', value: trials.length, color: 'var(--amber)' },
     ];
     res.json({
-      kpis: { activeTrials: trials.length, convertedThisMonth: 0, conversionRate: totalTenants ? Math.round((converted / totalTenants) * 100) : 0, avgDuration: '—' },
+      kpis: { activeTrials: trials.length, converted, conversionRate: totalTenants ? Math.round((converted / totalTenants) * 100) : 0, avgTrialAge: trials.length ? `${avgTrialAge}d` : '—' },
       funnel, trials,
       signals: trials.filter(t => t.health === 'at-risk').map(t => ({ level: 'amber', title: `${t.name} hasn't connected a DB by day ${t.day}`, desc: 'Auto-notify CSM · trigger onboarding email sequence' }))
         .concat(trials.filter(t => t.health === 'excellent').map(t => ({ level: 'green', title: `${t.name} ready for conversion on day ${t.day}`, desc: 'All milestones complete · CSM notified for outreach' }))),
@@ -4008,8 +4073,11 @@ app.get('/api/admin/success', async (req, res) => {
       const ackPct = parseInt(t.alerts_all) > 0 ? Math.round((parseInt(t.alerts_handled) / parseInt(t.alerts_all)) * 100) : 100;
       const risk = health >= 80 ? 'green' : health >= 60 ? 'amber' : 'red';
       const inv = invById[t.id];
-      const arr = inv ? inv.total * 12 : 0;
-      const renewal = new Date(new Date(t.created_at).getTime() + 365 * 86400000);
+      const arr = inv ? Math.round(inv.total * 12) : 0;
+      // Real renewal date from a negotiated contract when one exists; otherwise fall back to a
+      // signup + 1-year ESTIMATE (flagged, not presented as a known contract term).
+      const realRenewal = inv && inv.contractValidUntil ? new Date(inv.contractValidUntil) : null;
+      const renewalDate = realRenewal || new Date(new Date(t.created_at).getTime() + 365 * 86400000);
       const featuresOn = features.filter(f => !f.is_core && featureEnabled(f, t.tier, (ov[f.key] || {})[t.id])).length;
       let signal = '';
       if (parseInt(t.open_alerts) > 20) signal = `${t.open_alerts} unresolved alerts`;
@@ -4018,11 +4086,32 @@ app.get('/api/admin/success', async (req, res) => {
       return {
         id: t.id, name: t.name, plan: t.tier, health, trend: health >= 80 ? 'up' : health >= 60 ? 'flat' : 'down',
         usage, ackPct, features: featuresOn, signal, risk,
-        renewal: renewal.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+        renewal: renewalDate.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }),
+        renewalEstimated: !realRenewal, renewalTs: renewalDate.toISOString(),
         arr,
       };
     });
-    const within90 = accounts.filter(a => { const d = (new Date(a.renewal) - Date.now()) / 86400000; return d >= 0 && d <= 90; });
+    const within90 = accounts.filter(a => { const d = (new Date(a.renewalTs) - Date.now()) / 86400000; return d >= 0 && d <= 90; });
+
+    // REAL Time-to-Value: median/best/worst days from signup to each activation milestone,
+    // measured from the first real timestamp per tenant (replaces the hardcoded TTV table).
+    const ttvDefs = [['First database connected', 'databases'], ['First agent deployed', 'agents'], ['First alert', 'alerts'], ['First policy', 'policies'], ['First scheduled report', 'report_schedules']];
+    const ttv = [];
+    for (const [label, tbl] of ttvDefs) {
+      let days = [];
+      try {
+        days = (await pgPool.query(
+          `SELECT extract(epoch from (min(x.created_at) - t.created_at))/86400.0 AS d
+           FROM ${tbl} x JOIN tenants t ON t.id = x.tenant_id
+           WHERE x.created_at IS NOT NULL AND t.created_at IS NOT NULL
+           GROUP BY t.id, t.created_at`)).rows.map(r => Number(r.d)).filter(d => Number.isFinite(d) && d >= 0);
+      } catch { days = []; }
+      if (!days.length) continue;
+      days.sort((a, b) => a - b);
+      const median = days[Math.floor(days.length / 2)];
+      ttv.push({ label, median: +median.toFixed(1), best: +days[0].toFixed(1), worst: +days[days.length - 1].toFixed(1), n: days.length, status: median <= 3 ? 'good' : 'improve' });
+    }
+
     res.json({
       kpis: {
         healthy: accounts.filter(a => a.risk === 'green').length,
@@ -4031,7 +4120,7 @@ app.get('/api/admin/success', async (req, res) => {
         renewals90d: within90.length, arrAtStake: within90.reduce((s, a) => s + a.arr, 0),
         total: accounts.length,
       },
-      accounts, adoption,
+      ttv, accounts, adoption,
       expansion: accounts.filter(a => a.signal).map(a => ({
         level: a.risk === 'red' ? 'red' : a.risk === 'amber' ? 'amber' : 'info',
         title: a.name, desc: a.signal + (a.risk === 'red' ? ' — escalate to account exec.' : a.risk === 'amber' ? ' — schedule QBR.' : ' — expansion opportunity.'),
