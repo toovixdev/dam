@@ -4157,21 +4157,15 @@ async function tenantBillingUsage(t, rowsByTenant, totalRows, globalHotBytes, gl
 
 async function computeInvoices() {
   const tenants = (await pgPool.query('SELECT id, name, slug, tier, status, data_region, created_at FROM tenants ORDER BY created_at')).rows;
-  const rowsByTenant = await adminEventsByTenant(); // all-time per tenant, across data planes
-  const totalRows = Object.values(rowsByTenant).reduce((s, n) => s + n, 0);
-  // Hot storage across EVERY data plane (shared + each dedicated tenant DB), not just dam_analytics.
-  const billPlaneDbs = [...new Set(['dam_analytics', ...Object.keys(await adminPlaneMap())])];
-  const billInList = billPlaneDbs.map((d) => `'${String(d).replace(/[^a-zA-Z0-9_]/g, '')}'`).join(',');
-  const globalHotBytes = parseInt(await chSafe(`SELECT sum(bytes_on_disk) FROM system.parts WHERE database IN (${billInList}) AND active`, 'TabSeparated')) || 0;
-  let globalCold = { bytes: 0, objects: 0 };
-  try { if (archive && archive.usage) globalCold = await archive.usage(); } catch { /* archive offline */ }
 
   const out = [];
   for (const t of tenants) {
-    const usage = await tenantBillingUsage(t, rowsByTenant, totalRows, globalHotBytes, globalCold);
+    // Use the SAME per-tenant usage + policy as the tenant-facing invoice (computeUsage +
+    // applyInvoicePolicy) so the admin breakdown equals exactly what each workspace is billed.
+    const usage = await computeUsage(t.id);
     const eff = await effectiveBilling(t.id); // global card + this tenant's negotiated contract
     const isTrial = t.status === 'trial';
-    let { items, total } = buildLineItems(usage, eff.plan, eff.rates);
+    let { items, total } = applyInvoicePolicy(usage, buildLineItems(usage, eff.plan, eff.rates));
     if (isTrial) { items = items.map(i => ({ ...i, amount: 0 })); total = 0; }
     const amt = (name) => Number((items.find(i => i.item === name) || {}).amount) || 0;
     const baseDb = amt('Enterprise base fee') + amt('Monitored databases');
@@ -10189,6 +10183,17 @@ function buildLineItems(u, plan = BILLING_PLAN, rates = BILLING_RATES) {
   return { items, total: +total.toFixed(2) };
 }
 
+// Single source of truth for invoice POLICY, applied to a computed {items,total} — so the
+// tenant-facing invoice (persisted by ensureInvoices) and the admin "Tenant Usage & Invoice
+// Breakdown" (computeInvoices) can never disagree. A workspace with NO monitored databases is
+// $0; the payment-gateway test override (BILLING_TEST_TOTAL_USD), when set, forces a fixed
+// test charge. Both callers pass the same per-tenant usage from computeUsage().
+function applyInvoicePolicy(usage, built) {
+  if (usage.monitoredDbs === 0) return { items: [{ item: 'No active databases', desc: 'No monitored databases this period — nothing to bill', qty: 0, rate: 0, amount: 0 }], total: 0 };
+  if (BILLING_TEST_TOTAL_USD != null && !Number.isNaN(BILLING_TEST_TOTAL_USD)) return { items: [{ item: 'Test charge', desc: 'Reduced bill for payment-gateway testing (BILLING_TEST_TOTAL_USD)', qty: 1, rate: BILLING_TEST_TOTAL_USD, amount: BILLING_TEST_TOTAL_USD }], total: BILLING_TEST_TOTAL_USD };
+  return built;
+}
+
 // Effective billing card for a tenant = global card with any ACTIVE per-tenant
 // negotiated overrides applied (a NULL field keeps the global value; an override
 // past its valid_until is ignored). Drives both admin + product billing.
@@ -10218,21 +10223,10 @@ async function ensureInvoices(tenantId, usage, plan, rates) {
   const now = new Date();
   const periodStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const due = new Date(now.getFullYear(), now.getMonth() + 1, 15);
-  const { items, total } = buildLineItems(usage, plan, rates);
   const ref = `INV-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
-  // Billing is usage-gated: a workspace with NO monitored databases is not billed —
-  // no base fee, no test override → its current bill is $0. Only active workspaces
-  // (≥1 monitored DB) accrue the base fee / usage (or the payment-test override).
-  let invItems, invTotal;
-  if (usage.monitoredDbs === 0) {
-    invTotal = 0;
-    invItems = [{ item: 'No active databases', desc: 'No monitored databases this period — nothing to bill', qty: 0, rate: 0, amount: 0 }];
-  } else if (BILLING_TEST_TOTAL_USD != null && !Number.isNaN(BILLING_TEST_TOTAL_USD)) {
-    invTotal = BILLING_TEST_TOTAL_USD;
-    invItems = [{ item: 'Test charge', desc: 'Reduced bill for payment-gateway testing (BILLING_TEST_TOTAL_USD)', qty: 1, rate: BILLING_TEST_TOTAL_USD, amount: BILLING_TEST_TOTAL_USD }];
-  } else {
-    invItems = items; invTotal = total;
-  }
+  // Billing is usage-gated: a workspace with NO monitored databases is not billed. The shared
+  // policy (applyInvoicePolicy) is the SAME one the admin breakdown uses, so the two never drift.
+  const { items: invItems, total: invTotal } = applyInvoicePolicy(usage, buildLineItems(usage, plan, rates));
 
   const existing = (await pgPool.query('SELECT * FROM billing_invoices WHERE tenant_id = $1 AND reference = $2', [tenantId, ref])).rows[0];
   if (!existing) {
