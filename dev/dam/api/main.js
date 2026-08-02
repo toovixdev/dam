@@ -3638,43 +3638,72 @@ app.get('/api/admin/infra/health', async (req, res) => {
   }
 });
 
-// Noisy-neighbor: per-tenant ClickHouse consumption from REAL event share.
-// Layer figures (mem / IO / k8s) are derived from the event share for the
-// single-node dev cluster and labelled as estimates in the UI.
+// Noisy-neighbor: REAL per-tenant consumption of the shared platform, measured from each tenant's
+// own data plane (events, all-time rows, dedicated-plane storage) + the ClickHouse query log.
+// Contention only actually bites SHARED-plane tenants (they share the dam_analytics DB); dedicated
+// tenants are isolated. No synthetic CPU/mem/IO or Event-Hub/K8s figures — this is a single
+// ClickHouse node with no Kubernetes, so those layers were fiction and are removed.
 app.get('/api/admin/infra/noisy', async (req, res) => {
   try {
-    const tenants = (await pgPool.query(`SELECT t.id, t.name, t.slug, t.tier, t.data_region,
+    const planes = await adminPlaneMap();
+    const planeDbs = [...new Set(['dam_analytics', ...Object.keys(planes)])];
+    const tenants = (await pgPool.query(`SELECT t.id, t.name, t.slug, t.tier, t.data_region, t.data_plane,
         (SELECT COUNT(*) FROM databases d WHERE d.tenant_id = t.id) AS dbs FROM tenants t`)).rows;
-    const byTenant = await adminEventsByTenant('timestamp >= now()-3600'); // last hour, across data planes
-    const totalHr = Object.values(byTenant).reduce((s, n) => s + n, 0);
-    const diskTotalRows = parseInt(await chOne("SELECT sum(rows) FROM system.parts WHERE active AND database='dam_analytics'")) || 1;
 
-    const shaped = tenants.map(t => {
-      const hr = byTenant[t.id] || 0;
+    const eventsHr = await adminEventsByTenant('timestamp >= now()-3600');
+    const last60 = await adminEventsByTenant('timestamp >= now()-60');
+    const totalHr = Object.values(eventsHr).reduce((s, n) => s + n, 0);
+
+    // Per-plane storage (system.parts) + query load (system.query_log). A shared plane's queries
+    // can't be split per tenant, so shared tenants report the plane-wide count (flagged).
+    const planeStore = {}, planeQueriesHr = {};
+    const inList = planeDbs.map((d) => `'${String(d).replace(/[^a-zA-Z0-9_]/g, '')}'`).join(',');
+    const st = await chSafe(`SELECT database, sum(bytes_on_disk) AS b, sum(rows) AS r FROM system.parts WHERE active AND database IN (${inList}) GROUP BY database`);
+    if (Array.isArray(st)) st.forEach((x) => { planeStore[x.database] = { bytes: parseInt(x.b) || 0, rows: parseInt(x.r) || 0 }; });
+    const rowsByTenant = {};
+    for (const db of planeDbs) {
+      planeQueriesHr[db] = parseInt(await chOne(`SELECT count() FROM system.query_log WHERE event_time >= now()-3600 AND has(databases, '${db}')`)) || 0;
+      const rows = await chSafe(`SELECT tenant_id, count() AS cnt FROM ${db}.events GROUP BY tenant_id`);
+      if (Array.isArray(rows)) rows.forEach((r) => { rowsByTenant[r.tenant_id] = (rowsByTenant[r.tenant_id] || 0) + parseInt(r.cnt); });
+    }
+
+    const shaped = tenants.map((t) => {
+      const plane = t.data_plane || 'dam_analytics';
+      const dedicated = plane !== 'dam_analytics';
+      const hr = eventsHr[t.id] || 0;
       const share = totalHr > 0 ? Math.round((hr / totalHr) * 100) : 0;
-      const eps = +(hr / 3600).toFixed(2);
-      // Derived per-layer estimates from event share (single shared dev cluster).
-      const chCpu = Math.min(95, Math.round(share * 0.6));
-      const chDisk = Math.min(95, Math.round(share * 0.4) + 10);
-      const status = chCpu >= 30 || chDisk >= 85 ? 'warning' : 'normal';
+      const eps = +(((last60[t.id] || 0)) / 60).toFixed(2);
+      // Only shared-plane tenants can be "noisy" (contend for one DB); dedicated = isolated.
+      let status = 'normal';
+      if (!dedicated && share >= 40) status = 'danger';
+      else if (!dedicated && share >= 25) status = 'warning';
       return {
-        tenantId: t.id, name: t.name, slug: t.slug, region: t.data_region || 'local', dbs: parseInt(t.dbs),
+        tenantId: t.id, name: t.name, slug: t.slug, tier: t.tier || 'starter',
+        region: t.data_region || '—', dbs: parseInt(t.dbs),
+        plane: dedicated ? 'dedicated' : 'shared', planeDb: plane, isolated: dedicated,
         eventsHr: hr, eps, share,
-        clickhouse: { cpu: chCpu, mem: Math.round(chCpu * 0.85), diskIO: Math.round(chCpu * 0.9), disk: chDisk, queriesHr: hr, slowQ: Math.round(hr * 0.01) },
-        eventhub: { tpu: Math.min(95, share), partitions: `${Math.max(1, Math.round(share / 12))}/16`, lag: `${eps > 0 ? (0.2 + share / 100).toFixed(1) : '0.0'}s`, backlog: hr > 1000 ? `${(hr / 1000).toFixed(1)}K` : `${hr}` },
-        k8s: { cpu: Math.round(chCpu * 0.5), mem: Math.round(chCpu * 0.45), pods: `${Math.max(1, Math.round(share / 20))}/${Math.max(2, Math.round(share / 15))}`, restarts: 0, evictions: 0 },
+        totalRows: rowsByTenant[t.id] || 0,
+        storageBytes: dedicated ? (planeStore[plane]?.bytes ?? null) : null,
+        queriesHr: planeQueriesHr[plane] || 0, queriesShared: !dedicated,
         status,
       };
-    }).sort((a, b) => b.share - a.share);
+    }).sort((a, b) => b.share - a.share || b.eventsHr - a.eventsHr);
 
     const top = shaped[0];
+    const diskPct = parseInt(await chOne("SELECT round((1-free_space/total_space)*100) FROM system.disks LIMIT 1")) || 0;
+    const nodeMemBytes = parseInt(await chOne("SELECT value FROM system.metrics WHERE metric='MemoryTracking'")) || 0;
+    const nodeQueriesHr = parseInt(await chOne("SELECT count() FROM system.query_log WHERE event_time >= now()-3600")) || 0;
+    const sharedTenants = shaped.filter((t) => t.plane === 'shared').length;
+
     res.json({
       kpis: {
-        topConsumer: top ? top.name : '—', topRegion: top ? top.region : '—',
-        clickhouseDiskPct: parseInt(await chOne("SELECT round((1-free_space/total_space)*100) FROM system.disks LIMIT 1")) || 0,
-        eventBusPct: shaped.reduce((s, t) => s + t.eventhub.tpu, 0) > 100 ? 100 : shaped.reduce((s, t) => s + t.eventhub.tpu, 0),
-        throttled: 0,
+        topConsumer: top ? top.name : '—', topRegion: top ? top.region : '—', topShare: top ? top.share : 0,
+        clickhouseDiskPct: diskPct,
+        nodeMemMb: Math.round(nodeMemBytes / 1e6),
+        queriesHr: nodeQueriesHr,
+        warnings: shaped.filter((t) => t.status !== 'normal').length,
       },
+      node: { diskPct, memMb: Math.round(nodeMemBytes / 1e6), queriesHr: nodeQueriesHr, dataPlanes: planeDbs.length, sharedTenants },
       tenants: shaped,
     });
   } catch (err) {
