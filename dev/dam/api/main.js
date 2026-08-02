@@ -1588,6 +1588,94 @@ async function runAdminMigration() {
       console.log('[Admin] Seeded canary_rollouts history');
     }
 
+    // ── Runbooks: operational playbooks for platform ops (Infrastructure section) ──
+    await client.query(`CREATE TABLE IF NOT EXISTS runbooks (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key           VARCHAR(60) UNIQUE NOT NULL,
+      title         VARCHAR(160) NOT NULL,
+      category      VARCHAR(40) NOT NULL,
+      severity      VARCHAR(16) NOT NULL DEFAULT 'medium',   -- critical|high|medium|info
+      trigger_type  VARCHAR(20) NOT NULL DEFAULT 'manual',    -- threshold|event|scheduled|manual
+      trigger_config JSONB,                                   -- { signal, op, value }
+      description   TEXT,
+      steps         JSONB NOT NULL DEFAULT '[]',              -- [{ text, link, tag }]
+      related       JSONB NOT NULL DEFAULT '[]',
+      owner         VARCHAR(80),
+      sort_order    INT DEFAULT 100,
+      created_at    TIMESTAMPTZ DEFAULT now()
+    )`);
+    await client.query(`CREATE TABLE IF NOT EXISTS runbook_runs (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      runbook_id    UUID,
+      runbook_key   VARCHAR(60),
+      runbook_title VARCHAR(160),
+      operator      VARCHAR(200),
+      status        VARCHAR(16) NOT NULL DEFAULT 'open',       -- open|success|aborted
+      steps_total   INT DEFAULT 0,
+      steps_done    INT DEFAULT 0,
+      checklist     JSONB NOT NULL DEFAULT '[]',
+      notes         TEXT,
+      started_at    TIMESTAMPTZ DEFAULT now(),
+      completed_at  TIMESTAMPTZ,
+      duration_s    INT
+    )`);
+    const rbCount = await client.query('SELECT COUNT(*) AS n FROM runbooks');
+    if (parseInt(rbCount.rows[0].n) === 0) {
+      const IH = 'Infrastructure Health', NN = 'Noisy Neighbor', CP = 'Capacity Planning', CD = 'Canary Deployments', BG = 'Break-Glass';
+      const S = (text, link, tag) => ({ text, link: link || null, tag: tag || null });
+      const RUNBOOKS = [
+        { key: 'rb.ch-disk-full', title: 'ClickHouse disk > 85%', category: 'Incident Response', severity: 'critical', trigger_type: 'threshold', trigger_config: { signal: 'disk_pct', op: 'gte', value: 85 }, owner: 'Platform SRE', related: [IH, NN, CP], sort: 1,
+          description: 'The ClickHouse data disk is nearing capacity, risking ingest failure across every tenant plane. Reclaim space and/or expand before writes stall.',
+          steps: [S('Confirm the disk figure in Infrastructure Health', '/infra-health', 'real'), S('Identify the top consumer in Noisy Neighbor', '/noisy-neighbor', 'real'), S('Verify the 90-day TTL and drop any detached / expired partitions'), S('Expand the ClickHouse volume from Capacity Planning', '/capacity'), S('If one tenant dominates, run “Migrate tenant → dedicated plane”'), S('Confirm disk < 70% and resolve the incident')] },
+        { key: 'rb.agents-offline', title: 'Agent fleet mass-offline', category: 'Incident Response', severity: 'critical', trigger_type: 'threshold', trigger_config: { signal: 'agents_online_pct', op: 'lt', value: 50 }, owner: 'Platform SRE', related: [IH], sort: 2,
+          description: 'More than half the agent fleet is offline — capture is degraded and tenants may be silently unmonitored.',
+          steps: [S('Check fleet status in Infrastructure Health', '/infra-health', 'real'), S('Determine if it is one tenant/region or global (control-plane ingress)'), S('Verify the control plane + ingress WAF/LB are reachable'), S('Check for a bad agent release — see Canary Deployments', '/canary'), S('Notify affected tenants if capture was interrupted')] },
+        { key: 'rb.ingest-stalled', title: 'Ingest pipeline stalled', category: 'Incident Response', severity: 'high', trigger_type: 'threshold', trigger_config: { signal: 'ingest_lag_s', op: 'gte', value: 300 }, owner: 'Platform SRE', related: [IH], sort: 3,
+          description: 'No events have landed in ClickHouse for 5+ minutes across all planes — the collector or event bus may be down.',
+          steps: [S('Confirm the ingest-lag figure in Infrastructure Health', '/infra-health', 'real'), S('Check the Event Bus (NATS) + Ingest Collector service status'), S('Check dam-audit-consumer (Pub/Sub / Event Hub) for agentless tenants'), S('Restart the collector; confirm events resume'), S('Backfill window is covered by source retention — verify no loss')] },
+        { key: 'rb.alert-storm', title: 'Alert-storm triage', category: 'Incident Response', severity: 'high', trigger_type: 'threshold', trigger_config: { signal: 'open_critical_24h', op: 'gte', value: 50 }, owner: 'On-call', related: [], sort: 4,
+          description: 'An unusually high volume of open critical alerts across the fleet — could be a real incident or a mis-tuned policy.',
+          steps: [S('Group open criticals by policy + tenant'), S('If one policy dominates, check for a false-positive pattern'), S('Apply a governed exception if warranted (per-tenant, time-boxed)'), S('Escalate genuine incidents to the tenant security contact')] },
+        { key: 'rb.tenant-dedicate', title: 'Migrate tenant → dedicated plane', category: 'Tenant Ops', severity: 'medium', trigger_type: 'threshold', trigger_config: { signal: 'noisy_share', op: 'gte', value: 30 }, owner: 'Platform SRE', related: [NN, CP], sort: 5,
+          description: 'A shared-plane tenant is consuming a large share of the shared ClickHouse DB — isolate it on its own data plane.',
+          steps: [S('Confirm the share in Noisy Neighbor', '/noisy-neighbor', 'real'), S('Provision a dedicated ClickHouse database (tenant_<id>)'), S('Set tenants.data_plane and warm the cache'), S('Backfill or cut over ingest to the new plane'), S('Verify events route to the dedicated plane; monitor for 24h')] },
+        { key: 'rb.tenant-provision', title: 'Provision new enterprise tenant', category: 'Tenant Ops', severity: 'info', trigger_type: 'manual', trigger_config: null, owner: 'Platform Ops', related: [], sort: 6,
+          description: 'Standard steps to bring a new enterprise workspace online with correct isolation and entitlements.',
+          steps: [S('Create the tenant + admin invite'), S('Set tier + dedicated data plane for paid tiers'), S('Seed default policy pack + quotas'), S('Configure SSO / entitlements as contracted'), S('Confirm first agent enrolls + events land')] },
+        { key: 'rb.tenant-offboard', title: 'Offboard / delete a tenant', category: 'Tenant Ops', severity: 'medium', trigger_type: 'manual', trigger_config: null, owner: 'Platform Ops', related: [], sort: 7,
+          description: 'Cleanly remove a departing tenant and its data per the retention agreement.',
+          steps: [S('Confirm the offboarding request + retention terms'), S('Export any contractually-required data / evidence'), S('Revoke enroll tokens + SSO; disable users'), S('Drop the tenant data plane + purge ClickHouse'), S('Record completion in the audit trail')] },
+        { key: 'rb.canary-rollback', title: 'Canary rollback', category: 'Releases', severity: 'critical', trigger_type: 'event', trigger_config: { signal: 'canary_failed', op: 'gte', value: 1 }, owner: 'Release Eng', related: [CD], sort: 8,
+          description: 'A canary rollout is failing — roll back to the previous version to protect the fleet.',
+          steps: [S('Open the active rollout in Canary Deployments', '/canary', 'real'), S('Hit Rollback — traffic reverts to the previous version'), S('Confirm fleet health recovers (agents online, criticals fall)'), S('File the failure for the release retro')] },
+        { key: 'rb.canary-promote', title: 'Promote canary to 100%', category: 'Releases', severity: 'info', trigger_type: 'manual', trigger_config: null, owner: 'Release Eng', related: [CD], sort: 9,
+          description: 'The canary is healthy through its phases — promote it fleet-wide.',
+          steps: [S('Verify pool health is green in Canary Deployments', '/canary', 'real'), S('Promote through 25 → 50 → 100%'), S('Watch open-critical + agent-online for 30 min'), S('Mark the rollout success')] },
+        { key: 'rb.kek-rotate', title: 'Rotate KEK / customer KMS', category: 'Security & Access', severity: 'info', trigger_type: 'scheduled', trigger_config: { signal: 'scheduled', op: 'eq', value: 90 }, owner: 'SecOps', related: [], sort: 10,
+          description: 'Quarterly rotation of the key-encryption key / customer-managed KMS material.',
+          steps: [S('Generate the new key version in the KMS / Vault'), S('Re-wrap connector secrets with the new KEK'), S('Verify decrypt works end-to-end on a test connector'), S('Retire the old key version per policy'), S('Record the rotation date')] },
+        { key: 'rb.breakglass-review', title: 'Break-glass access — post-review', category: 'Security & Access', severity: 'high', trigger_type: 'event', trigger_config: { signal: 'breakglass_open', op: 'gte', value: 1 }, owner: 'SecOps', related: [BG], sort: 11,
+          description: 'Emergency (break-glass) operator access is active — review and close it out.',
+          steps: [S('Open active sessions in Break-Glass', '/sessions', 'real'), S('Confirm the access was authorized + still needed'), S('Review the actions taken during the session (audit trail)'), S('Revoke the session; rotate any exposed credentials')] },
+        { key: 'rb.worm-restore', title: 'Restore from WORM archive', category: 'Data & Backup', severity: 'info', trigger_type: 'manual', trigger_config: null, owner: 'Platform SRE', related: [], sort: 12,
+          description: 'Restore immutable archived events (WORM / object-lock) for an investigation or recovery.',
+          steps: [S('Identify the tenant + time range to restore'), S('Locate the archive objects (MinIO / S3 object-lock)'), S('Restore into a scratch ClickHouse table'), S('Verify hash-chain integrity of the restored range'), S('Hand off to the requesting investigation')] },
+        { key: 'rb.plane-expansion', title: 'ClickHouse plane expansion', category: 'Data & Backup', severity: 'high', trigger_type: 'threshold', trigger_config: { signal: 'disk_pct', op: 'gte', value: 80 }, owner: 'Platform SRE', related: [CP, IH], sort: 13,
+          description: 'Proactively grow ClickHouse storage before the disk-full incident threshold is reached.',
+          steps: [S('Review the forecast in Capacity Planning', '/capacity', 'real'), S('Size the volume increase for the runway target'), S('Expand the disk / add a part; verify ClickHouse sees it'), S('Confirm used % drops and forecast extends')] },
+        { key: 'rb.dpdpa-breach', title: 'DPDPA breach notification (72h)', category: 'Compliance', severity: 'critical', trigger_type: 'manual', trigger_config: null, owner: 'DPO', related: [], sort: 14,
+          description: 'A reportable data breach affecting a tenant — the DPDPA 72-hour notification clock is running.',
+          steps: [S('Start the 72h timer; record the discovery time'), S('Scope affected data subjects + records'), S('Notify the Data Protection Board + affected tenant(s)'), S('Document remediation + preventive actions'), S('File the completed notification package')] },
+      ];
+      for (const r of RUNBOOKS) {
+        await client.query(
+          `INSERT INTO runbooks (key, title, category, severity, trigger_type, trigger_config, description, steps, related, owner, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (key) DO NOTHING`,
+          [r.key, r.title, r.category, r.severity, r.trigger_type, r.trigger_config ? JSON.stringify(r.trigger_config) : null, r.description, JSON.stringify(r.steps), JSON.stringify(r.related), r.owner, r.sort]);
+      }
+      console.log(`[Admin] Seeded ${RUNBOOKS.length} runbooks`);
+    }
+
     // Billing rate card — isolated singleton config table. Seeded with the
     // historical hardcoded defaults; loaded into memory at startup and editable
     // from the admin Billing screen. Drives both product + admin billing.
@@ -3894,6 +3982,145 @@ app.post('/api/admin/canary/:id/action', async (req, res) => {
   } catch (err) {
     console.error('[Admin] canary action failed:', err.message);
     res.status(500).json({ error: 'Failed to update rollout' });
+  }
+});
+
+// ══ Admin · Runbooks (operational playbooks) ═══════════════════════════════════
+// Live platform signals a runbook trigger can evaluate against — all REAL, reusing the same
+// sources the Infrastructure screens read.
+async function runbookSignals() {
+  const s = { disk_pct: 0, agents_online: 0, agents_total: 0, agents_online_pct: 100, ingest_lag_s: null, open_critical_24h: 0, noisy_share: 0, canary_failed: 0, breakglass_open: 0 };
+  try { s.disk_pct = parseInt(await chOne("SELECT round((1-free_space/total_space)*100) FROM system.disks LIMIT 1")) || 0; } catch { /* CH */ }
+  try {
+    const ag = (await pgPool.query("SELECT COUNT(*) total, COUNT(*) FILTER (WHERE status='online') online FROM agents")).rows[0];
+    s.agents_total = parseInt(ag.total) || 0; s.agents_online = parseInt(ag.online) || 0;
+    s.agents_online_pct = s.agents_total > 0 ? Math.round((s.agents_online / s.agents_total) * 100) : 100;
+  } catch { /* pg */ }
+  try { const ts = await adminEventsMaxTs(); s.ingest_lag_s = ts ? Math.max(0, Math.floor(Date.now() / 1000 - ts)) : null; } catch { /* CH */ }
+  try { s.open_critical_24h = parseInt((await pgPool.query("SELECT COUNT(*) n FROM alerts WHERE severity='critical' AND status='open' AND created_at >= now()-interval '24 hours'")).rows[0].n) || 0; } catch { /* pg */ }
+  try {
+    const byT = await adminEventsByTenant('timestamp >= now()-3600'); const vals = Object.values(byT); const tot = vals.reduce((a, b) => a + b, 0);
+    s.noisy_share = tot > 0 ? Math.round((Math.max(0, ...vals) / tot) * 100) : 0;
+  } catch { /* CH */ }
+  try { s.canary_failed = parseInt((await pgPool.query("SELECT COUNT(*) n FROM canary_rollouts WHERE status='rolled_back' AND completed_at >= now()-interval '24 hours'")).rows[0].n) > 0 ? 1 : 0; } catch { /* pg */ }
+  try { s.breakglass_open = parseInt((await pgPool.query("SELECT COUNT(*) n FROM admin_access_sessions WHERE status='active'")).rows[0].n) || 0; } catch { /* table optional */ }
+  return s;
+}
+function evalRunbookTrigger(cfg, s) {
+  if (!cfg || !cfg.signal || cfg.signal === 'scheduled') return false; // scheduled/manual never auto-fire
+  const v = s[cfg.signal]; if (v == null) return false;
+  const t = Number(cfg.value);
+  switch (cfg.op) { case 'gte': return v >= t; case 'gt': return v > t; case 'lte': return v <= t; case 'lt': return v < t; case 'eq': return v === t; default: return false; }
+}
+function runbookStatus(rb, triggered) {
+  if (triggered) return 'triggered';
+  if (rb.trigger_type === 'manual') return 'manual';
+  if (rb.trigger_type === 'scheduled') return 'scheduled';
+  return 'armed';
+}
+
+app.get('/api/admin/runbooks', async (req, res) => {
+  try {
+    const [rbs, signals] = await Promise.all([
+      pgPool.query('SELECT * FROM runbooks ORDER BY sort_order, title'),
+      runbookSignals(),
+    ]);
+    const runbooks = rbs.rows.map((r) => {
+      const cfg = typeof r.trigger_config === 'string' ? JSON.parse(r.trigger_config || 'null') : r.trigger_config;
+      const triggered = evalRunbookTrigger(cfg, signals);
+      const steps = typeof r.steps === 'string' ? JSON.parse(r.steps || '[]') : (r.steps || []);
+      const related = typeof r.related === 'string' ? JSON.parse(r.related || '[]') : (r.related || []);
+      return {
+        id: r.id, key: r.key, title: r.title, category: r.category, severity: r.severity,
+        triggerType: r.trigger_type, triggerConfig: cfg, triggered, status: runbookStatus(r, triggered),
+        description: r.description, steps, related, owner: r.owner, stepCount: steps.length,
+      };
+    });
+    const runs = (await pgPool.query(
+      `SELECT id, runbook_key, runbook_title, operator, status, steps_total, steps_done, started_at, completed_at, duration_s
+       FROM runbook_runs ORDER BY started_at DESC LIMIT 25`)).rows;
+    const last30 = (await pgPool.query("SELECT COUNT(*) n, COUNT(*) FILTER (WHERE status='success') ok, COUNT(*) FILTER (WHERE status='aborted') ab, COUNT(*) FILTER (WHERE status='open') open FROM runbook_runs WHERE started_at >= now()-interval '30 days'")).rows[0];
+    const cats = [...new Set(runbooks.map((r) => r.category))];
+    res.json({
+      kpis: {
+        total: runbooks.length,
+        triggered: runbooks.filter((r) => r.triggered).length,
+        armed: runbooks.filter((r) => r.triggerType === 'threshold' || r.triggerType === 'event').length,
+        runs30d: parseInt(last30.n), runsOk: parseInt(last30.ok), runsAborted: parseInt(last30.ab), runsOpen: parseInt(last30.open),
+        categories: cats.length,
+      },
+      signals, categories: cats, runbooks, runs,
+    });
+  } catch (err) {
+    console.error('[Admin] runbooks failed:', err.message);
+    res.status(500).json({ error: 'Failed to load runbooks' });
+  }
+});
+
+// Start a run — creates a checklist instance from the runbook's steps; logged to platform_audit.
+app.post('/api/admin/runbooks/:id/run', async (req, res) => {
+  try {
+    const r = (await pgPool.query('SELECT * FROM runbooks WHERE id=$1', [req.params.id])).rows[0];
+    if (!r) return res.status(404).json({ error: 'Runbook not found' });
+    const steps = typeof r.steps === 'string' ? JSON.parse(r.steps || '[]') : (r.steps || []);
+    const checklist = steps.map((s, i) => ({ i, text: s.text, done: false }));
+    const operator = req.operator?.email || 'Platform Ops';
+    const run = (await pgPool.query(
+      `INSERT INTO runbook_runs (runbook_id, runbook_key, runbook_title, operator, status, steps_total, steps_done, checklist)
+       VALUES ($1,$2,$3,$4,'open',$5,0,$6) RETURNING *`,
+      [r.id, r.key, r.title, operator, steps.length, JSON.stringify(checklist)])).rows[0];
+    await logPlatformAudit({ actor: operator, action: 'runbook.run.start', tenantName: 'Platform', resource: `runbook/${r.key}`, ip: req.ip, details: `Started runbook “${r.title}”` });
+    res.status(201).json({ ok: true, run: { ...run, checklist } });
+  } catch (err) {
+    console.error('[Admin] runbook run start failed:', err.message);
+    res.status(500).json({ error: 'Failed to start run' });
+  }
+});
+
+// Update a run — tick steps and/or complete/abort. Completion is audited.
+app.post('/api/admin/runbooks/runs/:runId', async (req, res) => {
+  try {
+    const run = (await pgPool.query('SELECT * FROM runbook_runs WHERE id=$1', [req.params.runId])).rows[0];
+    if (!run) return res.status(404).json({ error: 'Run not found' });
+    const operator = req.operator?.email || 'Platform Ops';
+    let checklist = Array.isArray(req.body?.checklist) ? req.body.checklist : (typeof run.checklist === 'string' ? JSON.parse(run.checklist || '[]') : run.checklist);
+    const done = checklist.filter((c) => c.done).length;
+    let status = run.status, completedAt = run.completed_at, durationS = run.duration_s;
+    if (req.body?.status === 'success' || req.body?.status === 'aborted') {
+      status = req.body.status; completedAt = new Date();
+      durationS = Math.max(0, Math.floor((completedAt - new Date(run.started_at)) / 1000));
+      await logPlatformAudit({ actor: operator, action: `runbook.run.${status}`, tenantName: 'Platform', resource: `runbook/${run.runbook_key}`, ip: req.ip, details: `Runbook “${run.runbook_title}” ${status} · ${done}/${run.steps_total} steps` });
+    }
+    const upd = (await pgPool.query(
+      `UPDATE runbook_runs SET checklist=$2, steps_done=$3, status=$4, notes=COALESCE($5, notes), completed_at=$6, duration_s=$7 WHERE id=$1 RETURNING *`,
+      [run.id, JSON.stringify(checklist), done, status, req.body?.notes ?? null, completedAt, durationS])).rows[0];
+    res.json({ ok: true, run: upd });
+  } catch (err) {
+    console.error('[Admin] runbook run update failed:', err.message);
+    res.status(500).json({ error: 'Failed to update run' });
+  }
+});
+
+// Create a runbook (admin authoring).
+app.post('/api/admin/runbooks', async (req, res) => {
+  const b = req.body || {};
+  const title = String(b.title || '').trim();
+  if (!title) return res.status(400).json({ error: 'title is required' });
+  const key = String(b.key || 'rb.' + title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')).slice(0, 60);
+  const steps = Array.isArray(b.steps) ? b.steps.map((s) => (typeof s === 'string' ? { text: s } : { text: String(s.text || ''), link: s.link || null, tag: s.tag || null })) : [];
+  try {
+    const r = (await pgPool.query(
+      `INSERT INTO runbooks (key, title, category, severity, trigger_type, trigger_config, description, steps, related, owner, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (key) DO NOTHING RETURNING id`,
+      [key, title, b.category || 'Incident Response', ['critical', 'high', 'medium', 'info'].includes(b.severity) ? b.severity : 'medium',
+       ['threshold', 'event', 'scheduled', 'manual'].includes(b.triggerType) ? b.triggerType : 'manual',
+       b.triggerConfig ? JSON.stringify(b.triggerConfig) : null, b.description || '', JSON.stringify(steps), JSON.stringify(b.related || []), b.owner || 'Platform Ops', 100])).rows[0];
+    if (!r) return res.status(409).json({ error: 'A runbook with that key already exists' });
+    await logPlatformAudit({ actor: req.operator?.email || 'Platform Ops', action: 'runbook.create', tenantName: 'Platform', resource: `runbook/${key}`, ip: req.ip, details: `Created runbook “${title}”` });
+    res.status(201).json({ ok: true, id: r.id, key });
+  } catch (err) {
+    console.error('[Admin] runbook create failed:', err.message);
+    res.status(500).json({ error: 'Failed to create runbook' });
   }
 });
 

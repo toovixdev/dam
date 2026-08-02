@@ -18,6 +18,7 @@ import Roles from './pages/Roles';
 import PlatformEmail from './pages/PlatformEmail';
 import Approvals from './pages/Approvals';
 import ContentPacks from './pages/ContentPacks';
+import Runbooks from './pages/Runbooks';
 import Placeholder from './pages/Placeholder';
 import Login from './pages/Login';
 import { getToken } from './api/client';
@@ -25,8 +26,6 @@ import './App.css';
 
 // Sidebar entries that don't have a real page yet resolve to a titled placeholder.
 const STUBS = [
-  ['/runbooks', 'Runbooks'],
-  ['/content-packs', 'Content Packs'],
   ['/agent-versions', 'Agent Versions'],
 ];
 
@@ -60,6 +59,7 @@ export default function App() {
         <Route path="/platform-email" element={<RequireAuth><PlatformEmail /></RequireAuth>} />
         <Route path="/approvals" element={<RequireAuth><Approvals /></RequireAuth>} />
         <Route path="/content-packs" element={<RequireAuth><ContentPacks /></RequireAuth>} />
+        <Route path="/runbooks" element={<RequireAuth><Runbooks /></RequireAuth>} />
         {STUBS.map(([path, title]) => (
           <Route key={path} path={path} element={<RequireAuth><Placeholder title={title} /></RequireAuth>} />
         ))}
