@@ -3499,13 +3499,17 @@ async function gatherInfra() {
     checkHttp(`http://${MINIO_HOST}:9000/minio/health/live`),
   ]);
 
-  // ClickHouse real metrics
+  // ClickHouse real metrics — aggregate storage across EVERY data plane (the shared
+  // dam_analytics + each paid tenant's dedicated tenant_<id> DB), not just the shared one,
+  // so the fleet totals reflect all tenants rather than only trial/shared traffic.
   const disk = (await chOne("SELECT free_space, total_space FROM system.disks LIMIT 1")) || '0\t0';
   const [freeStr, totalStr] = disk.split('\t');
   const free = parseInt(freeStr) || 0, total = parseInt(totalStr) || 1;
   const diskPct = Math.round(((total - free) / total) * 100);
-  const dataBytes = parseInt(await chOne("SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database='dam_analytics'")) || 0;
-  const dataRows = parseInt(await chOne("SELECT sum(rows) FROM system.parts WHERE active AND database='dam_analytics'")) || 0;
+  const planeDbs = [...new Set(['dam_analytics', ...Object.keys(await adminPlaneMap())])];
+  const planeInList = planeDbs.map((d) => `'${String(d).replace(/[^a-zA-Z0-9_]/g, '')}'`).join(',');
+  const dataBytes = parseInt(await chOne(`SELECT sum(bytes_on_disk) FROM system.parts WHERE active AND database IN (${planeInList})`)) || 0;
+  const dataRows = parseInt(await chOne(`SELECT sum(rows) FROM system.parts WHERE active AND database IN (${planeInList})`)) || 0;
   const queriesHr = parseInt(await chOne("SELECT count() FROM system.query_log WHERE event_time >= now()-3600")) || 0;
   const last60 = await adminEventsCount('timestamp >= now()-60'); // across all data planes
   const eps = +(last60 / 60).toFixed(2);
@@ -3538,7 +3542,57 @@ async function gatherInfra() {
     postgres: { sizeBytes: parseInt(pgStat.rows[0].sz), connections: parseInt(pgStat.rows[0].conns) },
     nats: natsInfo ? { connections: natsInfo.connections, inMsgs: natsInfo.in_msgs, outMsgs: natsInfo.out_msgs, memMb: Math.round((natsInfo.mem || 0) / 1e6), slowConsumers: natsInfo.slow_consumers } : null,
     agents: { online: parseInt(agentAgg.rows[0].online), total: parseInt(agentAgg.rows[0].total) },
+    dataPlanes: planeDbs.length,
   };
+}
+
+// Per-tenant infrastructure footprint — REAL, from each tenant's own data plane. Powers the
+// "Tenant Data Planes" table on the Infrastructure Health page (the "real data from the tenants"
+// view). Storage is exact for dedicated planes (one tenant owns the whole DB); shared-plane
+// tenants report their exact row count but no per-tenant byte split (the plane is co-mingled).
+async function gatherTenantInfra() {
+  const planes = await adminPlaneMap();                         // planeDb -> [tenantIds]
+  const planeDbs = [...new Set(['dam_analytics', ...Object.keys(planes)])];
+  const tenants = (await pgPool.query(`
+    SELECT t.id, t.name, t.slug, t.tier, t.data_region, t.data_plane,
+      (SELECT count(*) FROM databases d WHERE d.tenant_id = t.id) AS dbs,
+      (SELECT count(*) FROM agents a WHERE a.tenant_id = t.id) AS agents_total,
+      (SELECT count(*) FROM agents a WHERE a.tenant_id = t.id AND a.status = 'online') AS agents_online
+    FROM tenants t ORDER BY t.name`)).rows;
+
+  // One GROUP BY per plane: per-tenant all-time row count + latest ingest timestamp.
+  const rowsByTenant = {}, lastTsByTenant = {};
+  for (const db of planeDbs) {
+    const rows = await chSafe(`SELECT tenant_id, count() AS cnt, toUnixTimestamp(max(timestamp)) AS ts FROM ${db}.events GROUP BY tenant_id`);
+    if (Array.isArray(rows)) rows.forEach((r) => {
+      rowsByTenant[r.tenant_id] = (rowsByTenant[r.tenant_id] || 0) + parseInt(r.cnt);
+      const ts = parseInt(r.ts) || 0; if (ts > (lastTsByTenant[r.tenant_id] || 0)) lastTsByTenant[r.tenant_id] = ts;
+    });
+  }
+  // Storage per plane (exact); attributed to a tenant only when the plane is dedicated.
+  const planeStore = {};
+  const inList = planeDbs.map((d) => `'${String(d).replace(/[^a-zA-Z0-9_]/g, '')}'`).join(',');
+  const st = await chSafe(`SELECT database, sum(bytes_on_disk) AS b, sum(rows) AS r FROM system.parts WHERE active AND database IN (${inList}) GROUP BY database`);
+  if (Array.isArray(st)) st.forEach((x) => { planeStore[x.database] = { bytes: parseInt(x.b) || 0, rows: parseInt(x.r) || 0 }; });
+
+  const eventsHr = await adminEventsByTenant('timestamp >= now()-3600');
+  const last60 = await adminEventsByTenant('timestamp >= now()-60');
+  const now = Math.floor(Date.now() / 1000);
+
+  return tenants.map((t) => {
+    const plane = t.data_plane || 'dam_analytics';
+    const dedicated = plane !== 'dam_analytics';
+    const lastTs = lastTsByTenant[t.id] || 0;
+    return {
+      id: t.id, name: t.name, slug: t.slug, tier: t.tier || 'starter', region: t.data_region || '—',
+      plane: dedicated ? 'dedicated' : 'shared', planeDb: plane,
+      dbs: parseInt(t.dbs), agentsOnline: parseInt(t.agents_online), agentsTotal: parseInt(t.agents_total),
+      eventsHr: eventsHr[t.id] || 0, eps: +(((last60[t.id] || 0)) / 60).toFixed(2),
+      totalRows: rowsByTenant[t.id] || 0,
+      storageBytes: dedicated ? (planeStore[plane]?.bytes ?? null) : null,
+      lastIngestLagS: lastTs ? Math.max(0, now - lastTs) : null,
+    };
+  });
 }
 function formatBytes(b) {
   if (!b) return '0 B';
@@ -3549,9 +3603,11 @@ function formatBytes(b) {
 
 app.get('/api/admin/infra/health', async (req, res) => {
   try {
-    const infra = await gatherInfra();
+    const [infra, tenants] = await Promise.all([gatherInfra(), gatherTenantInfra()]);
     const healthy = infra.services.filter(s => s.status === 'healthy').length;
     const degraded = infra.services.filter(s => s.status !== 'healthy').length;
+    const regionName = process.env.DAM_REGION || process.env.DATA_REGION
+      || (tenants.find(t => t.region && t.region !== '—')?.region) || 'primary';
     res.json({
       kpis: {
         servicesHealthy: healthy, servicesTotal: infra.services.length, degraded,
@@ -3561,17 +3617,20 @@ app.get('/api/admin/infra/health', async (req, res) => {
         nats: infra.nats ? { status: 'healthy', connections: infra.nats.connections, slowConsumers: infra.nats.slowConsumers } : { status: 'down' },
       },
       region: {
-        name: 'local (dev)',
+        name: regionName,
         controlPlane: infra.services.find(s => s.kind === 'postgres').status === 'healthy' ? 'Healthy' : 'Degraded',
         dataPlane: infra.services.find(s => s.kind === 'clickhouse').status === 'healthy' ? 'Healthy' : 'Degraded',
         ingestLag: infra.clickhouse.ingestLagS == null ? '—' : `${infra.clickhouse.ingestLagS}s`,
         eps: infra.clickhouse.eps,
         diskPct: infra.clickhouse.diskPct,
+        dataPlanes: infra.dataPlanes,
+        tenantCount: tenants.length,
       },
       services: infra.services,
       clickhouse: infra.clickhouse,
       postgres: infra.postgres,
       nats: infra.nats,
+      tenants,
     });
   } catch (err) {
     console.error('[Admin] infra health failed:', err.message);

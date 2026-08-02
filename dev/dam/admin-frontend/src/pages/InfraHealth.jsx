@@ -8,11 +8,19 @@ const STATUS_LABEL = { healthy: 'Healthy', degraded: 'Degraded', down: 'Down' };
 
 function diskColor(p) { return p > 80 ? 'var(--danger)' : p > 60 ? 'var(--amber)' : 'var(--green)'; }
 function fmtBytes(b) {
+  if (b == null) return '—';
   if (!b) return '0 B';
   const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0; let n = b;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
   return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
 }
+function fmtLag(s) {
+  if (s == null) return <span className="muted">no data</span>;
+  const c = s < 120 ? 'var(--green)' : s < 900 ? 'var(--amber)' : 'var(--danger)';
+  const txt = s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d`;
+  return <b style={{ color: c }}>{txt} ago</b>;
+}
+function fmtNum(n) { return (n ?? 0).toLocaleString(); }
 
 export default function InfraHealth() {
   const { data, loading, lastRefresh, refetch } = useApiData('/admin/infra/health', { poll: 15000 });
@@ -24,6 +32,7 @@ export default function InfraHealth() {
   const ch = data?.clickhouse || {};
   const pg = data?.postgres || {};
   const nats = data?.nats;
+  const tenants = data?.tenants || [];
 
   return (
     <Layout lastRefresh={lastRefresh} onRefresh={refetch}>
@@ -54,7 +63,7 @@ export default function InfraHealth() {
               <div><small className="muted">Control Plane</small><br /><span className={`badge ${r.controlPlane === 'Healthy' ? 'status-green' : 'sev-high'}`}>{r.controlPlane}</span></div>
               <div><small className="muted">Data Plane</small><br /><span className={`badge ${r.dataPlane === 'Healthy' ? 'status-green' : 'sev-high'}`}>{r.dataPlane}</span></div>
             </div>
-            {[['Ingest lag', r.ingestLag], ['Events/s', r.eps], ['Disk usage', `${r.diskPct}%`, diskColor(r.diskPct)]].map(([kk, vv, c]) => (
+            {[['Ingest lag', r.ingestLag], ['Events/s', r.eps], ['Data planes', r.dataPlanes ?? '—'], ['Tenants', r.tenantCount ?? '—'], ['Disk usage', `${r.diskPct}%`, diskColor(r.diskPct)]].map(([kk, vv, c]) => (
               <div key={kk} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12.5, marginBottom: 6 }}>
                 <span className="muted">{kk}</span><b style={c ? { color: c } : {}}>{vv}</b>
               </div>
@@ -87,6 +96,46 @@ export default function InfraHealth() {
           </div>
         </div>
       </section>
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-header">
+          <span className="card-title">Tenant Data Planes</span>
+          <span className="card-sub">{tenants.length} tenants · live footprint from each data plane</span>
+        </div>
+        <div className="card-body no-pad">
+          <table className="data-table">
+            <thead><tr>
+              <th>Tenant</th><th>Tier</th><th>Plane</th><th>Region</th>
+              <th style={{ textAlign: 'right' }}>DBs</th><th style={{ textAlign: 'right' }}>Agents</th>
+              <th style={{ textAlign: 'right' }}>Events/hr</th><th style={{ textAlign: 'right' }}>EPS</th>
+              <th style={{ textAlign: 'right' }}>Rows</th><th style={{ textAlign: 'right' }}>Storage</th>
+              <th style={{ textAlign: 'right' }}>Last ingest</th>
+            </tr></thead>
+            <tbody>
+              {tenants.length === 0 && <tr><td colSpan={11} className="muted" style={{ textAlign: 'center', padding: 18 }}>No tenants.</td></tr>}
+              {tenants.map(t => (
+                <tr key={t.id}>
+                  <td><b>{t.name}</b><br /><small className="muted">{t.slug}</small></td>
+                  <td><span className="badge">{t.tier}</span></td>
+                  <td><span className={`badge ${t.plane === 'dedicated' ? 'status-green' : ''}`}>{t.plane}</span></td>
+                  <td className="muted">{t.region}</td>
+                  <td style={{ textAlign: 'right' }}>{t.dbs}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <span style={{ color: t.agentsTotal === 0 ? 'var(--muted)' : t.agentsOnline === t.agentsTotal ? 'var(--green)' : 'var(--amber)' }}>
+                      {t.agentsOnline}/{t.agentsTotal}
+                    </span>
+                  </td>
+                  <td style={{ textAlign: 'right' }}>{fmtNum(t.eventsHr)}</td>
+                  <td style={{ textAlign: 'right' }}>{t.eps}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtNum(t.totalRows)}</td>
+                  <td style={{ textAlign: 'right' }}>{t.plane === 'dedicated' ? fmtBytes(t.storageBytes) : <span className="muted" title="Shared plane — bytes not split per tenant">shared</span>}</td>
+                  <td style={{ textAlign: 'right' }}>{fmtLag(t.lastIngestLagS)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-header"><span className="card-title">Component Status</span><span className="card-sub">{services.length} platform services · live probe</span></div>
