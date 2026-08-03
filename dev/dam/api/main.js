@@ -1476,6 +1476,64 @@ async function runAdminMigration() {
     await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS min_version VARCHAR(30)`);
     await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS max_version VARCHAR(30)`);
     await client.query(`ALTER TABLE va_check_defs ADD COLUMN IF NOT EXISTS applies_managed VARCHAR(20) DEFAULT 'any'`); // any | self-managed | managed
+
+    // ── CVE / patch-level assessment ─────────────────────────────────────────────────
+    // A curated per-engine ruleset: each row is a CVE affecting a version branch, fixed in a given
+    // release. Evaluated SERVER-SIDE against each DB's collected version (no agent redeploy needed to
+    // ship new CVEs — the whole point of patch-level assessment). One row per (engine, cve, branch).
+    await client.query(`CREATE TABLE IF NOT EXISTS va_cve_defs (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      engine        VARCHAR(20) NOT NULL,
+      cve_id        VARCHAR(30) NOT NULL,
+      title         VARCHAR(240),
+      cvss          NUMERIC(3,1),
+      severity      VARCHAR(15),
+      affected_min  VARCHAR(40),                 -- inclusive branch floor (NULL = from 0)
+      affected_max  VARCHAR(40),                 -- optional inclusive upper of the affected range
+      fixed_in      VARCHAR(40) NOT NULL,         -- first fixed version in this branch
+      remediation   TEXT,
+      refs          TEXT[],
+      published      DATE,
+      enabled       BOOLEAN NOT NULL DEFAULT true,
+      source        VARCHAR(20) DEFAULT 'seed',   -- seed | import | custom
+      created_at    TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (engine, cve_id, fixed_in)
+    )`);
+    // CVE findings ride the same va_findings table (benchmark='CVE'); add the CVE identity columns.
+    await client.query(`ALTER TABLE va_findings ADD COLUMN IF NOT EXISTS cve VARCHAR(30)`);
+    await client.query(`ALTER TABLE va_findings ADD COLUMN IF NOT EXISTS cvss NUMERIC(3,1)`);
+    if (!(await client.query('SELECT 1 FROM va_cve_defs LIMIT 1')).rows.length) {
+      const N = (id) => [`https://nvd.nist.gov/vuln/detail/${id}`];
+      // Curated STARTER set. PostgreSQL CVE-2024-0985 branch data is accurate; MySQL/SQL Server/Oracle
+      // rows are representative examples — production should sync the full feed via POST /api/admin/va/cve/import.
+      const CVES = [
+        // PostgreSQL CVE-2024-0985 — REFRESH MATERIALIZED VIEW CONCURRENTLY privilege escalation (accurate)
+        ['postgresql', 'CVE-2024-0985', 'REFRESH MATERIALIZED VIEW CONCURRENTLY runs arbitrary code as the owner', 8.0, '16.0', '16.2'],
+        ['postgresql', 'CVE-2024-0985', 'REFRESH MATERIALIZED VIEW CONCURRENTLY runs arbitrary code as the owner', 8.0, '15.0', '15.6'],
+        ['postgresql', 'CVE-2024-0985', 'REFRESH MATERIALIZED VIEW CONCURRENTLY runs arbitrary code as the owner', 8.0, '14.0', '14.11'],
+        ['postgresql', 'CVE-2024-0985', 'REFRESH MATERIALIZED VIEW CONCURRENTLY runs arbitrary code as the owner', 8.0, '13.0', '13.14'],
+        ['postgresql', 'CVE-2024-0985', 'REFRESH MATERIALIZED VIEW CONCURRENTLY runs arbitrary code as the owner', 8.0, '12.0', '12.18'],
+        // PostgreSQL CVE-2024-10977 — client processes unencrypted error from a MITM server (accurate)
+        ['postgresql', 'CVE-2024-10977', 'libpq client trusts error messages from an unauthenticated server', 3.1, '16.0', '16.5'],
+        ['postgresql', 'CVE-2024-10977', 'libpq client trusts error messages from an unauthenticated server', 3.1, '15.0', '15.9'],
+        // MySQL — representative Oracle CPU server DoS (verify against NVD)
+        ['mysql', 'CVE-2024-20961', 'MySQL Server (Optimizer) unauthenticated DoS', 4.9, '8.0.0', '8.0.37'],
+        ['mysql', 'CVE-2024-20961', 'MySQL Server (Optimizer) unauthenticated DoS — 5.7 is end-of-life', 4.9, '5.7.0', '5.7.44'],
+        // SQL Server — representative RCE via OLE DB (verify against NVD)
+        ['mssql', 'CVE-2024-0645', 'SQL Server Native Client OLE DB remote code execution', 8.8, '15.0.0', '15.0.4360'],
+        ['mssql', 'CVE-2024-0645', 'SQL Server Native Client OLE DB remote code execution', 8.8, '16.0.0', '16.0.4105'],
+        // Oracle — representative Jan-2024 CPU (verify against NVD)
+        ['oracle', 'CVE-2024-20918', 'Oracle Database Core unauthenticated takeover (Jan 2024 CPU)', 7.5, '19.0', '19.22'],
+      ];
+      const cvss2sev = (s) => s >= 9 ? 'critical' : s >= 7 ? 'high' : s >= 4 ? 'medium' : 'low';
+      for (const [engine, cve, title, cvss, amin, fixed] of CVES) {
+        await client.query(
+          `INSERT INTO va_cve_defs (engine, cve_id, title, cvss, severity, affected_min, fixed_in, remediation, refs, source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'seed') ON CONFLICT (engine, cve_id, fixed_in) DO NOTHING`,
+          [engine, cve, title, cvss, cvss2sev(cvss), amin, fixed, `Upgrade ${engine} to ${fixed} or later (patches ${cve}).`, N(cve)]);
+      }
+      console.log(`[VA] Seeded ${CVES.length} CVE rules across 4 engines`);
+    }
     // Ed25519 signing key for the check pack — agents only run packs signed by this key, so a
     // compromised mirror / MITM can't inject checks that execute on customer DBs. Private key
     // encrypted at rest under the platform secrets key.
@@ -8881,6 +8939,49 @@ const vaScanRequested = new Set();     // tenantIds with a pending on-demand VA 
 const vaManualTriggerAt = new Map();   // tenantId → epoch ms of last consumed on-demand trigger
 const VA_SEV_WEIGHT = { critical: 5, high: 3, medium: 2, low: 1, info: 0.5 };
 
+// ── CVE / patch-level evaluation (server-side, no agent redeploy for new CVEs) ──
+// Dotted-numeric version compare that works across MySQL/PG/SQL-Server-build/Oracle version strings.
+function vparse(v) { return String(v || '').split(/[^0-9]+/).filter((x) => x !== '').map(Number); }
+function vcmp(a, b) { const A = vparse(a), B = vparse(b); const n = Math.max(A.length, B.length); for (let i = 0; i < n; i++) { const x = A[i] || 0, y = B[i] || 0; if (x !== y) return x < y ? -1 : 1; } return 0; }
+function cvssSeverity(s) { s = Number(s) || 0; return s >= 9 ? 'critical' : s >= 7 ? 'high' : s >= 4 ? 'medium' : 'low'; }
+
+// Evaluate the CVE ruleset against one database's collected version → keep only ACTIVE
+// vulnerabilities (fail) in va_findings under benchmark='CVE'; patched CVEs are removed. Multi-branch
+// CVEs (one row per version line) are deduped: a CVE is vulnerable if ANY branch matches the version.
+async function evaluateCveFindings(tenantId, dbId, engine, version) {
+  if (!version || !dbId) return { evaluated: 0, vulnerable: 0 };
+  if (!vparse(version).length) return { evaluated: 0, vulnerable: 0 };
+  const cves = (await pgPool.query('SELECT * FROM va_cve_defs WHERE engine=$1 AND enabled=true', [engine])).rows;
+  const byCve = {};
+  for (const c of cves) { (byCve[c.cve_id] ||= []).push(c); }
+  const stillVuln = [];
+  for (const [cveId, rows] of Object.entries(byCve)) {
+    let hit = null;
+    for (const c of rows) {
+      const inBranch = (!c.affected_min || vcmp(version, c.affected_min) >= 0)
+        && vcmp(version, c.fixed_in) < 0
+        && (!c.affected_max || vcmp(version, c.affected_max) <= 0);
+      if (inBranch) { hit = c; break; }
+    }
+    if (!hit) continue; // not vulnerable → don't store a finding (kept clean); stale ones removed below
+    const sev = hit.severity || cvssSeverity(hit.cvss);
+    await pgPool.query(
+      `INSERT INTO va_findings (tenant_id, database_id, engine, check_id, benchmark, section, title, severity, status, detail, evidence, remediation, refs, cve, cvss, first_seen, last_seen)
+       VALUES ($1,$2,$3,$4,'CVE','patch',$5,$6,'fail',$7,$8,$9,$10,$11,$12, now(), now())
+       ON CONFLICT (tenant_id, database_id, check_id) DO UPDATE SET
+         benchmark='CVE', section='patch', title=EXCLUDED.title, severity=EXCLUDED.severity, status='fail',
+         detail=EXCLUDED.detail, evidence=EXCLUDED.evidence, remediation=EXCLUDED.remediation,
+         refs=EXCLUDED.refs, cve=EXCLUDED.cve, cvss=EXCLUDED.cvss, last_seen=now()`,
+      [tenantId, dbId, engine, cveId, `${cveId}: ${hit.title}`.slice(0, 240), sev,
+       `Running ${version} is affected by ${cveId} (CVSS ${hit.cvss}); fixed in ${hit.fixed_in}.`,
+       `version=${version}`, hit.remediation, hit.refs || [], cveId, hit.cvss]);
+    stillVuln.push(cveId);
+  }
+  // Drop any CVE findings for this DB that are no longer vulnerable (patched / removed from ruleset).
+  await pgPool.query(`DELETE FROM va_findings WHERE tenant_id=$1 AND database_id=$2 AND benchmark='CVE' AND NOT (cve = ANY($3::text[]))`, [tenantId, dbId, stillVuln]);
+  return { evaluated: Object.keys(byCve).length, vulnerable: stillVuln.length };
+}
+
 app.post('/api/va/scan', authRequired, featureRequired('va-scanner'), (req, res) => {
   vaScanRequested.add(req.user.tenantId);
   res.json({ requested: true });
@@ -8950,9 +9051,15 @@ app.post('/api/va/scan-results', async (req, res) => {
            remediation=EXCLUDED.remediation, refs=EXCLUDED.refs, last_seen=now()`,
         [tenantId, dbId, scan.id, eng, c.check_id, benchmark || null, c.section || null, (c.title || c.check_id).slice(0, 240), c.severity || 'medium', c.status || 'error', c.detail || null, (c.evidence || '').slice(0, 4000) || null, c.remediation || null, Array.isArray(c.refs) ? c.refs : []]);
     }
+    // Patch-level: evaluate the CVE ruleset against this DB's version (agent-sent, else last discovered).
+    let cve = { vulnerable: 0 };
+    try {
+      const ver = req.body.engine_version || (await pgPool.query('SELECT version FROM databases WHERE id=$1', [dbId])).rows[0]?.version;
+      cve = await evaluateCveFindings(tenantId, dbId, eng, ver);
+    } catch (e) { console.error('[VA] CVE eval failed:', e.message); }
     vaManualTriggerAt.delete(tenantId);
-    console.log(`[VA] scan ingested: ${eng} ${host || dbName} — ${passed} pass / ${failed} fail / ${errored} err (score ${score})`);
-    res.json({ scan_id: scan.id, score, passed, failed, errored });
+    console.log(`[VA] scan ingested: ${eng} ${host || dbName} — ${passed} pass / ${failed} fail / ${errored} err (score ${score}); CVE vuln ${cve.vulnerable}`);
+    res.json({ scan_id: scan.id, score, passed, failed, errored, cveVulnerable: cve.vulnerable });
   } catch (e) { console.error('[VA] ingest failed:', e.message); res.status(500).json({ error: e.message }); }
 });
 
@@ -8973,12 +9080,58 @@ app.get('/api/va/summary', authRequired, featureRequired('va-scanner'), async (r
 app.get('/api/va/findings', authRequired, featureRequired('va-scanner'), async (req, res) => {
   const rows = (await pgPool.query(
     `SELECT f.id, f.database_id, d.name database_name, f.engine, f.check_id, f.benchmark, f.section, f.title, f.severity, f.status,
-            f.detail, f.evidence, f.remediation, f.refs, f.first_seen, f.last_seen, f.waived, f.waiver_note
+            f.detail, f.evidence, f.remediation, f.refs, f.cve, f.cvss, f.first_seen, f.last_seen, f.waived, f.waiver_note
        FROM va_findings f LEFT JOIN databases d ON d.id=f.database_id
       WHERE f.tenant_id=$1
       ORDER BY (f.status='fail' AND NOT f.waived) DESC,
-               CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, f.check_id`, [req.user.tenantId])).rows;
+               CASE f.severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, f.cvss DESC NULLS LAST, f.check_id`, [req.user.tenantId])).rows;
   res.json(rows);
+});
+
+// On-demand CVE / patch-level assessment across the tenant's monitored databases using each DB's
+// last-known version — runs independently of a full config scan (versions change rarely).
+app.post('/api/va/cve/assess', authRequired, featureRequired('va-scanner'), async (req, res) => {
+  const T = req.user.tenantId;
+  try {
+    const dbs = (await pgPool.query(
+      `SELECT d.id, d.engine, COALESCE(d.version, i.version) AS version
+       FROM databases d LEFT JOIN db_instances i ON i.id = d.instance_id
+       WHERE d.tenant_id=$1 AND COALESCE(d.version, i.version) IS NOT NULL`, [T])).rows;
+    let assessed = 0, vulnerable = 0;
+    for (const d of dbs) {
+      const r = await evaluateCveFindings(T, d.id, d.engine, d.version);
+      assessed++; vulnerable += r.vulnerable;
+    }
+    res.json({ ok: true, databasesAssessed: assessed, databasesWithoutVersion: null, vulnerableFindings: vulnerable });
+  } catch (e) { console.error('[VA] CVE assess failed:', e.message); res.status(500).json({ error: 'CVE assessment failed' }); }
+});
+
+// The CVE ruleset (global content). List + bulk import (the NVD-sync / content-cadence hook).
+app.get('/api/va/cve/defs', authRequired, featureRequired('va-scanner'), async (req, res) => {
+  const rows = (await pgPool.query('SELECT engine, cve_id, title, cvss, severity, affected_min, affected_max, fixed_in, refs, enabled, source, published FROM va_cve_defs ORDER BY engine, cvss DESC NULLS LAST, cve_id')).rows;
+  res.json({ count: rows.length, engines: [...new Set(rows.map((r) => r.engine))], cves: rows });
+});
+app.post('/api/va/cve/import', authRequired, adminOnly, async (req, res) => {
+  const items = Array.isArray(req.body?.cves) ? req.body.cves : [];
+  if (!items.length) return res.status(400).json({ error: 'cves[] required (engine, cve_id, title, cvss, affected_min, fixed_in, [affected_max], [remediation], [refs])' });
+  let n = 0;
+  try {
+    for (const c of items) {
+      if (!c.engine || !c.cve_id || !c.fixed_in) continue;
+      const cvss = Number(c.cvss) || 0;
+      await pgPool.query(
+        `INSERT INTO va_cve_defs (engine, cve_id, title, cvss, severity, affected_min, affected_max, fixed_in, remediation, refs, published, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'import')
+         ON CONFLICT (engine, cve_id, fixed_in) DO UPDATE SET title=EXCLUDED.title, cvss=EXCLUDED.cvss, severity=EXCLUDED.severity,
+           affected_min=EXCLUDED.affected_min, affected_max=EXCLUDED.affected_max, remediation=EXCLUDED.remediation, refs=EXCLUDED.refs`,
+        [c.engine, c.cve_id, (c.title || c.cve_id).slice(0, 240), cvss, cvssSeverity(cvss), c.affected_min || null, c.affected_max || null, c.fixed_in,
+         c.remediation || `Upgrade ${c.engine} to ${c.fixed_in} or later (patches ${c.cve_id}).`,
+         Array.isArray(c.refs) ? c.refs : [`https://nvd.nist.gov/vuln/detail/${c.cve_id}`], c.published || null]);
+      n++;
+    }
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'va.cve.import', resourceType: 'va', resourceId: null, details: { imported: n } });
+    res.json({ ok: true, imported: n });
+  } catch (e) { console.error('[VA] CVE import failed:', e.message); res.status(500).json({ error: 'Import failed' }); }
 });
 // Recent scan runs.
 app.get('/api/va/scans', authRequired, featureRequired('va-scanner'), async (req, res) => {
