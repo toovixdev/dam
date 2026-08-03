@@ -84,6 +84,7 @@ function BreakGlassEntry() {
 // App-wide red banner while a break-glass session is active. Read-only is enforced server-side
 // (writes 403); this makes the operator unmistakably aware they are impersonating a tenant.
 function BreakGlassBanner() {
+  useAuth(); // subscribe to auth-context changes so the banner appears the instant a session starts
   let bg = null;
   try { bg = JSON.parse(localStorage.getItem('dam_breakglass') || 'null'); } catch { bg = null; }
   useEffect(() => {

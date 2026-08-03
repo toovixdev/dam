@@ -1850,7 +1850,7 @@ async function breakGlassAuth(req, res, next, payload) {
     // investigate; read-only is enforced separately above by the scope method-block, not the role.
     req.user = {
       userId: 'breakglass:' + payload.sessionId, email: payload.operator,
-      fullName: `Break-Glass · ${payload.operator}`, role: 'tenant_admin', scope: s.scope || 'ro',
+      fullName: `${s.type === 'impersonation' ? 'Impersonation' : 'Break-Glass'} · ${payload.operator}`, role: 'tenant_admin', scope: s.scope || 'ro',
       tenantId: payload.tenantId, tenantName: payload.tenantName || s.tenant_name,
       breakGlass: true, sessionId: payload.sessionId,
     };
