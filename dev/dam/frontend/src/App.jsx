@@ -101,10 +101,10 @@ function BreakGlassBanner() {
     window.location.href = '/login';
   };
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100000, background: bar, color: '#fff', display: 'flex', alignItems: 'center', gap: 12, padding: '7px 16px', fontSize: 13, fontWeight: 600, boxShadow: '0 2px 10px rgba(0,0,0,.35)' }}>
-      <span>⚠ {label}</span>
-      <span style={{ fontWeight: 500, opacity: 0.95 }}>Viewing <b>{bg.tenant}</b>{bg.op ? ` as ${bg.op}` : ''} · {bg.scope === 'rw' ? 'READ-WRITE' : 'READ-ONLY'} · every action is audited</span>
-      <button onClick={exit} style={{ marginLeft: 'auto', background: '#fff', color: bar, border: 'none', borderRadius: 6, padding: '3px 12px', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>Exit ✕</button>
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100000, background: bar, color: '#fff', display: 'flex', alignItems: 'center', gap: 12, padding: '7px 12px', fontSize: 13, fontWeight: 600, boxShadow: '0 2px 10px rgba(0,0,0,.35)', boxSizing: 'border-box' }}>
+      <span style={{ flex: 'none', whiteSpace: 'nowrap' }}>⚠ {label}</span>
+      <span style={{ flex: '1 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: 500, opacity: 0.95 }}>Viewing <b>{bg.tenant}</b>{bg.op ? ` as ${bg.op}` : ''} · {bg.scope === 'rw' ? 'READ-WRITE' : 'READ-ONLY'} · every action is audited</span>
+      <button onClick={exit} style={{ flex: 'none', whiteSpace: 'nowrap', background: '#fff', color: bar, border: 'none', borderRadius: 6, padding: '3px 12px', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>Exit ✕</button>
     </div>
   );
 }
