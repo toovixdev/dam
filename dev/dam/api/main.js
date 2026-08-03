@@ -9133,6 +9133,90 @@ app.post('/api/va/cve/import', authRequired, adminOnly, async (req, res) => {
     res.json({ ok: true, imported: n });
   } catch (e) { console.error('[VA] CVE import failed:', e.message); res.status(500).json({ error: 'Import failed' }); }
 });
+
+// ── NVD sync (content cadence) ───────────────────────────────────────────────
+// Pull the REAL CVE feed for each engine's CPE product and upsert into va_cve_defs — so the ruleset
+// stays current without hand-authoring. NVD 2.0 CPE match ranges map exactly onto our model:
+// versionStartIncluding → affected_min, versionEndExcluding → fixed_in. Set NVD_API_KEY for higher
+// rate limits; NVD_SYNC_ENABLED=true turns on the daily auto-run.
+const NVD_API_KEY = process.env.NVD_API_KEY || '';
+const NVD_ENGINES = [
+  { engine: 'postgresql', vms: 'cpe:2.3:a:postgresql:postgresql:*:*:*:*:*:*:*:*', key: ':postgresql:postgresql:' },
+  { engine: 'mysql', vms: 'cpe:2.3:a:oracle:mysql:*:*:*:*:*:*:*:*', key: ':oracle:mysql:' },
+  { engine: 'mssql', vms: 'cpe:2.3:a:microsoft:sql_server:*:*:*:*:*:*:*:*', key: ':microsoft:sql_server:' },
+  { engine: 'oracle', vms: 'cpe:2.3:a:oracle:database_server:*:*:*:*:*:*:*:*', key: ':oracle:database_server:' },
+];
+function nvdCvss(metrics) {
+  const pick = (a) => (Array.isArray(a) && a[0]?.cvssData?.baseScore);
+  return pick(metrics?.cvssMetricV31) ?? pick(metrics?.cvssMetricV30) ?? pick(metrics?.cvssMetricV2) ?? null;
+}
+async function nvdFetch(url) {
+  const headers = NVD_API_KEY ? { apiKey: NVD_API_KEY } : {};
+  const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 40000);
+  try { const r = await fetch(url, { headers, signal: ctrl.signal }); if (!r.ok) throw new Error('NVD HTTP ' + r.status); return await r.json(); }
+  finally { clearTimeout(to); }
+}
+async function syncNvdEngine(eng, days) {
+  const end = new Date(), start = new Date(Date.now() - days * 86400000);
+  const base = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
+  let startIndex = 0, total = 1, rows = 0, cves = 0;
+  while (startIndex < total) {
+    const u = `${base}?virtualMatchString=${encodeURIComponent(eng.vms)}&lastModStartDate=${start.toISOString()}&lastModEndDate=${end.toISOString()}&resultsPerPage=2000&startIndex=${startIndex}`;
+    const j = await nvdFetch(u);
+    total = j.totalResults || 0;
+    for (const v of (j.vulnerabilities || [])) {
+      const c = v.cve; if (!c?.id) continue; cves++;
+      const title = (c.descriptions?.find((d) => d.lang === 'en')?.value || c.id).slice(0, 240);
+      const cvss = nvdCvss(c.metrics);
+      const seen = new Set();
+      for (const cfg of (c.configurations || [])) for (const node of (cfg.nodes || [])) for (const m of (node.cpeMatch || [])) {
+        if (!m.vulnerable || !String(m.criteria || '').includes(eng.key)) continue;
+        const fixed = m.versionEndExcluding; if (!fixed) continue; // need a clean "fixed in" version
+        const dk = `${c.id}|${fixed}`; if (seen.has(dk)) continue; seen.add(dk);
+        await pgPool.query(
+          `INSERT INTO va_cve_defs (engine, cve_id, title, cvss, severity, affected_min, affected_max, fixed_in, remediation, refs, published, source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'nvd')
+           ON CONFLICT (engine, cve_id, fixed_in) DO UPDATE SET title=EXCLUDED.title, cvss=EXCLUDED.cvss, severity=EXCLUDED.severity,
+             affected_min=EXCLUDED.affected_min, affected_max=EXCLUDED.affected_max, refs=EXCLUDED.refs, source='nvd'`,
+          [eng.engine, c.id, title, cvss, cvss != null ? cvssSeverity(cvss) : null, m.versionStartIncluding || m.versionStartExcluding || null,
+           m.versionEndIncluding || null, fixed, `Upgrade ${eng.engine} to ${fixed} or later (patches ${c.id}).`,
+           [`https://nvd.nist.gov/vuln/detail/${c.id}`], c.published ? c.published.slice(0, 10) : null]);
+        rows++;
+      }
+    }
+    startIndex += (j.resultsPerPage || 2000);
+    if (startIndex < total) await new Promise((r) => setTimeout(r, NVD_API_KEY ? 800 : 6500)); // rate-limit
+    if (startIndex > 20000) break; // safety cap
+  }
+  return { engine: eng.engine, cvesScanned: cves, rulesUpserted: rows };
+}
+async function syncNvd(days = 120, engines = null) {
+  const list = NVD_ENGINES.filter((e) => !engines || engines.includes(e.engine));
+  const out = [];
+  for (const e of list) {
+    try { out.push(await syncNvdEngine(e, Math.min(120, Math.max(1, days)))); }
+    catch (err) { out.push({ engine: e.engine, error: err.message }); }
+    await new Promise((r) => setTimeout(r, NVD_API_KEY ? 800 : 6500));
+  }
+  return out;
+}
+// Manual trigger — runs in the BACKGROUND (the throttled fetch can take minutes) and logs the result.
+app.post('/api/admin/va/cve/sync', authRequired, adminOnly, async (req, res) => {
+  const days = Math.min(120, parseInt(req.body?.days) || 30);
+  const engines = Array.isArray(req.body?.engines) ? req.body.engines : null;
+  syncNvd(days, engines)
+    .then((results) => {
+      console.log('[VA] NVD sync complete:', JSON.stringify(results));
+      writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'va.cve.sync', resourceType: 'va', resourceId: null, details: { results } }).catch(() => {});
+    })
+    .catch((e) => console.error('[VA] NVD sync failed:', e.message));
+  res.json({ ok: true, started: true, message: `NVD sync started for the last ${days} day(s)${NVD_API_KEY ? '' : ' (no NVD_API_KEY — throttled ~6s/req)'}. Findings update as the ruleset grows.` });
+});
+// Daily auto-sync — opt-in so deployments don't hit NVD unbidden.
+if (process.env.NVD_SYNC_ENABLED === 'true') {
+  setTimeout(() => syncNvd(30).then((r) => console.log('[VA] startup NVD sync:', JSON.stringify(r))).catch(() => {}), 60000);
+  setInterval(() => syncNvd(7).then((r) => console.log('[VA] daily NVD sync:', JSON.stringify(r))).catch(() => {}), 24 * 3600 * 1000);
+}
 // Recent scan runs.
 app.get('/api/va/scans', authRequired, featureRequired('va-scanner'), async (req, res) => {
   const rows = (await pgPool.query(
