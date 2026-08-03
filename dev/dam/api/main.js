@@ -9201,7 +9201,8 @@ async function syncNvd(days = 120, engines = null) {
   return out;
 }
 // Manual trigger — runs in the BACKGROUND (the throttled fetch can take minutes) and logs the result.
-app.post('/api/admin/va/cve/sync', authRequired, adminOnly, async (req, res) => {
+// Under /api/va/* (not /api/admin/*, which is platform-operator-guarded) so a tenant admin can run it.
+app.post('/api/va/cve/sync', authRequired, adminOnly, async (req, res) => {
   const days = Math.min(120, parseInt(req.body?.days) || 30);
   const engines = Array.isArray(req.body?.engines) ? req.body.engines : null;
   syncNvd(days, engines)
