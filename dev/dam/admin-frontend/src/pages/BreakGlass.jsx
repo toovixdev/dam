@@ -3,17 +3,15 @@ import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import { toast } from '../components/shared/Toast';
 import useApiData from '../hooks/useApiData';
-import { apiPost } from '../api/client';
+import { apiPost, apiFetch } from '../api/client';
 
-const ST = { active: 'status-green', completed: 'status-gray', auto_revoked: 'sev-high', revoked: 'sev-high', pending_review: 'sev-high' };
-const STL = { active: 'Active', completed: 'Reviewed', auto_revoked: 'Auto-revoked', revoked: 'Revoked', pending_review: 'Pending review' };
-const APPROVERS = ['Sanjay Kumar (VP Engineering)', 'Claire Dupont (Head of Security)', 'Mike Reynolds (Director SRE)'];
+const ST = { active: 'status-green', pending_approval: 'sev-medium', completed: 'status-gray', auto_revoked: 'sev-high', revoked: 'sev-high', pending_review: 'sev-high' };
+const STL = { active: 'Active', pending_approval: 'Pending approval', completed: 'Completed', auto_revoked: 'Auto-revoked', revoked: 'Revoked', pending_review: 'Pending review' };
 const WORKFLOW = [
   ['Requested', 'var(--green)', 'Operator submits with justification + incident ref'],
-  ['Manager Approval', 'var(--amber)', 'Designated manager approves/rejects within 15 min SLA'],
-  ['Security Review', 'var(--info)', 'Automated scope check + least-privilege grant'],
-  ['Active Session', 'var(--primary)', 'Full session recording, hash-chained'],
-  ['Auto-Expired', 'var(--muted)', 'Terminates at limit · post-incident review within 48h'],
+  ['Operator approval', 'var(--amber)', 'A platform operator approves — recorded as approved_by'],
+  ['Active (scoped token)', 'var(--primary)', 'Session-bound access token; read-only unless read-write'],
+  ['Auto-expired / revoked', 'var(--muted)', 'Token dies at the cap or on revoke — enforced live'],
 ];
 function fmtDt(d) { return d ? new Date(d).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '') : '—'; }
 function dur(s) {
@@ -27,36 +25,50 @@ export default function BreakGlass() {
   const { data, loading, lastRefresh, refetch } = useApiData('/admin/sessions?type=break_glass', { poll: 15000 });
   const [form, setForm] = useState({ tenantId: '', justification: '', scope: 'ro', durationMin: '60', approver: '', incidentRef: '' });
   const [busy, setBusy] = useState(false);
+  const [tokens, setTokens] = useState({}); // sessionId -> access token
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   async function request() {
     if (!form.tenantId) return toast('Please select a tenant', 'err');
     if (!form.justification.trim()) return toast('Justification is required', 'err');
-    if (!form.approver) return toast('Please select an approver', 'err');
+    if (!form.approver) return toast('Please designate an approver', 'err');
     if (!form.incidentRef.trim()) return toast('Incident reference is required', 'err');
     setBusy(true);
     const res = await apiPost('/admin/sessions', { type: 'break_glass', ...form });
     setBusy(false);
-    if (res.ok) { toast('Break-glass session activated — recorded + escalated', 'ok'); setForm({ tenantId: '', justification: '', scope: 'ro', durationMin: '60', approver: '', incidentRef: '' }); refetch(); }
-    else toast(res.data?.error || 'Failed to start session', 'err');
+    if (res.ok) { toast('Break-glass requested — awaiting operator approval', 'ok'); setForm({ tenantId: '', justification: '', scope: 'ro', durationMin: '60', approver: '', incidentRef: '' }); refetch(); }
+    else toast(res.data?.error || 'Failed to request', 'err');
+  }
+  async function approve(id) {
+    const res = await apiPost(`/admin/sessions/${id}/approve`, {});
+    if (res.ok) { toast('Approved — access token issued', 'ok'); if (res.data.accessToken) setTokens(t => ({ ...t, [id]: res.data.accessToken })); refetch(); }
+    else toast(res.data?.error || 'Failed to approve', 'err');
   }
   async function revoke(id) {
     const res = await apiPost(`/admin/sessions/${id}/end`, {});
-    if (res.ok) { toast('Break-glass session terminated', 'ok'); refetch(); } else toast('Failed to revoke', 'err');
+    if (res.ok) { toast('Session terminated — token invalidated', 'ok'); setTokens(t => { const n = { ...t }; delete n[id]; return n; }); refetch(); }
+    else toast('Failed to revoke', 'err');
   }
+  async function reveal(id) {
+    try { const r = await apiFetch(`/admin/sessions/${id}/token`); setTokens(t => ({ ...t, [id]: r.accessToken })); }
+    catch { toast('Session no longer active', 'err'); refetch(); }
+  }
+  function copy(tok) { navigator.clipboard?.writeText(tok).then(() => toast('Access token copied', 'ok')).catch(() => {}); }
 
   if (loading && !data) return <div className="loading-screen"><div className="loading-spinner" /><p>Loading break-glass…</p></div>;
   const active = data?.active || [];
-  const history = data?.history || [];
+  const pending = data?.pending || [];
+  const history = (data?.history || []).filter(s => s.status !== 'active' && s.status !== 'pending_approval');
+  const approvers = data?.approvers || [];
 
   return (
     <Layout lastRefresh={lastRefresh} onRefresh={refetch}>
-      <PageHeader title="Break-Glass Access" meta={['emergency production access', 'manager approval required']} />
+      <PageHeader title="Break-Glass Access" meta={['emergency production access', 'operator approval required', 'session-bound token']} />
 
       <div style={{ background: 'var(--danger-soft)', border: '1.5px solid var(--danger)', borderRadius: 14, padding: '14px 18px', marginBottom: 14, display: 'flex', gap: 12 }}>
         <span style={{ fontSize: 18 }}>⚠</span>
         <div><div style={{ fontWeight: 700, fontSize: 14, color: 'var(--danger)', marginBottom: 4 }}>Emergency Access Only — Break-Glass Protocol</div>
-          <div style={{ fontSize: 12.5, color: 'var(--danger)', opacity: 0.85, lineHeight: 1.55 }}>Break-glass bypasses normal RBAC and grants elevated production access. Strictly for emergencies (P1 incidents, data recovery, security response). All sessions require manager approval, are time-limited, fully recorded, and subject to mandatory post-incident review.</div></div>
+          <div style={{ fontSize: 12.5, color: 'var(--danger)', opacity: 0.85, lineHeight: 1.55 }}>Grants a platform operator scoped, time-limited access to one tenant environment. Requires operator approval, defaults to <b>read-only</b>, is bound to this session (revoke/expiry cuts access instantly), and every request is counted + audited.</div></div>
       </div>
 
       <section className="charts-row" style={{ marginBottom: 14 }}>
@@ -72,10 +84,11 @@ export default function BreakGlass() {
               <div className="form-field"><label>Duration</label><select value={form.durationMin} onChange={e => set('durationMin', e.target.value)}><option value="30">30 minutes</option><option value="60">1 hour</option><option value="120">2 hours (max)</option></select></div>
             </div>
             <div className="form-row">
-              <div className="form-field"><label>Approver *</label><select value={form.approver} onChange={e => set('approver', e.target.value)}><option value="">— Select manager —</option>{APPROVERS.map(a => <option key={a} value={a}>{a}</option>)}</select></div>
+              <div className="form-field"><label>Designated approver *</label>
+                <select value={form.approver} onChange={e => set('approver', e.target.value)}><option value="">— Select operator —</option>{approvers.map(a => <option key={a.email} value={a.email}>{a.name} ({a.role})</option>)}</select></div>
               <div className="form-field"><label>Incident ref *</label><input value={form.incidentRef} onChange={e => set('incidentRef', e.target.value)} placeholder="e.g. INC-2026-0315" /></div>
             </div>
-            <button className="btn-primary" style={{ background: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={request} disabled={busy}>{busy ? 'Activating…' : '⚠ Request break-glass access'}</button>
+            <button className="btn-primary" style={{ background: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={request} disabled={busy}>{busy ? 'Requesting…' : '⚠ Request break-glass access'}</button>
           </div>
         </div>
 
@@ -95,19 +108,52 @@ export default function BreakGlass() {
         </div>
       </section>
 
+      {pending.length > 0 && (
+        <div className="card" style={{ marginBottom: 14, borderLeft: '3px solid var(--amber)' }}>
+          <div className="card-header"><span className="card-title" style={{ color: 'var(--amber)' }}>Pending Approval</span><span className="card-sub">{pending.length} awaiting an operator decision</span></div>
+          <div className="card-body no-pad">
+            <table className="data-table">
+              <thead><tr><th>Requester</th><th>Tenant</th><th>Scope</th><th>Designated approver</th><th>Incident</th><th>Justification</th><th></th></tr></thead>
+              <tbody>
+                {pending.map(s => (
+                  <tr key={s.id}>
+                    <td><b>{s.operator}</b></td><td>{s.tenantName}</td>
+                    <td><span className={`badge ${s.scope === 'rw' ? 'sev-critical' : 'sev-medium'}`}>{s.scope === 'rw' ? 'Read-write' : 'Read-only'}</span></td>
+                    <td className="muted">{s.approver}</td>
+                    <td><small className="muted mono">{s.incidentRef}</small></td>
+                    <td><small className="muted">{s.justification}</small></td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button className="btn-primary" style={{ padding: '4px 10px', fontSize: 12, marginRight: 6 }} onClick={() => approve(s.id)}>Approve</button>
+                      <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={() => revoke(s.id)}>Reject</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-header"><span className="card-title">Active Break-Glass Sessions</span><span className="card-sub">{active.length} active</span></div>
         <div className="card-body no-pad">
           <table className="data-table">
-            <thead><tr><th>Requester</th><th>Tenant</th><th>Scope</th><th>Approver</th><th>Expires</th><th className="num">Actions</th><th>Incident</th><th></th></tr></thead>
+            <thead><tr><th>Requester</th><th>Tenant</th><th>Scope</th><th>Approved by</th><th>Expires</th><th className="num">Actions</th><th>Access token</th><th></th></tr></thead>
             <tbody>
               {active.length === 0 && <tr><td colSpan={8} className="muted" style={{ textAlign: 'center', padding: 20 }}>No active break-glass sessions</td></tr>}
               {active.map(s => (
                 <tr key={s.id}>
-                  <td><b>{s.operator}</b><br /><small className="muted">{s.operatorEmail}</small></td>
-                  <td>{s.tenantName}</td><td><span className={`badge ${s.scope === 'rw' ? 'sev-critical' : 'sev-medium'}`}>{s.scope === 'rw' ? 'Read-write' : 'Read-only'}</span></td>
-                  <td><small className="muted">{s.approver}</small></td><td><small className="muted">{fmtDt(s.expiresAt)}</small></td><td className="num">{s.actions}</td>
-                  <td><small className="muted" style={{ fontFamily: 'ui-monospace, Menlo, monospace' }}>{s.incidentRef}</small></td>
+                  <td><b>{s.operator}</b></td>
+                  <td>{s.tenantName}</td>
+                  <td><span className={`badge ${s.scope === 'rw' ? 'sev-critical' : 'sev-medium'}`}>{s.scope === 'rw' ? 'Read-write' : 'Read-only'}</span></td>
+                  <td><small className="muted">{s.approvedBy || '—'}</small></td>
+                  <td><small className="muted">{fmtDt(s.expiresAt)}</small></td>
+                  <td className="num">{s.actions}</td>
+                  <td>
+                    {tokens[s.id]
+                      ? <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><code style={{ fontSize: 11 }}>{tokens[s.id].slice(0, 14)}…</code><button className="btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => copy(tokens[s.id])}>Copy</button></span>
+                      : <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => reveal(s.id)}>Reveal token</button>}
+                  </td>
                   <td><button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={() => revoke(s.id)}>Revoke</button></td>
                 </tr>
               ))}
@@ -120,16 +166,16 @@ export default function BreakGlass() {
         <div className="card-header"><span className="card-title">Break-Glass History</span><span className="card-sub">{history.length} sessions</span></div>
         <div className="card-body no-pad">
           <table className="data-table">
-            <thead><tr><th>Requester</th><th>Tenant</th><th>Scope</th><th>Duration</th><th className="num">Actions</th><th>Incident</th><th>Justification</th><th>Post-review</th></tr></thead>
+            <thead><tr><th>Requester</th><th>Tenant</th><th>Scope</th><th>Approved by</th><th>Duration</th><th className="num">Actions</th><th>Incident</th><th>Status</th></tr></thead>
             <tbody>
               {history.map(s => (
                 <tr key={s.id}>
                   <td><b>{s.operator}</b></td><td>{s.tenantName}</td>
                   <td><span className={`badge ${s.scope === 'rw' ? 'sev-critical' : 'sev-medium'}`}>{s.scope === 'rw' ? 'Read-write' : 'Read-only'}</span></td>
+                  <td><small className="muted">{s.approvedBy || '—'}</small></td>
                   <td>{dur(s)}</td><td className="num">{s.actions}</td>
-                  <td><small className="muted" style={{ fontFamily: 'ui-monospace, Menlo, monospace' }}>{s.incidentRef}</small></td>
-                  <td><small className="muted">{s.justification}</small></td>
-                  <td><span className={`badge ${s.reviewed ? 'status-green' : 'sev-high'}`}>{s.reviewed ? 'Reviewed' : 'Pending review'}</span></td>
+                  <td><small className="muted mono">{s.incidentRef}</small></td>
+                  <td><span className={`badge ${ST[s.status] || 'status-gray'}`}>{STL[s.status] || s.status}</span></td>
                 </tr>
               ))}
             </tbody>

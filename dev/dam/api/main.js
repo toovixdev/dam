@@ -1750,6 +1750,10 @@ async function runAdminMigration() {
       expires_at     TIMESTAMPTZ,
       ended_at       TIMESTAMPTZ
     )`);
+    // Break-glass approval gate: who approved and when (a real second-person action, not the
+    // cosmetic dropdown it used to be).
+    await client.query(`ALTER TABLE admin_access_sessions ADD COLUMN IF NOT EXISTS approved_by VARCHAR(200)`);
+    await client.query(`ALTER TABLE admin_access_sessions ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ`);
     await client.query(`CREATE TABLE IF NOT EXISTS approval_requests (
       id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       ref          VARCHAR(20) UNIQUE NOT NULL,
@@ -1819,10 +1823,39 @@ function authRequired(req, res, next) {
     const payload = jwt.verify(token, JWT_SECRET);
     // Half-authenticated MFA-pending tokens must never grant access to the app.
     if (payload.mfaPending) return res.status(401).json({ error: 'MFA not completed' });
+    // Break-glass operator token: validated live against the session (revoke/expiry is instant).
+    if (payload.bg) return breakGlassAuth(req, res, next, payload);
     req.user = payload;
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+}
+// A break-glass token grants a platform operator scoped, session-bound access to ONE tenant. It's
+// re-checked against admin_access_sessions on every request, so a revoke or expiry cuts access
+// immediately (not just when the JWT expires). Read-only scope blocks writes; every request is
+// counted against the session for the audit trail.
+async function breakGlassAuth(req, res, next, payload) {
+  try {
+    const s = (await pgPool.query(
+      "SELECT status, scope, expires_at, tenant_name FROM admin_access_sessions WHERE id=$1 AND type='break_glass'", [payload.sessionId])).rows[0];
+    if (!s || s.status !== 'active' || (s.expires_at && new Date(s.expires_at) < new Date())) {
+      return res.status(401).json({ error: 'Break-glass session is not active (revoked or expired)' });
+    }
+    if ((s.scope || 'ro') !== 'rw' && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+      return res.status(403).json({ error: 'Break-glass session is read-only' });
+    }
+    pgPool.query('UPDATE admin_access_sessions SET actions_count = actions_count + 1 WHERE id=$1', [payload.sessionId]).catch(() => {});
+    req.user = {
+      userId: 'breakglass:' + payload.sessionId, email: payload.operator,
+      fullName: `Break-Glass · ${payload.operator}`, role: (s.scope === 'rw') ? 'tenant_admin' : 'viewer',
+      tenantId: payload.tenantId, tenantName: payload.tenantName || s.tenant_name,
+      breakGlass: true, sessionId: payload.sessionId,
+    };
+    next();
+  } catch (err) {
+    console.error('[BreakGlass] auth failed:', err.message);
+    return res.status(500).json({ error: 'Break-glass validation failed' });
   }
 }
 
@@ -4595,25 +4628,38 @@ function shapeSession(s) {
   const expired = s.status === 'active' && s.expires_at && new Date(s.expires_at) < new Date();
   return {
     id: s.id, type: s.type, operator: s.operator, operatorEmail: s.operator_email,
-    tenantName: s.tenant_name, justification: s.justification, scope: s.scope, approver: s.approver,
+    tenantId: s.tenant_id, tenantName: s.tenant_name, justification: s.justification, scope: s.scope, approver: s.approver,
+    approvedBy: s.approved_by, approvedAt: s.approved_at,
     incidentRef: s.incident_ref, ticketRef: s.ticket_ref, durationMin: s.duration_min, actions: s.actions_count,
     reviewed: s.reviewed, startedAt: s.started_at, expiresAt: s.expires_at, endedAt: s.ended_at,
     status: expired ? (s.type === 'break_glass' ? 'auto_revoked' : 'completed') : s.status,
   };
+}
+// Mint a short-lived, session-bound break-glass access token. It authenticates the operator
+// against the TENANT's API (read-only unless scope=rw), tied to this session so a revoke/expiry
+// invalidates it immediately (authRequired re-checks the session live). exp = session expiry.
+function mintBreakGlassToken(s) {
+  const secs = Math.max(30, Math.floor((new Date(s.expires_at) - Date.now()) / 1000));
+  return jwt.sign(
+    { bg: true, sessionId: s.id, tenantId: s.tenant_id, tenantName: s.tenant_name, scope: s.scope || 'ro', operator: s.operator_email || s.operator },
+    JWT_SECRET, { expiresIn: secs });
 }
 app.get('/api/admin/sessions', async (req, res) => {
   const type = req.query.type === 'break_glass' ? 'break_glass' : 'impersonation';
   try {
     const rows = (await pgPool.query('SELECT * FROM admin_access_sessions WHERE type=$1 ORDER BY started_at DESC', [type])).rows.map(shapeSession);
     const active = rows.filter(r => r.status === 'active');
+    const pending = rows.filter(r => r.status === 'pending_approval');
+    // Real approver candidates = active platform operators (the admin-console staff).
+    const approvers = (await pgPool.query("SELECT name, email, role FROM platform_operators WHERE status='active' ORDER BY name")).rows;
     res.json({
       kpis: {
-        active: active.length,
-        completed: rows.filter(r => r.status === 'completed' || r.status === 'auto_revoked').length,
+        active: active.length, pending: pending.length,
+        completed: rows.filter(r => r.status === 'completed' || r.status === 'auto_revoked' || r.status === 'revoked').length,
         pendingReview: rows.filter(r => r.status === 'pending_review' || (!r.reviewed && r.status === 'auto_revoked')).length,
         total: rows.length,
       },
-      active, history: rows,
+      active, pending, history: rows, approvers,
     });
   } catch (err) {
     console.error('[Admin] sessions failed:', err.message);
@@ -4630,13 +4676,18 @@ app.post('/api/admin/sessions', async (req, res) => {
     let tenantName = b.tenantName;
     if (b.tenantId) { const t = await pgPool.query('SELECT name FROM tenants WHERE id=$1', [b.tenantId]); if (t.rows.length) tenantName = t.rows[0].name; }
     const dur = parseInt(b.durationMin) || 60;
+    // Break-glass now REQUIRES approval: it starts 'pending_approval' with NO clock/access yet.
+    // The duration window (and access token) only begin once a second operator approves.
+    // Impersonation keeps its immediate-active behaviour (audit-only record, unchanged).
+    const bg = type === 'break_glass';
     const ins = await pgPool.query(
       `INSERT INTO admin_access_sessions (type, operator, operator_email, tenant_id, tenant_name, justification, scope, approver, incident_ref, ticket_ref, duration_min, status, started_at, expires_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active',now(), now() + make_interval(mins => $11::int)) RETURNING *`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now(), ${bg ? 'NULL' : 'now() + make_interval(mins => $11::int)'}) RETURNING *`,
       [type, b.operator || 'Platform Ops', b.operatorEmail || 'ops@toovix.io', b.tenantId || null, tenantName,
-       b.justification.trim(), b.scope || null, b.approver || null, b.incidentRef || null, b.ticketRef || null, dur]
+       b.justification.trim(), b.scope || 'ro', b.approver || null, b.incidentRef || null, b.ticketRef || null, dur,
+       bg ? 'pending_approval' : 'active']
     );
-    await logPlatformAudit({ actor: b.operator || 'Platform Ops', action: type === 'break_glass' ? 'break-glass.activate' : 'impersonation.start', tenantId: b.tenantId || null, tenantName, resource: `session/${ins.rows[0].id.slice(0, 8)}`, ip: req.ip, details: `${b.incidentRef || b.ticketRef || ''} · ${b.justification.trim().slice(0, 60)}` });
+    await logPlatformAudit({ actor: b.operator || 'Platform Ops', action: bg ? 'break-glass.request' : 'impersonation.start', tenantId: b.tenantId || null, tenantName, resource: `session/${ins.rows[0].id.slice(0, 8)}`, ip: req.ip, details: `${bg ? 'awaiting approval by ' + (b.approver || '?') + ' · ' : ''}${b.incidentRef || b.ticketRef || ''} · ${b.justification.trim().slice(0, 60)}` });
     res.status(201).json({ ok: true, session: shapeSession(ins.rows[0]) });
   } catch (err) {
     console.error('[Admin] create session failed:', err.message);
@@ -4649,13 +4700,55 @@ app.post('/api/admin/sessions/:id/end', async (req, res) => {
     if (!s) return res.status(404).json({ error: 'Not found' });
     const endStatus = s.type === 'break_glass' ? 'revoked' : 'completed';
     const upd = await pgPool.query("UPDATE admin_access_sessions SET status=$2, ended_at=now() WHERE id=$1 RETURNING *", [req.params.id, endStatus]);
-    await logPlatformAudit({ actor: req.body?.actor || 'Platform Ops', action: s.type === 'break_glass' ? 'break-glass.revoke' : 'impersonation.end', tenantName: s.tenant_name, resource: `session/${s.id.slice(0, 8)}`, ip: req.ip, details: `Session ${endStatus} · ${s.actions_count} actions` });
+    await logPlatformAudit({ actor: req.body?.actor || req.operator?.email || 'Platform Ops', action: s.type === 'break_glass' ? (s.status === 'pending_approval' ? 'break-glass.reject' : 'break-glass.revoke') : 'impersonation.end', tenantName: s.tenant_name, resource: `session/${s.id.slice(0, 8)}`, ip: req.ip, details: `Session ${endStatus} · ${s.actions_count} actions` });
     res.json({ ok: true, session: shapeSession(upd.rows[0]) });
   } catch (err) {
     console.error('[Admin] end session failed:', err.message);
     res.status(500).json({ error: 'Failed to end session' });
   }
 });
+
+// Approve a pending break-glass request → activates it, starts the duration clock, and mints the
+// session-bound access token. Approval is a real operator action (recorded as approved_by), the
+// second-person control the old cosmetic dropdown pretended to be.
+app.post('/api/admin/sessions/:id/approve', async (req, res) => {
+  try {
+    const s = (await pgPool.query('SELECT * FROM admin_access_sessions WHERE id=$1', [req.params.id])).rows[0];
+    if (!s) return res.status(404).json({ error: 'Not found' });
+    if (s.type !== 'break_glass') return res.status(400).json({ error: 'Only break-glass sessions need approval' });
+    if (s.status !== 'pending_approval') return res.status(409).json({ error: `Session is ${s.status}, not pending approval` });
+    const approver = req.operator?.email || req.body?.actor || 'Platform Ops';
+    const upd = (await pgPool.query(
+      `UPDATE admin_access_sessions SET status='active', approved_by=$2, approved_at=now(),
+              started_at=now(), expires_at = now() + make_interval(mins => duration_min)
+       WHERE id=$1 RETURNING *`, [s.id, approver])).rows[0];
+    const accessToken = mintBreakGlassToken(upd);
+    await logPlatformAudit({ actor: approver, action: 'break-glass.approve', tenantId: s.tenant_id, tenantName: s.tenant_name, resource: `session/${s.id.slice(0, 8)}`, ip: req.ip, details: `Approved ${s.scope === 'rw' ? 'read-write' : 'read-only'} access · ${s.incident_ref || ''}` });
+    res.json({ ok: true, session: shapeSession(upd), accessToken });
+  } catch (err) {
+    console.error('[Admin] approve session failed:', err.message);
+    res.status(500).json({ error: 'Failed to approve session' });
+  }
+});
+
+// Re-fetch the access token for an ACTIVE break-glass session (e.g. reload). 401 once revoked/expired.
+app.get('/api/admin/sessions/:id/token', async (req, res) => {
+  try {
+    const s = (await pgPool.query('SELECT * FROM admin_access_sessions WHERE id=$1', [req.params.id])).rows[0];
+    if (!s || s.type !== 'break_glass') return res.status(404).json({ error: 'Not found' });
+    if (s.status !== 'active' || (s.expires_at && new Date(s.expires_at) < new Date())) return res.status(409).json({ error: 'Session is not active' });
+    res.json({ ok: true, accessToken: mintBreakGlassToken(s), expiresAt: s.expires_at, scope: s.scope || 'ro' });
+  } catch (err) { res.status(500).json({ error: 'Failed to mint token' }); }
+});
+
+// Enforced expiry: flip expired active sessions closed (break-glass → auto_revoked). authRequired
+// already rejects an expired token live; this keeps the record + KPIs honest.
+setInterval(async () => {
+  try {
+    await pgPool.query("UPDATE admin_access_sessions SET status='auto_revoked', ended_at=now() WHERE type='break_glass' AND status='active' AND expires_at < now()");
+    await pgPool.query("UPDATE admin_access_sessions SET status='completed', ended_at=now() WHERE type='impersonation' AND status='active' AND expires_at < now()");
+  } catch (e) { /* best-effort */ }
+}, 60000);
 
 const ROLE_LABEL = { sales: 'Sales', finance: 'Finance', lead: 'Platform Lead', ops: 'Platform Ops', super: 'Super Admin' };
 // Role & assignment data comes from the REAL users table (the actual people),
