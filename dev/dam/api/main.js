@@ -4157,6 +4157,18 @@ async function tenantBillingUsage(t, rowsByTenant, totalRows, globalHotBytes, gl
 
 async function computeInvoices() {
   const tenants = (await pgPool.query('SELECT id, name, slug, tier, status, data_region, created_at FROM tenants ORDER BY created_at')).rows;
+  // REAL payment status from the persisted billing_invoices (the same rows the tenant pays) — the
+  // current invoice's status + due date, and the tenant's outstanding balance (open invoices only,
+  // so voided/paid don't count). Replaces the old derived 'Paid'/'Overage pending' guess.
+  const curRef = 'INV-' + new Date().toISOString().slice(0, 7);
+  const paidMap = {};
+  (await pgPool.query(
+    `SELECT tenant_id,
+       max(status)   FILTER (WHERE reference = $1) AS cur_status,
+       max(due_date) FILTER (WHERE reference = $1) AS cur_due,
+       COALESCE(sum(amount) FILTER (WHERE status = 'open'), 0) AS outstanding
+     FROM billing_invoices GROUP BY tenant_id`, [curRef])).rows
+    .forEach((r) => { paidMap[r.tenant_id] = { curStatus: r.cur_status, curDue: r.cur_due, outstanding: Number(r.outstanding) || 0 }; });
 
   const out = [];
   for (const t of tenants) {
@@ -4170,12 +4182,19 @@ async function computeInvoices() {
     const amt = (name) => Number((items.find(i => i.item === name) || {}).amount) || 0;
     const baseDb = amt('Enterprise base fee') + amt('Monitored databases');
     const overage = +(total - baseDb).toFixed(2);
-    const hasMeteredOverage = amt('Event volume') > 0 || amt('Hot storage') > 0;
+    // REAL status: paid / overdue (open past due) / pending (open) — from the persisted invoice.
+    const pi = paidMap[t.id] || {};
+    let billing;
+    if (isTrial) billing = 'Trial';
+    else if (total === 0) billing = 'Paid';                          // nothing to bill
+    else if (pi.curStatus === 'paid') billing = 'Paid';
+    else if (pi.curStatus && pi.curDue && new Date(pi.curDue) < new Date()) billing = 'Overdue';
+    else billing = 'Pending';                                        // open (or not yet generated)
     out.push({
       id: t.id, name: t.name, slug: t.slug, tier: t.tier, status: t.status, region: t.data_region || 'local', createdAt: t.created_at,
       dbs: usage.monitoredDbs, eventsDay: usage.eventsPerDay, storageGb: +usage.hotGB.toFixed(2),
-      baseDb, overage, total,
-      billing: isTrial ? 'Trial' : hasMeteredOverage ? 'Overage pending' : 'Paid',
+      baseDb, overage, total, outstanding: pi.outstanding || 0,
+      billing,
       negotiated: eff.active,
       contractValidUntil: eff.active ? eff.override.valid_until : null,
       effBaseFee: eff.plan.baseFee, effPerDb: eff.rates.perDatabase,
@@ -4190,7 +4209,9 @@ app.get('/api/admin/billing', async (req, res) => {
     const inv = await computeInvoices();
     const active = inv.filter(i => i.status !== 'trial');
     const mrr = active.reduce((s, i) => s + i.total, 0);
-    const overages = inv.filter(i => i.billing === 'Overage pending').length;
+    const outstanding = +inv.reduce((s, i) => s + (i.outstanding || 0), 0).toFixed(2);
+    const pending = inv.filter(i => i.billing === 'Pending' || i.billing === 'Overdue').length;
+    const overdue = inv.filter(i => i.billing === 'Overdue').length;
     const byRegion = {};
     inv.forEach(i => { byRegion[i.region] = (byRegion[i.region] || 0) + i.total; });
     // REAL billing activity from the platform audit log (rate-card + negotiated-contract
@@ -4207,7 +4228,8 @@ app.get('/api/admin/billing', async (req, res) => {
     }));
     res.json({
       kpis: {
-        mrr, activeSubs: active.length, avgRevenue: active.length ? Math.round(mrr / active.length) : 0, overages,
+        mrr, activeSubs: active.length, avgRevenue: active.length ? Math.round(mrr / active.length) : 0,
+        outstanding, pending, overdue,
       },
       revenueByRegion: Object.entries(byRegion).map(([region, amount]) => ({ region, amount })).sort((a, b) => b.amount - a.amount),
       invoices: inv,
@@ -10257,7 +10279,9 @@ app.get('/api/billing', authRequired, async (req, res) => {
     const currentRef = await ensureInvoices(tenantId, usage, eff.plan, eff.rates);
     const invoices = (await pgPool.query('SELECT reference, period, amount, currency, status, due_date, issued_at, line_items FROM billing_invoices WHERE tenant_id = $1 ORDER BY period_start DESC LIMIT 12', [tenantId])).rows;
     const current = invoices.find((i) => i.reference === currentRef) || invoices[0];
-    const outstanding = invoices.filter((i) => i.status !== 'paid').reduce((s, i) => s + Number(i.amount), 0);
+    // Only OPEN invoices are owed — paid and voided (e.g. old test charges) don't count. Matches
+    // the admin outstanding calc so both views agree.
+    const outstanding = invoices.filter((i) => i.status === 'open').reduce((s, i) => s + Number(i.amount), 0);
 
     const pct = (v, lim) => Math.min(100, Math.round((v / lim) * 100));
     res.json({

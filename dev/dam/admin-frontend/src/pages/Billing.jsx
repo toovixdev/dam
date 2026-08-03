@@ -10,7 +10,7 @@ import { apiFetch, apiPut, apiDelete } from '../api/client';
 
 const TIER_BADGE = { enterprise: 'engine', business: 'sev-medium', starter: 'sev-high', professional: 'status-gray' };
 const TIER_LABEL = { enterprise: 'Enterprise', business: 'Business', starter: 'Starter', professional: 'Professional' };
-const BILL_BADGE = { Paid: 'status-green', 'Overage pending': 'sev-high', Processing: 'sev-medium', Trial: 'status-gray' };
+const BILL_BADGE = { Paid: 'status-green', Pending: 'sev-medium', Overdue: 'sev-critical', 'Overage pending': 'sev-high', Processing: 'sev-medium', Trial: 'status-gray', Applied: 'status-gray' };
 const DONUT = ['#6366f1', '#f59e0b', '#3b82f6', '#22c55e', '#dc2626', '#8b5cf6'];
 
 function usd(n) { return '$' + (n ?? 0).toLocaleString(); }
@@ -57,8 +57,8 @@ export default function Billing() {
           value={k.activeSubs} detail="billable tenants" />
         <KpiCard icon="≈" iconBg="var(--info-soft)" iconColor="var(--info)" label="Avg revenue/tenant"
           value={usdK(k.avgRevenue)} detail="monthly" />
-        <KpiCard icon="⚠" iconBg="var(--amber-soft)" iconColor="var(--amber)" label="Overages"
-          value={k.overages} detail={k.overages ? 'invoices pending' : 'none this cycle'} detailType={k.overages ? 'down' : 'up'} />
+        <KpiCard icon="⚠" iconBg={k.outstanding ? 'var(--amber-soft)' : 'var(--green-soft)'} iconColor={k.outstanding ? 'var(--amber)' : 'var(--green)'} label="Outstanding"
+          value={usdK(k.outstanding || 0)} detail={k.outstanding ? `${k.pending || 0} unpaid${k.overdue ? ` · ${k.overdue} overdue` : ''}` : 'all settled'} detailType={k.outstanding ? 'down' : 'up'} />
       </section>
 
       <section className="charts-row" style={{ marginBottom: 14 }}>
