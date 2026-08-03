@@ -1846,9 +1846,11 @@ async function breakGlassAuth(req, res, next, payload) {
       return res.status(403).json({ error: 'Break-glass session is read-only' });
     }
     pgPool.query('UPDATE admin_access_sessions SET actions_count = actions_count + 1 WHERE id=$1', [payload.sessionId]).catch(() => {});
+    // Full READ visibility across the tenant's screens (role tenant_admin) so an operator can
+    // investigate; read-only is enforced separately above by the scope method-block, not the role.
     req.user = {
       userId: 'breakglass:' + payload.sessionId, email: payload.operator,
-      fullName: `Break-Glass · ${payload.operator}`, role: (s.scope === 'rw') ? 'tenant_admin' : 'viewer',
+      fullName: `Break-Glass · ${payload.operator}`, role: 'tenant_admin', scope: s.scope || 'ro',
       tenantId: payload.tenantId, tenantName: payload.tenantName || s.tenant_name,
       breakGlass: true, sessionId: payload.sessionId,
     };
@@ -2315,6 +2317,16 @@ app.post('/api/auth/verify-email', async (req, res) => {
 
 // ── Who am I (validate token) ─────────────────────────────
 app.get('/api/auth/me', authRequired, async (req, res) => {
+  // Break-glass operators aren't real users — synthesize their identity from the session token
+  // so the tenant app can bootstrap a "view as tenant" session.
+  if (req.user.breakGlass) {
+    return res.json({
+      id: req.user.userId, email: req.user.email, full_name: req.user.fullName || `Break-Glass · ${req.user.email}`,
+      role: req.user.role, mfa_enabled: false, status: 'active',
+      tenant_id: req.user.tenantId, tenant_name: req.user.tenantName,
+      break_glass: true, scope: req.user.scope || 'ro', session_id: req.user.sessionId,
+    });
+  }
   const { rows } = await pgPool.query(
     `SELECT u.id, u.email, u.full_name, u.role, u.mfa_enabled, u.status, u.last_login_at, t.name as tenant_name
      FROM users u JOIN tenants t ON u.tenant_id = t.id
@@ -4644,6 +4656,13 @@ function mintBreakGlassToken(s) {
     { bg: true, sessionId: s.id, tenantId: s.tenant_id, tenantName: s.tenant_name, scope: s.scope || 'ro', operator: s.operator_email || s.operator },
     JWT_SECRET, { expiresIn: secs });
 }
+// Deep-link into the tenant app ("view as tenant"). The token rides in the URL HASH (never sent to
+// the server / not logged); the main app's /break-glass route consumes it and bootstraps a session.
+function breakGlassLaunchUrl(s, token) {
+  const base = (APP_BASE_URL || '').replace(/\/$/, '');
+  const q = new URLSearchParams({ tenant: s.tenant_name || '', scope: s.scope || 'ro', op: s.operator_email || s.operator || '' }).toString();
+  return `${base}/break-glass#t=${token}&${q}`;
+}
 app.get('/api/admin/sessions', async (req, res) => {
   const type = req.query.type === 'break_glass' ? 'break_glass' : 'impersonation';
   try {
@@ -4724,7 +4743,7 @@ app.post('/api/admin/sessions/:id/approve', async (req, res) => {
        WHERE id=$1 RETURNING *`, [s.id, approver])).rows[0];
     const accessToken = mintBreakGlassToken(upd);
     await logPlatformAudit({ actor: approver, action: 'break-glass.approve', tenantId: s.tenant_id, tenantName: s.tenant_name, resource: `session/${s.id.slice(0, 8)}`, ip: req.ip, details: `Approved ${s.scope === 'rw' ? 'read-write' : 'read-only'} access · ${s.incident_ref || ''}` });
-    res.json({ ok: true, session: shapeSession(upd), accessToken });
+    res.json({ ok: true, session: shapeSession(upd), accessToken, launchUrl: breakGlassLaunchUrl(upd, accessToken) });
   } catch (err) {
     console.error('[Admin] approve session failed:', err.message);
     res.status(500).json({ error: 'Failed to approve session' });
@@ -4737,7 +4756,8 @@ app.get('/api/admin/sessions/:id/token', async (req, res) => {
     const s = (await pgPool.query('SELECT * FROM admin_access_sessions WHERE id=$1', [req.params.id])).rows[0];
     if (!s || s.type !== 'break_glass') return res.status(404).json({ error: 'Not found' });
     if (s.status !== 'active' || (s.expires_at && new Date(s.expires_at) < new Date())) return res.status(409).json({ error: 'Session is not active' });
-    res.json({ ok: true, accessToken: mintBreakGlassToken(s), expiresAt: s.expires_at, scope: s.scope || 'ro' });
+    const accessToken = mintBreakGlassToken(s);
+    res.json({ ok: true, accessToken, expiresAt: s.expires_at, scope: s.scope || 'ro', launchUrl: breakGlassLaunchUrl(s, accessToken) });
   } catch (err) { res.status(500).json({ error: 'Failed to mint token' }); }
 });
 

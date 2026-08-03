@@ -25,7 +25,7 @@ export default function BreakGlass() {
   const { data, loading, lastRefresh, refetch } = useApiData('/admin/sessions?type=break_glass', { poll: 15000 });
   const [form, setForm] = useState({ tenantId: '', justification: '', scope: 'ro', durationMin: '60', approver: '', incidentRef: '' });
   const [busy, setBusy] = useState(false);
-  const [tokens, setTokens] = useState({}); // sessionId -> access token
+  const [access, setAccess] = useState({}); // sessionId -> { token, launchUrl }
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   async function request() {
@@ -41,17 +41,21 @@ export default function BreakGlass() {
   }
   async function approve(id) {
     const res = await apiPost(`/admin/sessions/${id}/approve`, {});
-    if (res.ok) { toast('Approved — access token issued', 'ok'); if (res.data.accessToken) setTokens(t => ({ ...t, [id]: res.data.accessToken })); refetch(); }
+    if (res.ok) { toast('Approved — access granted', 'ok'); setAccess(a => ({ ...a, [id]: { token: res.data.accessToken, launchUrl: res.data.launchUrl } })); refetch(); }
     else toast(res.data?.error || 'Failed to approve', 'err');
   }
   async function revoke(id) {
     const res = await apiPost(`/admin/sessions/${id}/end`, {});
-    if (res.ok) { toast('Session terminated — token invalidated', 'ok'); setTokens(t => { const n = { ...t }; delete n[id]; return n; }); refetch(); }
+    if (res.ok) { toast('Session terminated — access cut', 'ok'); setAccess(a => { const n = { ...a }; delete n[id]; return n; }); refetch(); }
     else toast('Failed to revoke', 'err');
   }
   async function reveal(id) {
-    try { const r = await apiFetch(`/admin/sessions/${id}/token`); setTokens(t => ({ ...t, [id]: r.accessToken })); }
+    try { const r = await apiFetch(`/admin/sessions/${id}/token`); setAccess(a => ({ ...a, [id]: { token: r.accessToken, launchUrl: r.launchUrl } })); }
     catch { toast('Session no longer active', 'err'); refetch(); }
+  }
+  function openConsole(id) {
+    const a = access[id];
+    if (a?.launchUrl) window.open(a.launchUrl, '_blank', 'noopener');
   }
   function copy(tok) { navigator.clipboard?.writeText(tok).then(() => toast('Access token copied', 'ok')).catch(() => {}); }
 
@@ -150,9 +154,12 @@ export default function BreakGlass() {
                   <td><small className="muted">{fmtDt(s.expiresAt)}</small></td>
                   <td className="num">{s.actions}</td>
                   <td>
-                    {tokens[s.id]
-                      ? <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><code style={{ fontSize: 11 }}>{tokens[s.id].slice(0, 14)}…</code><button className="btn-secondary" style={{ padding: '2px 8px', fontSize: 11 }} onClick={() => copy(tokens[s.id])}>Copy</button></span>
-                      : <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => reveal(s.id)}>Reveal token</button>}
+                    {access[s.id]
+                      ? <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                          <button className="btn-primary" style={{ padding: '3px 10px', fontSize: 12 }} onClick={() => openConsole(s.id)}>Open console ↗</button>
+                          <button className="btn-secondary" style={{ padding: '3px 8px', fontSize: 11 }} onClick={() => copy(access[s.id].token)} title="Copy raw token (API use)">Copy token</button>
+                        </span>
+                      : <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => reveal(s.id)}>Get access</button>}
                   </td>
                   <td><button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12, color: 'var(--danger)', borderColor: 'var(--danger)' }} onClick={() => revoke(s.id)}>Revoke</button></td>
                 </tr>
