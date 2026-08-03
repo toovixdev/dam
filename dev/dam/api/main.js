@@ -9253,13 +9253,15 @@ const DEFAULT_ACCOUNTS = {
 };
 function computeEntitlementRisk(engine, p) {
   const flags = [];
-  const locked = /lock|disab|expire/i.test(p.status || '');
+  const locked = /lock|disab|expire/i.test(p.status || '') || p.can_login === false;
+  const userPart = String(p.principal || '').split('@')[0].toLowerCase(); // MySQL is user@host; others bare
+  const isDefault = !!p.default_account || (DEFAULT_ACCOUNTS[engine] || []).some((x) => x.toLowerCase() === userPart);
   if (p.is_superuser) flags.push('superuser');            // excessive privilege — must be reviewed
   else if (p.is_admin) flags.push('admin-privilege');
-  const isDefault = !!p.default_account || (DEFAULT_ACCOUNTS[engine] || []).some((x) => x.toLowerCase() === String(p.principal || '').toLowerCase());
   if (isDefault && p.can_login && !locked) flags.push('default-account-enabled'); // known default, still usable
   if (p.can_login && p.last_login && (Date.now() - new Date(p.last_login).getTime()) > 90 * 86400000) flags.push('dormant'); // stale login
-  const risk = flags.includes('superuser') ? 'high' : flags.length ? 'medium' : 'ok';
+  // An ACTIVE (usable) superuser is high; a locked/nologin one is worth noting but not high.
+  const risk = p.is_superuser ? (p.can_login && !locked ? 'high' : 'medium') : flags.length ? 'medium' : 'ok';
   return { flags, risk };
 }
 
