@@ -2679,3 +2679,31 @@ now aggregated via `adminPlaneMap()`; (b) synthetic figures derived from magic m
   alerts 24h, per-tenant pool health).
 Audited-clean (already real): PlatformDashboard, Tenants, Approvals, BreakGlass/Impersonation,
 PlatformAudit, Roles, PlatformEmail, TenantHealth, FeatureFlags, ContentPacks.
+
+## VA (all 3 pillars) rolled live to gcptest engines (2026-08-03)
+
+Enabled the full Vulnerability Assessment suite — **CIS checks · CVE/patch-level · entitlement
+(rights) review** — on gcptest's VA-eligible engines. VA covers the 4 relational engines only
+(`vaScannable = mysql|postgresql|mssql|oracle`, `agent/main.go:197`) — **MongoDB is excluded**.
+
+**Estate reality (enterprise-test project VMs).** gcptest's DB agents run as a **native systemd
+service** `dam-agent@agentless` (binary `/usr/local/bin/dam-agent`, EnvironmentFile
+`/etc/toovix/agent-<instance>.env`), NOT containers. They were `MODE=audit-forward` capture agents
+that *already* held a `dam_svc` DB login (for `CLASSIFY=true`) — so enabling VA needed only
+`VA_SCAN=true` (gate is `VaScan && DBUser!="" && vaScannable`) plus the **new binary** (the deployed
+2026-07-25 build predates this session's entitlement collector + `engine_version` reporting).
+
+**Rollout method (repeatable).**
+1. On dam host: `git pull`, `docker compose build dam-agent-mysql-proxy`, extract the static
+   `GOOS=linux CGO_ENABLED=0` binary via `docker create` + `docker cp :/usr/local/bin/dam-agent`.
+2. scp binary → each estate VM `/tmp` (checksum-verified).
+3. Per VM: back up old binary (`dam-agent.bak-20260803`), `install` new, append `VA_SCAN=true` to
+   the env file, `systemctl restart dam-agent@agentless`.
+
+**Result (verified in `dam_control`: 103 CIS + 9 CVE findings, 28 entitlements; engines mysql,postgresql):**
+- db-vm-pg — PostgreSQL 14.23: CIS 19 pass / 11 fail (score 70), CVE 0 vulnerable, 14 principals (1 high-risk).
+- db-vm-a / db-vm-b — MySQL 8.0.46: CIS 11 pass / 25 fail (score 37), CVE 0 vulnerable, 7 principals each (2 high-risk).
+- Audit-forward capture + classification confirmed **intact** on all three after the swap.
+
+**Not covered:** db-vm-mongo (MongoDB — not VA-eligible) and the two `not_monitored` Cloud SQL PaaS
+DBs (no agent). Rollback per VM: restore `dam-agent.bak-20260803` + drop `VA_SCAN`, restart.
