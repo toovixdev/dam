@@ -353,6 +353,9 @@ services:
       USD_TO_INR: ${USD_TO_INR:-83.5}
       API_PUBLIC_URL: ${API_PUBLIC_URL:-http://localhost:3000}
       BILLING_TEST_TOTAL_USD: ${BILLING_TEST_TOTAL_USD:-}
+      # VA CVE / NVD sync — daily auto-refresh of the CVE ruleset; API key lifts NVD rate limits.
+      NVD_SYNC_ENABLED: ${NVD_SYNC_ENABLED:-}
+      NVD_API_KEY: ${NVD_API_KEY:-}
       AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
       # Read-only lookups into client DBs for DSAR subject discovery.
       CLIENT_MYSQL_ROOT_PASSWORD: ${CLIENT_MYSQL_ROOT_PASSWORD}
