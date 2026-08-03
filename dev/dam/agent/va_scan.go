@@ -433,6 +433,7 @@ func runVaScan(cfg Config) error {
 	payload := map[string]interface{}{
 		"token": cfg.EnrollToken, "host": cfg.TargetHost, "port": atoiDefault(cfg.TargetPort, 3306),
 		"engine": cfg.Engine, "database": vaDatabaseLabel(cfg), "benchmark": benchmark, "checks": findings,
+		"engine_version": ctx.Version, // lets the control plane run CVE / patch-level assessment on a fresh version
 	}
 	body, _ := json.Marshal(payload)
 	resp, err := http.Post(cfg.ControlPlane+"/api/va/scan-results", "application/json", bytes.NewReader(body))
@@ -442,7 +443,179 @@ func runVaScan(cfg Config) error {
 	defer resp.Body.Close()
 	b, _ := io.ReadAll(resp.Body)
 	log.Printf("VA scan reported (%s): %d pass / %d fail / %d error — %s", benchmark, pass, fail, errc, strings.TrimSpace(string(b)))
+	// Third VA pillar: enumerate DB principals + privileges for the rights review (best-effort).
+	collectEntitlements(db, cfg)
 	return nil
+}
+
+// vaPrincipal is one enumerated database account/role for the entitlement (rights) review.
+type vaPrincipal struct {
+	Principal      string      `json:"principal"`
+	Type           string      `json:"type"`
+	IsSuperuser    bool        `json:"is_superuser"`
+	IsAdmin        bool        `json:"is_admin"`
+	CanLogin       bool        `json:"can_login"`
+	DefaultAccount bool        `json:"default_account"`
+	Status         string      `json:"status"`
+	Privileges     string      `json:"privileges"`
+	LastLogin      interface{} `json:"last_login"`
+}
+
+// collectEntitlements enumerates principals via a read-only catalog query and posts them; the
+// control plane computes the risk flags (excessive privilege, dormant, default account, …).
+func collectEntitlements(db *sql.DB, cfg Config) {
+	var principals []vaPrincipal
+	var err error
+	switch cfg.Engine {
+	case "postgresql", "postgres":
+		principals, err = entPostgres(db)
+	case "mysql", "mariadb", "":
+		principals, err = entMysql(db)
+	case "mssql", "sqlserver":
+		principals, err = entMssql(db)
+	case "oracle":
+		principals, err = entOracle(db)
+	default:
+		return
+	}
+	if err != nil {
+		log.Printf("VA entitlements: collection failed (%s): %v", cfg.Engine, err)
+		return
+	}
+	if len(principals) == 0 {
+		return
+	}
+	payload := map[string]interface{}{
+		"token": cfg.EnrollToken, "host": cfg.TargetHost, "port": atoiDefault(cfg.TargetPort, 3306),
+		"engine": cfg.Engine, "database": vaDatabaseLabel(cfg), "principals": principals,
+	}
+	body, _ := json.Marshal(payload)
+	resp, err := http.Post(cfg.ControlPlane+"/api/va/entitlements", "application/json", bytes.NewReader(body))
+	if err != nil {
+		log.Printf("VA entitlements: post failed: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	log.Printf("VA entitlements reported: %d principals — %s", len(principals), strings.TrimSpace(string(b)))
+}
+
+func entPostgres(db *sql.DB) ([]vaPrincipal, error) {
+	rows, err := db.Query(`SELECT rolname, rolsuper, rolcanlogin, (rolcreaterole OR rolcreatedb OR rolsuper) AS is_admin,
+		CASE WHEN rolvaliduntil IS NOT NULL AND rolvaliduntil < now() THEN 'expired' ELSE 'active' END AS status FROM pg_roles`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []vaPrincipal
+	for rows.Next() {
+		var name, status string
+		var super, canlogin, admin bool
+		if rows.Scan(&name, &super, &canlogin, &admin, &status) != nil {
+			continue
+		}
+		priv := "standard"
+		if super {
+			priv = "SUPERUSER"
+		} else if admin {
+			priv = "CREATEROLE / CREATEDB"
+		} else if !canlogin {
+			priv = "group role (NOLOGIN)"
+		}
+		out = append(out, vaPrincipal{Principal: name, Type: "role", IsSuperuser: super, IsAdmin: admin, CanLogin: canlogin, Status: status, Privileges: priv})
+	}
+	return out, nil
+}
+
+func entMysql(db *sql.DB) ([]vaPrincipal, error) {
+	rows, err := db.Query("SELECT User, Host, Super_priv, Grant_priv, IFNULL(account_locked,'N') FROM mysql.user")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []vaPrincipal
+	for rows.Next() {
+		var user, host, superp, grantp, locked string
+		if rows.Scan(&user, &host, &superp, &grantp, &locked) != nil {
+			continue
+		}
+		super := superp == "Y"
+		admin := super || grantp == "Y"
+		priv := "standard"
+		if super {
+			priv = "SUPER (all privileges)"
+		} else if grantp == "Y" {
+			priv = "GRANT OPTION"
+		}
+		st := "active"
+		if locked == "Y" {
+			st = "locked"
+		}
+		out = append(out, vaPrincipal{Principal: user + "@" + host, Type: "user", IsSuperuser: super, IsAdmin: admin, CanLogin: locked != "Y", Status: st, Privileges: priv})
+	}
+	return out, nil
+}
+
+func entMssql(db *sql.DB) ([]vaPrincipal, error) {
+	rows, err := db.Query(`SELECT sp.name, sp.type_desc, sp.is_disabled,
+		CAST(IS_SRVROLEMEMBER('sysadmin', sp.name) AS int), CAST(IS_SRVROLEMEMBER('securityadmin', sp.name) AS int)
+		FROM sys.server_principals sp WHERE sp.type IN ('S','U','G') AND sp.name NOT LIKE '##%'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []vaPrincipal
+	for rows.Next() {
+		var name, typeDesc string
+		var disabled int
+		var sysadmin, secadmin sql.NullInt64
+		if rows.Scan(&name, &typeDesc, &disabled, &sysadmin, &secadmin) != nil {
+			continue
+		}
+		super := sysadmin.Int64 == 1
+		admin := super || secadmin.Int64 == 1
+		priv := "standard"
+		if super {
+			priv = "sysadmin"
+		} else if secadmin.Int64 == 1 {
+			priv = "securityadmin"
+		}
+		st := "active"
+		if disabled == 1 {
+			st = "disabled"
+		}
+		out = append(out, vaPrincipal{Principal: name, Type: "login", IsSuperuser: super, IsAdmin: admin, CanLogin: disabled == 0, Status: st, Privileges: priv})
+	}
+	return out, nil
+}
+
+func entOracle(db *sql.DB) ([]vaPrincipal, error) {
+	rows, err := db.Query(`SELECT u.username, u.account_status, u.last_login,
+		(SELECT COUNT(*) FROM dba_role_privs r WHERE r.grantee=u.username AND r.granted_role='DBA') FROM dba_users u`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []vaPrincipal
+	for rows.Next() {
+		var name, status string
+		var lastLogin sql.NullTime
+		var isDba int
+		if rows.Scan(&name, &status, &lastLogin, &isDba) != nil {
+			continue
+		}
+		dba := isDba > 0
+		var ll interface{}
+		if lastLogin.Valid {
+			ll = lastLogin.Time.UTC().Format(time.RFC3339)
+		}
+		priv := "standard"
+		if dba {
+			priv = "DBA role"
+		}
+		out = append(out, vaPrincipal{Principal: name, Type: "user", IsSuperuser: dba, IsAdmin: dba, CanLogin: status == "OPEN", Status: strings.ToLower(status), Privileges: priv, LastLogin: ll})
+	}
+	return out, nil
 }
 
 // vaScanLoop runs a scan periodically (VA_SCAN_INTERVAL_MIN, default 12h).

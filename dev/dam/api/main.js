@@ -1534,6 +1534,31 @@ async function runAdminMigration() {
       }
       console.log(`[VA] Seeded ${CVES.length} CVE rules across 4 engines`);
     }
+
+    // ── Entitlement / rights review (third VA pillar) ────────────────────────────────
+    // The agent enumerates DB principals + their privilege attributes; the server computes risk
+    // flags (excessive privilege, dormant, default-account, etc.) — the rights-review report.
+    await client.query(`CREATE TABLE IF NOT EXISTS db_entitlements (
+      id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id     UUID NOT NULL,
+      database_id   UUID,
+      engine        VARCHAR(40),
+      principal     VARCHAR(200) NOT NULL,
+      type          VARCHAR(40),                  -- user | role | login
+      is_superuser  BOOLEAN DEFAULT false,
+      is_admin      BOOLEAN DEFAULT false,
+      can_login     BOOLEAN DEFAULT true,
+      default_account BOOLEAN DEFAULT false,
+      status        VARCHAR(40),                  -- active | locked | expired | disabled
+      privileges    TEXT,                         -- human summary (roles / notable grants)
+      last_login    TIMESTAMPTZ,
+      risk          VARCHAR(15),                  -- high | medium | low | ok (computed)
+      flags         TEXT[] DEFAULT '{}',          -- computed risk flags
+      first_seen    TIMESTAMPTZ DEFAULT now(),
+      last_seen     TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (tenant_id, database_id, principal)
+    )`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_db_entitlements_tenant ON db_entitlements (tenant_id, risk)`);
     // Ed25519 signing key for the check pack — agents only run packs signed by this key, so a
     // compromised mirror / MITM can't inject checks that execute on customer DBs. Private key
     // encrypted at rest under the platform secrets key.
@@ -9218,6 +9243,89 @@ if (process.env.NVD_SYNC_ENABLED === 'true') {
   setTimeout(() => syncNvd(30).then((r) => console.log('[VA] startup NVD sync:', JSON.stringify(r))).catch(() => {}), 60000);
   setInterval(() => syncNvd(7).then((r) => console.log('[VA] daily NVD sync:', JSON.stringify(r))).catch(() => {}), 24 * 3600 * 1000);
 }
+
+// ── Entitlement / rights review (third VA pillar) ────────────────────────────
+const DEFAULT_ACCOUNTS = {
+  postgresql: ['postgres'],
+  mysql: ['root', 'mysql.sys', 'mysql.session', 'mysql.infoschema'],
+  mssql: ['sa'],
+  oracle: ['SYS', 'SYSTEM', 'DBSNMP', 'OUTLN', 'XS$NULL', 'ORACLE_OCM', 'GSMADMIN_INTERNAL', 'MDSYS', 'CTXSYS', 'AUDSYS'],
+};
+function computeEntitlementRisk(engine, p) {
+  const flags = [];
+  const locked = /lock|disab|expire/i.test(p.status || '');
+  if (p.is_superuser) flags.push('superuser');            // excessive privilege — must be reviewed
+  else if (p.is_admin) flags.push('admin-privilege');
+  const isDefault = !!p.default_account || (DEFAULT_ACCOUNTS[engine] || []).some((x) => x.toLowerCase() === String(p.principal || '').toLowerCase());
+  if (isDefault && p.can_login && !locked) flags.push('default-account-enabled'); // known default, still usable
+  if (p.can_login && p.last_login && (Date.now() - new Date(p.last_login).getTime()) > 90 * 86400000) flags.push('dormant'); // stale login
+  const risk = flags.includes('superuser') ? 'high' : flags.length ? 'medium' : 'ok';
+  return { flags, risk };
+}
+
+// Agent posts the enumerated principals for one DB; the server computes risk + stores the review.
+app.post('/api/va/entitlements', async (req, res) => {
+  const { token, host, port, engine, database, principals } = req.body || {};
+  if (!Array.isArray(principals)) return res.status(400).json({ error: 'principals[] required' });
+  const tenantId = token ? (await pgPool.query('SELECT id FROM tenants WHERE agent_enroll_token=$1', [token])).rows[0]?.id : null;
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const eng = engine || 'mysql';
+  try {
+    let instanceId = null;
+    if (host) {
+      const f = await pgPool.query('SELECT id FROM db_instances WHERE tenant_id=$1 AND host=$2 AND port IS NOT DISTINCT FROM $3 AND engine=$4', [tenantId, host, port || null, eng]);
+      instanceId = f.rows[0]?.id || (await pgPool.query('INSERT INTO db_instances (tenant_id, name, engine, host, port) VALUES ($1,$2,$3,$4,$5) RETURNING id', [tenantId, host, eng, host, port || null])).rows[0].id;
+    }
+    const dbName = database || host || 'database';
+    const dbRow = (await pgPool.query('SELECT id FROM databases WHERE tenant_id=$1 AND name=$2 AND ($3::uuid IS NULL OR instance_id=$3::uuid) LIMIT 1', [tenantId, dbName, instanceId])).rows[0];
+    if (!dbRow) return res.status(400).json({ error: 'could not resolve database (run a VA scan / discovery first)' });
+    const dbId = dbRow.id;
+    const seen = [];
+    for (const p of principals) {
+      if (!p.principal) continue;
+      const { flags, risk } = computeEntitlementRisk(eng, p);
+      await pgPool.query(
+        `INSERT INTO db_entitlements (tenant_id, database_id, engine, principal, type, is_superuser, is_admin, can_login, default_account, status, privileges, last_login, risk, flags, first_seen, last_seen)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, now(), now())
+         ON CONFLICT (tenant_id, database_id, principal) DO UPDATE SET
+           type=EXCLUDED.type, is_superuser=EXCLUDED.is_superuser, is_admin=EXCLUDED.is_admin, can_login=EXCLUDED.can_login,
+           default_account=EXCLUDED.default_account, status=EXCLUDED.status, privileges=EXCLUDED.privileges,
+           last_login=EXCLUDED.last_login, risk=EXCLUDED.risk, flags=EXCLUDED.flags, last_seen=now()`,
+        [tenantId, dbId, eng, String(p.principal).slice(0, 200), p.type || 'user', !!p.is_superuser, !!p.is_admin,
+         p.can_login !== false, !!p.default_account, p.status || 'active', (p.privileges || '').slice(0, 2000), p.last_login || null, risk, flags]);
+      seen.push(String(p.principal).slice(0, 200));
+    }
+    await pgPool.query('DELETE FROM db_entitlements WHERE tenant_id=$1 AND database_id=$2 AND NOT (principal = ANY($3::text[]))', [tenantId, dbId, seen]);
+    const high = parseInt((await pgPool.query("SELECT count(*) n FROM db_entitlements WHERE tenant_id=$1 AND database_id=$2 AND risk='high'", [tenantId, dbId])).rows[0].n);
+    console.log(`[VA] entitlements ingested: ${eng} ${dbName} — ${seen.length} principals, ${high} high-risk`);
+    res.json({ ok: true, principals: seen.length, highRisk: high });
+  } catch (e) { console.error('[VA] entitlements ingest failed:', e.message); res.status(500).json({ error: e.message }); }
+});
+
+// The rights-review report (per-tenant).
+app.get('/api/va/entitlements', authRequired, featureRequired('va-scanner'), async (req, res) => {
+  const T = req.user.tenantId;
+  try {
+    const rows = (await pgPool.query(
+      `SELECT e.id, e.database_id, d.name database_name, e.engine, e.principal, e.type, e.is_superuser, e.is_admin,
+              e.can_login, e.default_account, e.status, e.privileges, e.last_login, e.risk, e.flags, e.last_seen
+       FROM db_entitlements e LEFT JOIN databases d ON d.id=e.database_id WHERE e.tenant_id=$1
+       ORDER BY CASE e.risk WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 ELSE 3 END, e.is_superuser DESC, e.principal`, [T])).rows;
+    const byFlag = {};
+    rows.forEach((r) => (r.flags || []).forEach((f) => { byFlag[f] = (byFlag[f] || 0) + 1; }));
+    res.json({
+      summary: {
+        total: rows.length,
+        high: rows.filter((r) => r.risk === 'high').length,
+        medium: rows.filter((r) => r.risk === 'medium').length,
+        superusers: rows.filter((r) => r.is_superuser).length,
+        databases: new Set(rows.map((r) => r.database_id)).size,
+        byFlag,
+      },
+      principals: rows,
+    });
+  } catch (e) { console.error('[VA] entitlements report failed:', e.message); res.status(500).json({ error: 'Failed to load entitlements' }); }
+});
 // Recent scan runs.
 app.get('/api/va/scans', authRequired, featureRequired('va-scanner'), async (req, res) => {
   const rows = (await pgPool.query(
