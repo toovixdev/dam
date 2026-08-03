@@ -1149,6 +1149,9 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS financial_assumptions JSONB`);
     // Which cloud(s) the tenant runs in — drives which cloud-discovery adapter(s) to invoke.
     await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS cloud_providers JSONB`);
+    // Test/demo tenants excluded from REVENUE metrics (MRR/outstanding/active subs) so those
+    // reflect real paying customers. The tenant still appears (flagged) in the billing breakdown.
+    await client.query(`ALTER TABLE tenants ADD COLUMN IF NOT EXISTS billing_excluded BOOLEAN DEFAULT false`);
 
     // Per-database masking bypass: DB principals (least-privilege service / break-glass
     // accounts) that see UNMASKED data for a given database. Isolated/additive table.
@@ -4156,7 +4159,7 @@ async function tenantBillingUsage(t, rowsByTenant, totalRows, globalHotBytes, gl
 }
 
 async function computeInvoices() {
-  const tenants = (await pgPool.query('SELECT id, name, slug, tier, status, data_region, created_at FROM tenants ORDER BY created_at')).rows;
+  const tenants = (await pgPool.query('SELECT id, name, slug, tier, status, data_region, created_at, COALESCE(billing_excluded, false) AS billing_excluded FROM tenants ORDER BY created_at')).rows;
   // REAL payment status from the persisted billing_invoices (the same rows the tenant pays) — the
   // current invoice's status + due date, and the tenant's outstanding balance (open invoices only,
   // so voided/paid don't count). Replaces the old derived 'Paid'/'Overage pending' guess.
@@ -4194,7 +4197,7 @@ async function computeInvoices() {
       id: t.id, name: t.name, slug: t.slug, tier: t.tier, status: t.status, region: t.data_region || 'local', createdAt: t.created_at,
       dbs: usage.monitoredDbs, eventsDay: usage.eventsPerDay, storageGb: +usage.hotGB.toFixed(2),
       baseDb, overage, total, outstanding: pi.outstanding || 0,
-      billing,
+      billing, billingExcluded: t.billing_excluded === true,
       negotiated: eff.active,
       contractValidUntil: eff.active ? eff.override.valid_until : null,
       effBaseFee: eff.plan.baseFee, effPerDb: eff.rates.perDatabase,
@@ -4207,13 +4210,16 @@ async function computeInvoices() {
 app.get('/api/admin/billing', async (req, res) => {
   try {
     const inv = await computeInvoices();
-    const active = inv.filter(i => i.status !== 'trial');
-    const mrr = active.reduce((s, i) => s + i.total, 0);
-    const outstanding = +inv.reduce((s, i) => s + (i.outstanding || 0), 0).toFixed(2);
-    const pending = inv.filter(i => i.billing === 'Pending' || i.billing === 'Overdue').length;
-    const overdue = inv.filter(i => i.billing === 'Overdue').length;
+    // Revenue metrics count only REAL paying customers — test/demo tenants (billing_excluded) are
+    // shown in the breakdown but kept out of MRR / outstanding / active-sub counts.
+    const revenue = inv.filter(i => i.status !== 'trial' && !i.billingExcluded);
+    const mrr = revenue.reduce((s, i) => s + i.total, 0);
+    const outstanding = +revenue.reduce((s, i) => s + (i.outstanding || 0), 0).toFixed(2);
+    const pending = revenue.filter(i => i.billing === 'Pending' || i.billing === 'Overdue').length;
+    const overdue = revenue.filter(i => i.billing === 'Overdue').length;
+    const excluded = inv.filter(i => i.billingExcluded).length;
     const byRegion = {};
-    inv.forEach(i => { byRegion[i.region] = (byRegion[i.region] || 0) + i.total; });
+    revenue.forEach(i => { byRegion[i.region] = (byRegion[i.region] || 0) + i.total; });
     // REAL billing activity from the platform audit log (rate-card + negotiated-contract
     // changes) — replaces the previously synthesized feed with fabricated INV numbers and
     // back-dated timestamps. Empty until real billing actions are taken (honest).
@@ -4228,8 +4234,8 @@ app.get('/api/admin/billing', async (req, res) => {
     }));
     res.json({
       kpis: {
-        mrr, activeSubs: active.length, avgRevenue: active.length ? Math.round(mrr / active.length) : 0,
-        outstanding, pending, overdue,
+        mrr, activeSubs: revenue.length, avgRevenue: revenue.length ? Math.round(mrr / revenue.length) : 0,
+        outstanding, pending, overdue, excluded,
       },
       revenueByRegion: Object.entries(byRegion).map(([region, amount]) => ({ region, amount })).sort((a, b) => b.amount - a.amount),
       invoices: inv,

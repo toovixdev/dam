@@ -52,7 +52,7 @@ export default function Billing() {
 
       <section className="kpi-grid">
         <KpiCard icon="$" iconBg="var(--green-soft)" iconColor="var(--green)" label="MRR"
-          value={usdK(k.mrr)} detail="computed from live usage" detailType="up" />
+          value={usdK(k.mrr)} detail={k.excluded ? `real customers · ${k.excluded} test/demo excluded` : 'computed from live usage'} detailType="up" />
         <KpiCard icon="▦" iconBg="var(--primary-soft)" iconColor="var(--primary)" label="Active subscriptions"
           value={k.activeSubs} detail="billable tenants" />
         <KpiCard icon="≈" iconBg="var(--info-soft)" iconColor="var(--info)" label="Avg revenue/tenant"
@@ -119,11 +119,13 @@ export default function Billing() {
         <div className="card-header"><span className="card-title">Tenant Usage & Invoice Breakdown</span><span className="card-sub">current cycle · computed live</span></div>
         <div className="card-body no-pad">
           <table className="data-table">
-            <thead><tr><th>Tenant</th><th>Plan</th><th className="num">DBs</th><th className="num">Events/day</th><th className="num">Storage</th><th className="num">Base + DB</th><th className="num">Overages</th><th className="num">Total</th><th>Billing</th><th>Contract</th></tr></thead>
+            <thead><tr><th>Tenant</th><th>Plan</th><th className="num">DBs</th><th className="num">Events/day</th><th className="num">Storage</th><th className="num">Base + DB</th><th className="num" title="Add-on charges beyond base + DBs (inline blocking, cold storage, DSAR, metered overage)">Add-ons</th><th className="num">Total</th><th>Billing</th><th>Contract</th></tr></thead>
             <tbody>
               {invoices.map(i => (
-                <tr key={i.id} style={i.status === 'trial' ? { background: 'var(--surface-2)' } : {}}>
-                  <td><b>{i.name}</b>{i.negotiated && <><br /><small className="badge sev-medium" style={{ fontSize: 10 }}>Negotiated{i.contractValidUntil ? ` · until ${new Date(i.contractValidUntil).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}` : ''}</small></>}</td>
+                <tr key={i.id} style={i.status === 'trial' || i.billingExcluded ? { background: 'var(--surface-2)', opacity: i.billingExcluded ? 0.7 : 1 } : {}}>
+                  <td><b>{i.name}</b>
+                    {i.billingExcluded && <><br /><small className="badge status-gray" style={{ fontSize: 10 }} title="Test/demo tenant — not counted in MRR or outstanding">Excluded from revenue</small></>}
+                    {i.negotiated && <><br /><small className="badge sev-medium" style={{ fontSize: 10 }}>Negotiated{i.contractValidUntil ? ` · until ${new Date(i.contractValidUntil).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}` : ''}</small></>}</td>
                   <td><span className={`badge ${i.status === 'trial' ? 'sev-high' : TIER_BADGE[i.tier] || 'status-gray'}`}>{i.status === 'trial' ? 'Trial' : TIER_LABEL[i.tier] || i.tier}</span></td>
                   <td className="num">{i.dbs}</td>
                   <td className="num">{fmtEvents(i.eventsDay)}</td>
