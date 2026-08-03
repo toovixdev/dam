@@ -75,33 +75,31 @@ export default function Impersonation() {
             <button className="btn-primary" onClick={request} disabled={busy}>{busy ? 'Starting…' : '▷ Request impersonation'}</button>
           </div>
         </div>
-
-        <div className="card">
-          <div className="card-header"><span className="card-title">Active Sessions</span><span className="card-sub">{active.length} active</span></div>
-          <div className="card-body no-pad">
-            <table className="data-table">
-              <thead><tr><th>Operator</th><th>Tenant</th><th>Expires</th><th className="num">Actions</th><th>Access</th><th></th></tr></thead>
-              <tbody>
-                {active.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 20 }}>No active sessions</td></tr>}
-                {active.map(s => (
-                  <tr key={s.id}>
-                    <td><b>{s.operator}</b><br /><small className="muted">{s.operatorEmail}</small></td>
-                    <td>{s.tenantName}</td><td><small className="muted">{fmtDt(s.expiresAt)}</small></td><td className="num">{s.actions}</td>
-                    <td>
-                      {access[s.id]
-                        ? <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
-                            <button className="btn-primary" style={{ padding: '3px 10px', fontSize: 12 }} onClick={() => openConsole(s.id)}>Open console ↗</button>
-                          </span>
-                        : <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => reveal(s.id)}>Get access</button>}
-                    </td>
-                    <td><button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => end(s.id)}>End</button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
       </section>
+
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-header"><span className="card-title">Active Sessions</span><span className="card-sub">{active.length} active</span></div>
+        <div className="card-body no-pad" style={{ overflowX: 'auto' }}>
+          <table className="data-table">
+            <thead><tr><th>Operator</th><th>Tenant</th><th>Expires</th><th className="num">Actions</th><th>Access</th><th></th></tr></thead>
+            <tbody>
+              {active.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 20 }}>No active sessions</td></tr>}
+              {active.map(s => (
+                <tr key={s.id}>
+                  <td><b>{s.operator}</b><br /><small className="muted">{s.operatorEmail}</small></td>
+                  <td>{s.tenantName}</td><td><small className="muted">{fmtDt(s.expiresAt)}</small></td><td className="num">{s.actions}</td>
+                  <td>
+                    {access[s.id]
+                      ? <button className="btn-primary" style={{ padding: '3px 10px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => openConsole(s.id)}>Open console ↗</button>
+                      : <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12, whiteSpace: 'nowrap' }} onClick={() => reveal(s.id)}>Get access</button>}
+                  </td>
+                  <td><button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => end(s.id)}>End</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-header"><span className="card-title">Recent Impersonation Log</span><span className="card-sub">{history.length} sessions</span></div>
