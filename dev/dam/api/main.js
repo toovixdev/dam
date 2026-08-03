@@ -1838,9 +1838,9 @@ function authRequired(req, res, next) {
 async function breakGlassAuth(req, res, next, payload) {
   try {
     const s = (await pgPool.query(
-      "SELECT status, scope, expires_at, tenant_name FROM admin_access_sessions WHERE id=$1 AND type='break_glass'", [payload.sessionId])).rows[0];
+      "SELECT status, scope, expires_at, tenant_name, type FROM admin_access_sessions WHERE id=$1 AND type IN ('break_glass','impersonation')", [payload.sessionId])).rows[0];
     if (!s || s.status !== 'active' || (s.expires_at && new Date(s.expires_at) < new Date())) {
-      return res.status(401).json({ error: 'Break-glass session is not active (revoked or expired)' });
+      return res.status(401).json({ error: 'Operator session is not active (revoked or expired)' });
     }
     if ((s.scope || 'ro') !== 'rw' && req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
       return res.status(403).json({ error: 'Break-glass session is read-only' });
@@ -4660,7 +4660,7 @@ function mintBreakGlassToken(s) {
 // the server / not logged); the main app's /break-glass route consumes it and bootstraps a session.
 function breakGlassLaunchUrl(s, token) {
   const base = (APP_BASE_URL || '').replace(/\/$/, '');
-  const q = new URLSearchParams({ tenant: s.tenant_name || '', scope: s.scope || 'ro', op: s.operator_email || s.operator || '' }).toString();
+  const q = new URLSearchParams({ tenant: s.tenant_name || '', scope: s.scope || 'ro', op: s.operator_email || s.operator || '', kind: s.type || 'break_glass' }).toString();
   return `${base}/break-glass#t=${token}&${q}`;
 }
 app.get('/api/admin/sessions', async (req, res) => {
@@ -4707,7 +4707,11 @@ app.post('/api/admin/sessions', async (req, res) => {
        bg ? 'pending_approval' : 'active']
     );
     await logPlatformAudit({ actor: b.operator || 'Platform Ops', action: bg ? 'break-glass.request' : 'impersonation.start', tenantId: b.tenantId || null, tenantName, resource: `session/${ins.rows[0].id.slice(0, 8)}`, ip: req.ip, details: `${bg ? 'awaiting approval by ' + (b.approver || '?') + ' · ' : ''}${b.incidentRef || b.ticketRef || ''} · ${b.justification.trim().slice(0, 60)}` });
-    res.status(201).json({ ok: true, session: shapeSession(ins.rows[0]) });
+    // Impersonation is immediate (no approval) + read-only "view as tenant" — issue the access
+    // token now. Break-glass waits for approval (token minted there).
+    const out = { ok: true, session: shapeSession(ins.rows[0]) };
+    if (!bg) { const at = mintBreakGlassToken(ins.rows[0]); out.accessToken = at; out.launchUrl = breakGlassLaunchUrl(ins.rows[0], at); }
+    res.status(201).json(out);
   } catch (err) {
     console.error('[Admin] create session failed:', err.message);
     res.status(500).json({ error: 'Failed to start session' });
@@ -4754,7 +4758,7 @@ app.post('/api/admin/sessions/:id/approve', async (req, res) => {
 app.get('/api/admin/sessions/:id/token', async (req, res) => {
   try {
     const s = (await pgPool.query('SELECT * FROM admin_access_sessions WHERE id=$1', [req.params.id])).rows[0];
-    if (!s || s.type !== 'break_glass') return res.status(404).json({ error: 'Not found' });
+    if (!s || (s.type !== 'break_glass' && s.type !== 'impersonation')) return res.status(404).json({ error: 'Not found' });
     if (s.status !== 'active' || (s.expires_at && new Date(s.expires_at) < new Date())) return res.status(409).json({ error: 'Session is not active' });
     const accessToken = mintBreakGlassToken(s);
     res.json({ ok: true, accessToken, expiresAt: s.expires_at, scope: s.scope || 'ro', launchUrl: breakGlassLaunchUrl(s, accessToken) });

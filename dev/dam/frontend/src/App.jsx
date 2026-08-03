@@ -65,7 +65,7 @@ function BreakGlassEntry() {
     const t = h.get('t');
     if (!t) { navigate('/login', { replace: true }); return; }
     localStorage.setItem('dam_token', t);
-    localStorage.setItem('dam_breakglass', JSON.stringify({ tenant: h.get('tenant') || '', scope: h.get('scope') || 'ro', op: h.get('op') || '' }));
+    localStorage.setItem('dam_breakglass', JSON.stringify({ tenant: h.get('tenant') || '', scope: h.get('scope') || 'ro', op: h.get('op') || '', kind: h.get('kind') || 'break_glass' }));
     fetch('/api/auth/me', { headers: { Authorization: `Bearer ${t}` } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error('invalid'))))
       .then((u) => {
@@ -90,6 +90,9 @@ function BreakGlassBanner() {
     if (bg) { document.body.style.paddingTop = '36px'; return () => { document.body.style.paddingTop = ''; }; }
   }, [!!bg]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!bg) return null;
+  const isImp = bg.kind === 'impersonation';
+  const bar = isImp ? '#b45309' : '#b91c1c'; // impersonation amber vs break-glass red
+  const label = isImp ? 'IMPERSONATION SESSION' : 'BREAK-GLASS SESSION';
   const exit = () => {
     ['dam_token', 'dam_user', 'dam_breakglass', 'nx-role'].forEach((k) => localStorage.removeItem(k));
     document.body.style.paddingTop = '';
@@ -97,10 +100,10 @@ function BreakGlassBanner() {
     window.location.href = '/login';
   };
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100000, background: '#b91c1c', color: '#fff', display: 'flex', alignItems: 'center', gap: 12, padding: '7px 16px', fontSize: 13, fontWeight: 600, boxShadow: '0 2px 10px rgba(0,0,0,.35)' }}>
-      <span>⚠ BREAK-GLASS SESSION</span>
+    <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 100000, background: bar, color: '#fff', display: 'flex', alignItems: 'center', gap: 12, padding: '7px 16px', fontSize: 13, fontWeight: 600, boxShadow: '0 2px 10px rgba(0,0,0,.35)' }}>
+      <span>⚠ {label}</span>
       <span style={{ fontWeight: 500, opacity: 0.95 }}>Viewing <b>{bg.tenant}</b>{bg.op ? ` as ${bg.op}` : ''} · {bg.scope === 'rw' ? 'READ-WRITE' : 'READ-ONLY'} · every action is audited</span>
-      <button onClick={exit} style={{ marginLeft: 'auto', background: '#fff', color: '#b91c1c', border: 'none', borderRadius: 6, padding: '3px 12px', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>Exit break-glass ✕</button>
+      <button onClick={exit} style={{ marginLeft: 'auto', background: '#fff', color: bar, border: 'none', borderRadius: 6, padding: '3px 12px', fontWeight: 700, cursor: 'pointer', fontSize: 12 }}>Exit ✕</button>
     </div>
   );
 }

@@ -3,7 +3,7 @@ import Layout from '../components/Layout';
 import PageHeader from '../components/shared/PageHeader';
 import { toast } from '../components/shared/Toast';
 import useApiData from '../hooks/useApiData';
-import { apiPost } from '../api/client';
+import { apiPost, apiFetch } from '../api/client';
 
 const ST = { active: 'status-green', completed: 'status-gray', auto_revoked: 'sev-high', revoked: 'sev-high', pending_review: 'sev-high' };
 const STL = { active: 'Active', completed: 'Completed', auto_revoked: 'Auto-revoked', revoked: 'Revoked', pending_review: 'Pending review' };
@@ -19,6 +19,7 @@ export default function Impersonation() {
   const { data, loading, lastRefresh, refetch } = useApiData('/admin/sessions?type=impersonation', { poll: 15000 });
   const [form, setForm] = useState({ tenantId: '', justification: '', durationMin: '60', ticketRef: '' });
   const [busy, setBusy] = useState(false);
+  const [access, setAccess] = useState({}); // sessionId -> { token, launchUrl }
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   async function request() {
@@ -27,13 +28,21 @@ export default function Impersonation() {
     setBusy(true);
     const res = await apiPost('/admin/sessions', { type: 'impersonation', ...form });
     setBusy(false);
-    if (res.ok) { toast('Impersonation session started — recorded in audit', 'ok'); setForm({ tenantId: '', justification: '', durationMin: '60', ticketRef: '' }); refetch(); }
-    else toast(res.data?.error || 'Failed to start session', 'err');
+    if (res.ok) {
+      toast('Impersonation session started', 'ok');
+      if (res.data.session?.id && res.data.accessToken) setAccess(a => ({ ...a, [res.data.session.id]: { token: res.data.accessToken, launchUrl: res.data.launchUrl } }));
+      setForm({ tenantId: '', justification: '', durationMin: '60', ticketRef: '' }); refetch();
+    } else toast(res.data?.error || 'Failed to start session', 'err');
   }
   async function end(id) {
     const res = await apiPost(`/admin/sessions/${id}/end`, {});
-    if (res.ok) { toast('Session ended', 'ok'); refetch(); } else toast('Failed to end session', 'err');
+    if (res.ok) { toast('Session ended', 'ok'); setAccess(a => { const n = { ...a }; delete n[id]; return n; }); refetch(); } else toast('Failed to end session', 'err');
   }
+  async function reveal(id) {
+    try { const r = await apiFetch(`/admin/sessions/${id}/token`); setAccess(a => ({ ...a, [id]: { token: r.accessToken, launchUrl: r.launchUrl } })); }
+    catch { toast('Session no longer active', 'err'); refetch(); }
+  }
+  function openConsole(id) { const a = access[id]; if (a?.launchUrl) window.open(a.launchUrl, '_blank', 'noopener'); }
 
   if (loading && !data) return <div className="loading-screen"><div className="loading-spinner" /><p>Loading sessions…</p></div>;
   const active = data?.active || [];
@@ -71,13 +80,20 @@ export default function Impersonation() {
           <div className="card-header"><span className="card-title">Active Sessions</span><span className="card-sub">{active.length} active</span></div>
           <div className="card-body no-pad">
             <table className="data-table">
-              <thead><tr><th>Operator</th><th>Tenant</th><th>Expires</th><th className="num">Actions</th><th></th></tr></thead>
+              <thead><tr><th>Operator</th><th>Tenant</th><th>Expires</th><th className="num">Actions</th><th>Access</th><th></th></tr></thead>
               <tbody>
-                {active.length === 0 && <tr><td colSpan={5} className="muted" style={{ textAlign: 'center', padding: 20 }}>No active sessions</td></tr>}
+                {active.length === 0 && <tr><td colSpan={6} className="muted" style={{ textAlign: 'center', padding: 20 }}>No active sessions</td></tr>}
                 {active.map(s => (
                   <tr key={s.id}>
                     <td><b>{s.operator}</b><br /><small className="muted">{s.operatorEmail}</small></td>
                     <td>{s.tenantName}</td><td><small className="muted">{fmtDt(s.expiresAt)}</small></td><td className="num">{s.actions}</td>
+                    <td>
+                      {access[s.id]
+                        ? <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                            <button className="btn-primary" style={{ padding: '3px 10px', fontSize: 12 }} onClick={() => openConsole(s.id)}>Open console ↗</button>
+                          </span>
+                        : <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => reveal(s.id)}>Get access</button>}
+                    </td>
                     <td><button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => end(s.id)}>End</button></td>
                   </tr>
                 ))}
