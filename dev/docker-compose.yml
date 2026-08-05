@@ -610,31 +610,6 @@ services:
   # NETWORK agent for the DISCOVERED instance client-mysql-2 (port 3307).
   # Enrolls against host:port+engine → attaches to the instance discovery registered,
   # flips it to "monitored", and shows online on the Agent Fleet page.
-  dam-agent-mysql2-network:
-    build: ./dam/agent
-    container_name: dam-agent-mysql2-network
-    user: root
-    cap_add:
-      - NET_RAW
-      - NET_ADMIN
-    network_mode: "service:client-mysql-2"
-    environment:
-      MODE: network
-      DB_ENGINE: mysql
-      TARGET_HOST: client-mysql-2
-      TARGET_PORT: 3307
-      TARGET_DB: client-mysql-2
-      CAPTURE_IFACE: eth0
-      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
-      CONTROL_PLANE: http://host.docker.internal:3000
-      CLICKHOUSE_URL: http://host.docker.internal:8123
-      CLICKHOUSE_USER: dam_writer
-      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
-    depends_on:
-      - dam-api
-      - client-mysql-2
-      - dam-clickhouse
-
   # INLINE PROXY agent for the discovered instance client-mysql-2 (port 3307).
   # Listens on 3307 and forwards to client-mysql-2:3307; can block/quarantine.
   dam-agent-mysql2-proxy:
@@ -685,31 +660,3 @@ services:
     networks:
       - client-net
       - dam-net
-
-  # NETWORK agent — passive libpcap-style capture. Shares client-mysql's network namespace
-  # (the only way to sniff another container's traffic on a switched Docker bridge) and so
-  # cannot also join dam-net → it reaches the platform via host-published ports.
-  dam-agent-mysql-network:
-    build: ./dam/agent
-    container_name: dam-agent-mysql-network
-    user: root
-    cap_add:
-      - NET_RAW
-      - NET_ADMIN
-    network_mode: "service:client-mysql"
-    environment:
-      MODE: network
-      DB_ENGINE: mysql
-      TARGET_HOST: client-mysql
-      TARGET_PORT: 3306
-      TARGET_DB: MYSQL-PAYMENTS-PROD
-      CAPTURE_IFACE: eth0
-      AGENT_ENROLL_TOKEN: ${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}
-      CONTROL_PLANE: http://host.docker.internal:3000
-      CLICKHOUSE_URL: http://host.docker.internal:8123
-      CLICKHOUSE_USER: dam_writer
-      CLICKHOUSE_PASSWORD: ${DAM_CLICKHOUSE_PASSWORD}
-    depends_on:
-      - dam-api
-      - client-mysql
-      - dam-clickhouse
