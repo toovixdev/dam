@@ -5899,19 +5899,44 @@ setInterval(async () => {
 // Outbound event ingest — agents (which can't reach ClickHouse directly) POST their
 // captured activity here over HTTPS. Token → tenant; we write to the tenant's events DB.
 // This is how captured SQL becomes audit-trail activity and feeds detection (decoy scan).
+// Best-effort extraction of the target schema.table from a SQL statement — used to recover
+// object identity when the agent didn't parse it (leaving schema/table empty and database_name
+// set to the connection host:port). Returns {schema, table}; either may be ''.
+function parseSqlObject(sql) {
+  if (!sql || typeof sql !== 'string') return { schema: '', table: '' };
+  const m = sql.replace(/\s+/g, ' ').match(/\b(?:FROM|JOIN|INTO|UPDATE)\s+[`"[]?([A-Za-z0-9_$]+)[`"\]]?(?:\s*\.\s*[`"[]?([A-Za-z0-9_$]+)[`"\]]?)?/i);
+  if (!m) return { schema: '', table: '' };
+  return m[2] ? { schema: m[1], table: m[2] } : { schema: '', table: m[1] };
+}
+// The object identity for an event: prefer parsed schema/table, else the statement's table, and
+// NEVER fall through to a host:port (that produced instance-wide false-positive suppressions).
+function eventObject(ev) {
+  if (ev.schema_name) return ev.table_name ? `${ev.schema_name}.${ev.table_name}` : ev.schema_name;
+  if (ev.table_name) return ev.table_name;
+  const p = parseSqlObject(ev.sql_text || '');
+  if (p.table) return p.schema ? `${p.schema}.${p.table}` : p.table;
+  const db = ev.database_name || '';
+  return /:\d+$/.test(db) ? '' : db;
+}
+
 app.post('/api/agents/events', async (req, res) => {
   const tenantId = await tenantFromEnrollToken(req.body?.token);
   if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
   const raw = Array.isArray(req.body.events) ? req.body.events : (req.body.event ? [req.body.event] : []);
   if (!raw.length) return res.status(400).json({ error: 'events[] required' });
-  const evs = raw.slice(0, 500).map((e) => ({
+  const evs = raw.slice(0, 500).map((e) => {
+    // Agents that don't parse the SQL leave schema/table empty and set database_name to the
+    // connection target (host:port). Derive the real schema.table from the statement so object-
+    // level detection, suppression, classification and reporting aren't keyed on a host:port.
+    const obj = (!e.schema_name || !e.table_name) ? parseSqlObject(e.sql_text || '') : { schema: '', table: '' };
+    return {
     database_name: e.database_name || req.body.host || '',
     timestamp: e.timestamp || new Date().toISOString().slice(0, 19).replace('T', ' '),
     principal: e.principal || 'unknown',
     client_ip: e.client_ip || '',
     operation: e.operation || 'OTHER',
-    schema_name: e.schema_name || '',
-    table_name: e.table_name || '',
+    schema_name: e.schema_name || obj.schema,
+    table_name: e.table_name || obj.table,
     columns_accessed: Array.isArray(e.columns_accessed) ? e.columns_accessed : [],
     row_count: Number(e.row_count) || 0,
     // What KIND of activity this is. Everything historically ingested was a statement, so that
@@ -5927,7 +5952,8 @@ app.post('/api/agents/events', async (req, res) => {
     tags: (Array.isArray(e.tags) && e.tags.length) ? e.tags : detectTagsSql(e.sql_text || ''),
     agent_type: e.agent_type || 'network',
     source_host: e.source_host || req.body.host || '',
-  }));
+    };
+  });
   try { await chInsertEvents(tenantId, evs); }
   catch (e) { console.error('[events] ingest failed:', e.message); return res.status(502).json({ error: 'ingest failed' }); }
   // Keep the cloud connector's heartbeat fresh when events arrive from an AGENTLESS source.
@@ -12799,7 +12825,7 @@ async function runDetectionEngine() {
         } catch (e) { continue; }
         if (!Array.isArray(evs)) continue;
         for (const ev of evs) {
-          const object = ev.schema_name ? `${ev.schema_name}.${ev.table_name}` : (ev.table_name || ev.database_name || '');
+          const object = eventObject(ev);
           if (suppressed(p.name, ev.principal, object, ev.database_name)) continue; // exception / allow-list honored
           const score = (+ev.anomaly_score > 0) ? +ev.anomaly_score : Math.min(99, sevBaseScore(p.severity) + 20);
           const rowsTxt = ['LOGIN', 'GRANT', 'DDL'].includes(ev.operation) ? '—' : Number(ev.row_count || 0).toLocaleString();
@@ -13116,7 +13142,7 @@ async function runBehavioralDetectors() {
         .map((r) => `${r.rule}|${r.principal}|${r.object_name}`));
       for (const ev of evs) {
         const meta = BEHAVIORAL_RULES[ev.anomaly]; if (!meta) continue;
-        const object = ev.schema_name ? `${ev.schema_name}.${ev.table_name}` : (ev.table_name || ev.database_name || '');
+        const object = eventObject(ev);
         const key = `${meta.rule}|${ev.principal}|${object}`;
         if (openKeys.has(key)) continue; // already alerted recently
         openKeys.add(key);
