@@ -7004,7 +7004,11 @@ app.post('/api/alerts/:id/escalate', authRequired, async (req, res) => {
       `SELECT config FROM integrations WHERE tenant_id = $1 AND type = $2`,
       [req.user.tenantId, type])).rows[0];
     if (!row || !row.config) { results.push({ channel: ch, ok: false, error: 'not configured' }); continue; }
-    let cfg = row.config;
+    // Decrypt secret fields (e.g. jira api_token, smtp pass) at the use point — same as the
+    // auto-forward path. Without this the connector gets the enc:v1: ciphertext as its
+    // credential; Jira then treats the request as anonymous and returns a misleading
+    // "project does not exist / no permission" error instead of a 401.
+    let cfg = decIntegrationConfig(type, row.config);
     if (ch === 'email' && recipients) cfg = { ...cfg, recipients }; // per-escalation recipient override
     try {
       const r = await CONNECTORS[type].send(cfg, alertObj);
