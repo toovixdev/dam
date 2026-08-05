@@ -1,9 +1,11 @@
 // TooVix DAM Agent — single binary, MODE-selectable capture.
 //
 // One image, three installable modes (network | host | proxy), selected by MODE:
-//   proxy   — inline TCP proxy clients connect through; decodes the wire protocol and can block.
-//   network — passive AF_PACKET sniff (above TLS): cleartext MySQL/PostgreSQL/SQL Server.
-//   host    — eBPF uprobe on libssl (below TLS): captures TLS-encrypted MySQL/PostgreSQL too.
+//
+//	proxy   — inline TCP proxy clients connect through; decodes the wire protocol and can block.
+//	network — passive AF_PACKET sniff (above TLS): cleartext MySQL/PostgreSQL/SQL Server.
+//	host    — eBPF uprobe on libssl (below TLS): captures TLS-encrypted MySQL/PostgreSQL too.
+//
 // All modes share the same wire decoders and event pipeline; only the byte source differs.
 package main
 
@@ -36,15 +38,15 @@ import (
 )
 
 type Config struct {
-	Mode         string // network | host | proxy
-	Engine       string // mysql | postgresql | mongodb | ...
-	TargetHost   string // instance host the agent monitors
-	TargetPort   string // instance port
-	TargetDB     string // display name used as database_name on events
-	ListenPort   string // proxy: port the agent listens on
-	Upstream     string // proxy: host:port of the real DB
-	EnrollToken  string
-	ControlPlane string // http://dam-api:3000
+	Mode          string // network | host | proxy
+	Engine        string // mysql | postgresql | mongodb | ...
+	TargetHost    string // instance host the agent monitors
+	TargetPort    string // instance port
+	TargetDB      string // display name used as database_name on events
+	ListenPort    string // proxy: port the agent listens on
+	Upstream      string // proxy: host:port of the real DB
+	EnrollToken   string
+	ControlPlane  string // http://dam-api:3000
 	ClickHouse    string // http://dam-clickhouse:8123
 	CHUser        string
 	CHPassword    string
@@ -59,6 +61,7 @@ type Config struct {
 	DBUser       string
 	DBPass       string
 	DBName       string // postgres: the database to classify (information_schema is per-DB in PG)
+	Region       string // classification: agent's data region (IN|US|EU|UK) — filters the detector pack
 	ClassifyMins int
 	// classify: also sample a few stored values per sensitive column to detect data that is
 	// ALREADY masked/redacted at rest (so it isn't reported as a masking gap). Values are
@@ -89,7 +92,9 @@ func env(k, d string) string {
 // The agent logs into the monitored database itself (classification scans, database discovery,
 // SQL Server audit polls). Every capture mode then observes those queries and ships them as
 // events — so the audit trail fills with the agent watching itself, e.g.
-//   SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns …
+//
+//	SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns …
+//
 // It's the SQL twin of the MongoDB profiler feedback loop (see shouldForwardMongo).
 //
 // The fix is to MARK our own statements and drop exactly those, rather than blanket-dropping
@@ -134,20 +139,21 @@ func loadConfig() Config {
 		CHPassword:   env("CLICKHOUSE_PASSWORD", "dam_click_secret"),
 		// Stable identity across restarts (env(...) used directly, not the container hostname),
 		// so re-enrollment reuses the same agent row instead of creating duplicates.
-		AgentHost: "dam-agent-" + env("MODE", "proxy") + "-" + env("TARGET_HOST", "client-mysql") + "-" + env("TARGET_PORT", "3306"),
-		Version:   "0.1.0",
-		Classify:  env("CLASSIFY", "false") == "true",
-		VaScan:    env("VA_SCAN", "false") == "true",
-		DBUser:    env("DB_USER", ""),
-		DBPass:    env("DB_PASSWORD", ""),
-		DBName:    env("DB_NAME", ""),
-		ClassifyMins: atoiDefault(env("CLASSIFY_INTERVAL_MIN", "30"), 30),
-		SampleAtRest: env("CLASSIFY_SAMPLE", "true") == "true",
+		AgentHost:        "dam-agent-" + env("MODE", "proxy") + "-" + env("TARGET_HOST", "client-mysql") + "-" + env("TARGET_PORT", "3306"),
+		Version:          "0.1.0",
+		Classify:         env("CLASSIFY", "false") == "true",
+		VaScan:           env("VA_SCAN", "false") == "true",
+		DBUser:           env("DB_USER", ""),
+		DBPass:           env("DB_PASSWORD", ""),
+		DBName:           env("DB_NAME", ""),
+		Region:           env("DB_REGION", ""),
+		ClassifyMins:     atoiDefault(env("CLASSIFY_INTERVAL_MIN", "30"), 30),
+		SampleAtRest:     env("CLASSIFY_SAMPLE", "true") == "true",
 		LargeResultBytes: int64(atoiDefault(env("LARGE_RESULT_BYTES", "1048576"), 1048576)), // 1 MiB default
-		AuditLog:    env("AUDIT_LOG", ""),
-		AuditSource: env("AUDIT_SOURCE", ""),
-		AuditTopic:  env("AUDIT_TOPIC", ""),
-		GCPProject:  env("GCP_PROJECT", ""),
+		AuditLog:         env("AUDIT_LOG", ""),
+		AuditSource:      env("AUDIT_SOURCE", ""),
+		AuditTopic:       env("AUDIT_TOPIC", ""),
+		GCPProject:       env("GCP_PROJECT", ""),
 	}
 	if c.TargetDB == "" {
 		c.TargetDB = c.TargetHost + ":" + c.TargetPort
@@ -869,6 +875,92 @@ func classifyCol(name string) (tag, sens string, ok bool) {
 	return "", "", false
 }
 
+// ── Content-based classification ─────────────────────────────────────────────
+// Name matching tags a column for what it's CALLED; content validation tags it for what it
+// CONTAINS. Sampling stored values lets us (a) catch sensitive data hiding in innocuously-named
+// columns (notes, col1, data) and (b) upgrade a name guess to a proven finding. Mirrors the dev
+// collector's validators so the agent and collector classify identically. Values are inspected
+// locally — only the derived tag/method leaves the agent, never the sampled data.
+
+// luhnValid reports whether s is a Luhn-valid 13–19 digit sequence (payment card number),
+// ignoring spaces and hyphens.
+func luhnValid(s string) bool {
+	d := strings.Map(func(r rune) rune {
+		if r == ' ' || r == '-' {
+			return -1
+		}
+		return r
+	}, s)
+	if len(d) < 13 || len(d) > 19 {
+		return false
+	}
+	sum, alt := 0, false
+	for i := len(d) - 1; i >= 0; i-- {
+		c := d[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+		n := int(c - '0')
+		if alt {
+			if n *= 2; n > 9 {
+				n -= 9
+			}
+		}
+		sum += n
+		alt = !alt
+	}
+	return sum%10 == 0
+}
+
+type contentValidator struct {
+	tag, sens string
+	test      func(string) bool
+}
+
+var (
+	reAadhaar  = regexp.MustCompile(`^\d{4}\s?\d{4}\s?\d{4}$`)
+	rePAN      = regexp.MustCompile(`^[A-Za-z]{5}[0-9]{4}[A-Za-z]$`)
+	reGSTIN    = regexp.MustCompile(`^\d{2}[A-Za-z]{5}\d{4}[A-Za-z]\d[A-Za-z\d]Z[A-Za-z\d]$`)
+	reEmail    = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]{2,}$`)
+	reSSN      = regexp.MustCompile(`^\d{3}-?\d{2}-?\d{4}$`)
+	reIP       = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
+	rePhone    = regexp.MustCompile(`^[\d\s+()-]+$`)
+	reNonDigit = regexp.MustCompile(`\D`)
+)
+
+// contentValidators mirror collector.js CONTENT (Luhn card check + Aadhaar/PAN/GSTIN/email/
+// SSN/IP/phone formats). Ordered most-specific first so a card number isn't shadowed by phone.
+var contentValidators = []contentValidator{
+	{"pci", "critical", luhnValid},
+	{"aadhaar", "critical", func(v string) bool { return reAadhaar.MatchString(v) }},
+	{"pan", "high", func(v string) bool { return rePAN.MatchString(strings.TrimSpace(v)) }},
+	{"gstin", "high", func(v string) bool { return reGSTIN.MatchString(strings.TrimSpace(v)) }},
+	{"email", "high", func(v string) bool { return reEmail.MatchString(v) }},
+	{"ssn", "critical", func(v string) bool { return reSSN.MatchString(v) }},
+	{"ip", "low", func(v string) bool { return reIP.MatchString(v) }},
+	{"phone", "medium", func(v string) bool {
+		d := reNonDigit.ReplaceAllString(v, "")
+		return len(d) >= 10 && len(d) <= 13 && rePhone.MatchString(v)
+	}},
+}
+
+// Column classification is data-driven from the pulled detector pack — see classifyWith and
+// resolveDetectors in classify_pack.go. nameClassifiers + contentValidators above are the
+// compiled-in fallback library that builtinDetectors() assembles when a pack can't be pulled.
+
+// contentScannable limits value sampling to text/numeric column types where PII can live,
+// skipping booleans, dates/timestamps, binary/blob and uuid columns. Keeps per-scan query
+// volume bounded across wide schemas. Engine-agnostic substring match on the catalog data_type.
+func contentScannable(dataType string) bool {
+	dt := strings.ToLower(dataType)
+	for _, s := range []string{"char", "text", "clob", "string", "int", "num", "dec", "money"} {
+		if strings.Contains(dt, s) {
+			return true
+		}
+	}
+	return false
+}
+
 // ── At-rest masking detection ─────────────────────────────────────────────────
 // Some columns are already masked/redacted in the database itself (static masking, tokenised
 // storage, or app-side redaction) — those should NOT count as dynamic-masking gaps. We sample a
@@ -970,9 +1062,10 @@ func pgDSN(cfg Config, dbname string) string {
 }
 
 // resolvePGDatabases turns DB_NAME into the Postgres databases to scan:
-//   "inventory"          → [inventory]
-//   "inventory,billing"  → [inventory, billing]
-//   "" or "*"            → auto-discover every non-template, connectable database
+//
+//	"inventory"          → [inventory]
+//	"inventory,billing"  → [inventory, billing]
+//	"" or "*"            → auto-discover every non-template, connectable database
 func resolvePGDatabases(cfg Config) ([]string, error) {
 	auto := strings.TrimSpace(cfg.DBName) == ""
 	var explicit []string
@@ -1155,6 +1248,10 @@ func runClassificationScan(cfg Config) error {
 		return reportClassification(cfg, objs, objOrder)
 	}
 
+	// Pull the curated + signed detector library once per scan (falls back to the compiled-in
+	// built-ins if the control plane is unreachable or a pack fails verification).
+	dets := resolveDetectors(cfg)
+
 	targets, err := scanTargets(cfg)
 	if err != nil {
 		return err
@@ -1172,13 +1269,13 @@ func runClassificationScan(cfg Config) error {
 			log.Printf("classification: query %q failed: %v", t.dbLabel, err)
 			continue
 		}
-		// Collect sensitive columns to sample AFTER the schema cursor is closed — most drivers
-		// won't run a second query while these rows are still open on the same connection.
-		type maskSample struct {
-			cm            map[string]interface{}
-			schema, table, col string
+		// Two-phase: drain the whole schema cursor first (most drivers won't run a second
+		// query while it's open), then sample + classify each column on the same connection.
+		type colCand struct {
+			o       *objAgg
+			col, dt string
 		}
-		var pending []maskSample
+		var cands []colCand
 		for rows.Next() {
 			var sch, tbl, col, dt string
 			if err := rows.Scan(&sch, &tbl, &col, &dt); err != nil {
@@ -1196,25 +1293,36 @@ func runClassificationScan(cfg Config) error {
 				objOrder = append(objOrder, key)
 			}
 			o.total++
-			if tag, sens, ok := classifyCol(col); ok {
-				cm := map[string]interface{}{
-					"column_name": col, "data_type": dt, "tags": []string{tag},
-					"sensitivity": sens, "detection_method": "pattern", "confidence": 0.85,
-					"is_masked": false, "is_masked_at_rest": false,
-				}
-				o.cols = append(o.cols, cm)
-				if cfg.SampleAtRest {
-					pending = append(pending, maskSample{cm, sch, tbl, col})
-				}
-			}
+			cands = append(cands, colCand{o, col, dt})
 		}
 		rows.Close()
-		// Sample stored values per sensitive column and flag those already masked at rest.
-		for _, p := range pending {
-			if masked, method := maskdetect.Detect(sampleColumnValues(db, t.driver, p.schema, p.table, p.col)); masked {
-				p.cm["is_masked_at_rest"] = true
-				p.cm["mask_at_rest_method"] = method
+
+		// Classify each column by NAME + CONTENT. Sampling is gated by SampleAtRest
+		// (CLASSIFY_SAMPLE) and limited to text/numeric types; with sampling off this
+		// degrades to name-only classification (unchanged legacy behaviour). One value sample
+		// per column feeds both content classification and at-rest mask detection.
+		for _, c := range cands {
+			var samples []string
+			if cfg.SampleAtRest && contentScannable(c.dt) {
+				samples = sampleColumnValues(db, t.driver, c.o.schema, c.o.table, c.col)
 			}
+			tag, sens, method, conf, ok := classifyWith(dets, c.col, samples)
+			if !ok {
+				continue
+			}
+			cm := map[string]interface{}{
+				"column_name": c.col, "data_type": c.dt, "tags": []string{tag},
+				"sensitivity": sens, "detection_method": method, "confidence": conf,
+				"is_masked": false, "is_masked_at_rest": false,
+			}
+			// Reuse the same sample to flag columns already masked/redacted at rest.
+			if len(samples) > 0 {
+				if masked, mm := maskdetect.Detect(samples); masked {
+					cm["is_masked_at_rest"] = true
+					cm["mask_at_rest_method"] = mm
+				}
+			}
+			c.o.cols = append(c.o.cols, cm)
 		}
 		db.Close()
 	}
@@ -1376,17 +1484,17 @@ type connState struct {
 	buf          []byte // network mode: per-connection reassembly buffer
 	// network mode: server→client response parsing, to attach a real row_count to the
 	// query that produced it (so volume-threshold policies like "bulk read" can fire).
-	respBuf     []byte
-	authDone    bool
-	rs          int // nrIdle | nrCols | nrColEof | nrRows
-	colsLeft    int
-	rowCount    int
-	pendingSQL  string // the query awaiting its result set
-	pendingIP   string
-	haveQuery   bool
-	respBytes   int64 // host mode: total response bytes for the pending query (real sizes, summed)
-	pgStartupDone bool // postgres: startup message consumed (principal pulled from it)
-	pgSSLReplyPending bool // postgres: client sent SSLRequest; skip the server's 1-byte reply
+	respBuf           []byte
+	authDone          bool
+	rs                int // nrIdle | nrCols | nrColEof | nrRows
+	colsLeft          int
+	rowCount          int
+	pendingSQL        string // the query awaiting its result set
+	pendingIP         string
+	haveQuery         bool
+	respBytes         int64 // host mode: total response bytes for the pending query (real sizes, summed)
+	pgStartupDone     bool  // postgres: startup message consumed (principal pulled from it)
+	pgSSLReplyPending bool  // postgres: client sent SSLRequest; skip the server's 1-byte reply
 	// SQL Server / TDS: messages span multiple packets, reassembled by direction until EOM.
 	tdsReqType byte
 	tdsReq     []byte // client→server message accumulation
