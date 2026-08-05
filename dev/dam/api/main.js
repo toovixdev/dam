@@ -1636,7 +1636,7 @@ async function runAdminMigration() {
         ['ip-address', 'ip', 'IP address', 'NETWORK', 'low', '(^|_)ip(_|$)|ip_addr|ipaddress', 'regex', '^(\\d{1,3}\\.){3}\\d{1,3}$', 'any'],
         ['us-ssn', 'ssn', 'US Social Security Number', 'PII', 'critical', 'ssn|social_security|(^|_)sin(_|$)', 'regex', '^\\d{3}-?\\d{2}-?\\d{4}$', 'US'],
         ['us-routing', 'bank_routing', 'US bank routing (ABA) number', 'FINANCIAL', 'high', 'routing_number|aba_routing|(^|_)aba(_|$)', 'regex', '^\\d{9}$', 'US'],
-        ['us-npi', 'npi', 'US healthcare provider (NPI)', 'PHI', 'high', '\\bnpi\\b|national_provider', 'regex', '^\\d{10}$', 'US'],
+        ['us-npi', 'npi', 'US healthcare provider (NPI)', 'PHI', 'high', '\\bnpi\\b|national_provider', 'none', null, 'US'], // name-anchored: a bare 10-digit value is indistinguishable from a phone number, so match on column name only (a proper NPI checksum validator would be needed to content-detect safely)
         ['in-aadhaar', 'aadhaar', 'India Aadhaar number', 'PII', 'critical', 'aadhaar|aadhar', 'regex', '^\\d{4}\\s?\\d{4}\\s?\\d{4}$', 'IN'],
         ['in-pan', 'pan', 'India PAN', 'PII', 'high', '(^|_)pan(_|$)', 'regex', '^[A-Za-z]{5}[0-9]{4}[A-Za-z]$', 'IN'],
         ['in-gstin', 'gstin', 'India GSTIN', 'FINANCIAL', 'high', 'gstin|gst_no', 'regex', '^\\d{2}[A-Za-z]{5}\\d{4}[A-Za-z]\\d[A-Za-z\\d]Z[A-Za-z\\d]$', 'IN'],
