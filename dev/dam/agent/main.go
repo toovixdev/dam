@@ -1237,20 +1237,21 @@ func runClassificationScan(cfg Config) error {
 	objs := map[string]*objAgg{}
 	var objOrder []string
 
+	// Pull the curated + signed detector library once per scan (falls back to the compiled-in
+	// built-ins if the control plane is unreachable or a pack fails verification). Shared by the
+	// SQL and MongoDB paths so both classify by name + content against the same detectors.
+	dets := resolveDetectors(cfg)
+
 	// MongoDB has no information_schema to query, so it enumerates fields by sampling
 	// documents instead. See mongoClassifyObjects for what that costs in accuracy.
 	if isMongoEngine(cfg.Engine) {
 		var err error
-		objs, objOrder, err = mongoClassifyObjects(cfg)
+		objs, objOrder, err = mongoClassifyObjects(cfg, dets)
 		if err != nil {
 			return err
 		}
 		return reportClassification(cfg, objs, objOrder)
 	}
-
-	// Pull the curated + signed detector library once per scan (falls back to the compiled-in
-	// built-ins if the control plane is unreachable or a pack fails verification).
-	dets := resolveDetectors(cfg)
 
 	targets, err := scanTargets(cfg)
 	if err != nil {

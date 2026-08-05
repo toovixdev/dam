@@ -15,8 +15,57 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strings"
 	"time"
 )
+
+// ── Checksum validators ───────────────────────────────────────────────────────
+// Some structured IDs are just fixed-length digit strings (an NPI is 10 digits, indistinguishable
+// from a phone by shape) but carry a checksum. Validating the checksum lets these content-detect
+// without false-positiving on look-alikes — the value actually has to be a valid ID.
+
+func digitsOnly(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteByte(byte(r))
+		}
+	}
+	return b.String()
+}
+
+// npiValid reports whether s is a valid US National Provider Identifier: 10 digits that pass the
+// Luhn check after the "80840" issuer prefix is prepended (the NPI check-digit scheme).
+func npiValid(s string) bool {
+	d := digitsOnly(s)
+	if len(d) != 10 {
+		return false
+	}
+	return luhnValid("80840" + d)
+}
+
+// ibanValid reports whether s is a structurally valid IBAN: letters/digits, 15–34 chars, passing
+// the ISO 13616 mod-97 check (move the first 4 chars to the end, map A–Z→10–35, value mod 97 == 1).
+func ibanValid(s string) bool {
+	s = strings.ToUpper(strings.NewReplacer(" ", "", "-", "").Replace(s))
+	if len(s) < 15 || len(s) > 34 {
+		return false
+	}
+	rearranged := s[4:] + s[:4]
+	rem := 0
+	for i := 0; i < len(rearranged); i++ {
+		c := rearranged[i]
+		switch {
+		case c >= '0' && c <= '9':
+			rem = (rem*10 + int(c-'0')) % 97
+		case c >= 'A' && c <= 'Z':
+			rem = (rem*100 + int(c-'A') + 10) % 97
+		default:
+			return false
+		}
+	}
+	return rem == 1
+}
 
 // detector is a compiled sensitive-data matcher: an optional column-NAME pattern and/or a CONTENT
 // test (Luhn or a value regex). Built either from a pulled pack (compileDetectors) or from the
@@ -118,6 +167,10 @@ func compileDetectors(wire []detectorWire) []detector {
 		switch w.ContentKind {
 		case "luhn":
 			d.contentFn = luhnValid
+		case "npi":
+			d.contentFn = npiValid
+		case "iban":
+			d.contentFn = ibanValid
 		case "regex":
 			re, err := regexp.Compile(w.ContentRe)
 			if err != nil {

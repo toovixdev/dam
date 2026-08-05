@@ -23,8 +23,11 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
+
+	"toovix/dam-agent/maskdetect"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -424,10 +427,12 @@ func mongoJSON(v interface{}) string {
 
 func isMongoEngine(engine string) bool { return engine == "mongodb" || engine == "mongo" }
 
-// flattenKeys walks a document and collects field paths ("addr.postal_code"). Nested objects
-// are followed to maxDepth; an array is represented by the union of the keys of the object
-// elements it holds, since that is where field names actually live.
-func flattenKeys(d bson.D, prefix string, depth, maxDepth int, out map[string]string) {
+// flattenKeys walks a document and collects field paths ("addr.postal_code") into out, and a
+// bounded sample of each field's scalar VALUES into vals. Nested objects are followed to maxDepth;
+// an array contributes both its object elements' keys and its scalar elements' values (a list of
+// emails classifies under the array's path). The values feed content-based classification so a
+// sensitive field is caught by what it holds, not just its name.
+func flattenKeys(d bson.D, prefix string, depth, maxDepth int, out map[string]string, vals map[string][]string) {
 	for _, e := range d {
 		path := e.Key
 		if prefix != "" {
@@ -436,24 +441,56 @@ func flattenKeys(d bson.D, prefix string, depth, maxDepth int, out map[string]st
 		switch v := e.Value.(type) {
 		case bson.D:
 			if depth < maxDepth {
-				flattenKeys(v, path, depth+1, maxDepth, out)
+				flattenKeys(v, path, depth+1, maxDepth, out, vals)
 			}
 		case bson.A:
 			if depth < maxDepth {
 				for _, item := range v {
 					if sub, ok := item.(bson.D); ok {
-						flattenKeys(sub, path, depth+1, maxDepth, out)
+						flattenKeys(sub, path, depth+1, maxDepth, out, vals)
+					} else if s, ok := mongoLeafString(item); ok {
+						if _, seen := out[path]; !seen {
+							out[path] = "array"
+						}
+						addFieldSample(vals, path, s)
 					}
 				}
 			}
 		default:
-			// Leaf. Record the BSON type name for display; first writer wins, which is fine
-			// because the type is informational and the classifier keys off the NAME.
+			// Leaf. Record the BSON type name for display (first writer wins — the type is
+			// informational) and sample the value for content classification.
 			if _, seen := out[path]; !seen {
 				out[path] = bsonTypeName(e.Value)
 			}
+			if s, ok := mongoLeafString(e.Value); ok {
+				addFieldSample(vals, path, s)
+			}
 		}
 	}
+}
+
+// addFieldSample appends v to a field's value sample, capped so a wide scan stays bounded.
+func addFieldSample(vals map[string][]string, path, v string) {
+	if len(vals[path]) < 200 {
+		vals[path] = append(vals[path], v)
+	}
+}
+
+// mongoLeafString renders a scalar BSON leaf as a string for content matching. Only string and
+// numeric leaves carry classifiable content (cards/SSNs/etc. are stored as strings or numbers);
+// booleans, dates, nulls and objects are skipped.
+func mongoLeafString(v interface{}) (string, bool) {
+	switch t := v.(type) {
+	case string:
+		return t, true
+	case int32:
+		return strconv.FormatInt(int64(t), 10), true
+	case int64:
+		return strconv.FormatInt(t, 10), true
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64), true // plain digits, no scientific notation
+	}
+	return "", false
 }
 
 func bsonTypeName(v interface{}) string {
@@ -474,7 +511,7 @@ func bsonTypeName(v interface{}) string {
 
 // mongoClassifyObjects samples every user collection in the target database and returns the
 // same objAgg set the SQL collector produces, so reporting is shared.
-func mongoClassifyObjects(cfg Config) (map[string]*objAgg, []string, error) {
+func mongoClassifyObjects(cfg Config, dets []detector) (map[string]*objAgg, []string, error) {
 	dbName := mongoDatabase(cfg)
 	sampleN := int64(atoiDefault(env("MONGO_CLASSIFY_SAMPLE", "100"), 100))
 	maxDepth := atoiDefault(env("MONGO_CLASSIFY_DEPTH", "3"), 3)
@@ -509,13 +546,14 @@ func mongoClassifyObjects(cfg Config) (map[string]*objAgg, []string, error) {
 			continue
 		}
 		fields := map[string]string{}
+		vals := map[string][]string{}
 		docs := 0
 		for cur.Next(ctx) {
 			var d bson.D
 			if err := cur.Decode(&d); err != nil {
 				continue
 			}
-			flattenKeys(d, "", 0, maxDepth, fields)
+			flattenKeys(d, "", 0, maxDepth, fields, vals)
 			docs++
 		}
 		cur.Close(ctx)
@@ -525,14 +563,23 @@ func mongoClassifyObjects(cfg Config) (map[string]*objAgg, []string, error) {
 			if path == "_id" {
 				continue
 			}
-			if tag, sens, ok := classifyCol(path); ok {
-				o.cols = append(o.cols, map[string]interface{}{
-					"column_name": path, "data_type": typ, "tags": []string{tag},
-					"sensitivity": sens, "detection_method": "pattern",
-					// Lower than the SQL path's 0.85: the field set is sampled, not authoritative.
-					"confidence": 0.75, "is_masked": false,
-				})
+			// Name + content, against the same pulled detector pack the SQL path uses. Content
+			// validation runs over the values sampled from the documents, so a card number in a
+			// field called "notes" is caught the same way it is in SQL.
+			tag, sens, method, conf, ok := classifyWith(dets, path, vals[path])
+			if !ok {
+				continue
 			}
+			cm := map[string]interface{}{
+				"column_name": path, "data_type": typ, "tags": []string{tag},
+				"sensitivity": sens, "detection_method": method, "confidence": conf,
+				"is_masked": false, "is_masked_at_rest": false,
+			}
+			if masked, mm := maskdetect.Detect(vals[path]); masked {
+				cm["is_masked_at_rest"] = true
+				cm["mask_at_rest_method"] = mm
+			}
+			o.cols = append(o.cols, cm)
 		}
 		key := dbName + "\x00" + dbName + "\x00" + coll
 		objs[key] = o

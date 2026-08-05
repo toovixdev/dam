@@ -1636,14 +1636,14 @@ async function runAdminMigration() {
         ['ip-address', 'ip', 'IP address', 'NETWORK', 'low', '(^|_)ip(_|$)|ip_addr|ipaddress', 'regex', '^(\\d{1,3}\\.){3}\\d{1,3}$', 'any'],
         ['us-ssn', 'ssn', 'US Social Security Number', 'PII', 'critical', 'ssn|social_security|(^|_)sin(_|$)', 'regex', '^\\d{3}-?\\d{2}-?\\d{4}$', 'US'],
         ['us-routing', 'bank_routing', 'US bank routing (ABA) number', 'FINANCIAL', 'high', 'routing_number|aba_routing|(^|_)aba(_|$)', 'regex', '^\\d{9}$', 'US'],
-        ['us-npi', 'npi', 'US healthcare provider (NPI)', 'PHI', 'high', '\\bnpi\\b|national_provider', 'none', null, 'US'], // name-anchored: a bare 10-digit value is indistinguishable from a phone number, so match on column name only (a proper NPI checksum validator would be needed to content-detect safely)
+        ['us-npi', 'npi', 'US healthcare provider (NPI)', 'PHI', 'high', '\\bnpi\\b|national_provider', 'npi', null, 'US'], // 80840-prefixed Luhn checksum — content-detects real NPIs while rejecting look-alike 10-digit values (e.g. phones)
         ['in-aadhaar', 'aadhaar', 'India Aadhaar number', 'PII', 'critical', 'aadhaar|aadhar', 'regex', '^\\d{4}\\s?\\d{4}\\s?\\d{4}$', 'IN'],
         ['in-pan', 'pan', 'India PAN', 'PII', 'high', '(^|_)pan(_|$)', 'regex', '^[A-Za-z]{5}[0-9]{4}[A-Za-z]$', 'IN'],
         ['in-gstin', 'gstin', 'India GSTIN', 'FINANCIAL', 'high', 'gstin|gst_no', 'regex', '^\\d{2}[A-Za-z]{5}\\d{4}[A-Za-z]\\d[A-Za-z\\d]Z[A-Za-z\\d]$', 'IN'],
         ['passport', 'gov_id', 'Passport number', 'PII', 'high', 'passport', 'regex', '^[A-Za-z][0-9]{7,8}$', 'any'],
         ['tax-id', 'gov_id', 'Tax identification number', 'PII', 'high', 'tax_id|taxid|(^|_)tin(_|$)', 'none', null, 'any'],
         ['uk-nino', 'gov_id', 'UK National Insurance number', 'PII', 'high', 'national_insurance|\\bnino\\b', 'regex', '^[A-Za-z]{2}\\d{6}[A-Za-z]$', 'UK'],
-        ['iban', 'bank_account', 'IBAN', 'FINANCIAL', 'high', '\\biban\\b', 'regex', '^[A-Z]{2}\\d{2}[A-Z0-9]{11,30}$', 'any'],
+        ['iban', 'bank_account', 'IBAN', 'FINANCIAL', 'high', '\\biban\\b', 'iban', null, 'any'], // ISO 13616 mod-97 checksum
         ['swift-bic', 'bank_swift', 'SWIFT / BIC code', 'FINANCIAL', 'medium', 'swift|bic_code|(^|_)bic(_|$)', 'regex', '^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$', 'any'],
         ['secret-credential', 'secret', 'Credential / secret', 'SECRET', 'critical', 'password|passwd|(^|_)secret|api_key|apikey|access_token|private_key|client_secret', 'none', null, 'any'],
         ['jwt-token', 'secret', 'JSON Web Token', 'SECRET', 'high', 'jwt|id_token|bearer', 'regex', '^eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$', 'any'],
@@ -9646,7 +9646,7 @@ function clApplies(r, ctx) {
 }
 const CL_CATS = ['PII', 'PCI', 'PHI', 'FINANCIAL', 'SECRET', 'NETWORK'];
 const CL_SEVS = ['critical', 'high', 'medium', 'low'];
-const CL_KINDS = ['none', 'regex', 'luhn'];
+const CL_KINDS = ['none', 'regex', 'luhn', 'npi', 'iban']; // luhn/npi/iban are checksum validators (no content_regex needed)
 const CL_REGIONS = ['any', 'IN', 'US', 'EU', 'UK', 'global'];
 function clValidateDetector(b) {
   if (!b.detector_id || !/^[a-z0-9][a-z0-9-]{2,79}$/.test(b.detector_id)) return 'detector_id must be kebab-case, 3–80 chars (a-z, 0-9, -)';
