@@ -18,6 +18,7 @@ import Roles from './pages/Roles';
 import PlatformEmail from './pages/PlatformEmail';
 import Approvals from './pages/Approvals';
 import ContentPacks from './pages/ContentPacks';
+import DetectorPacks from './pages/DetectorPacks';
 import Runbooks from './pages/Runbooks';
 import Placeholder from './pages/Placeholder';
 import Login from './pages/Login';
@@ -59,6 +60,7 @@ export default function App() {
         <Route path="/platform-email" element={<RequireAuth><PlatformEmail /></RequireAuth>} />
         <Route path="/approvals" element={<RequireAuth><Approvals /></RequireAuth>} />
         <Route path="/content-packs" element={<RequireAuth><ContentPacks /></RequireAuth>} />
+        <Route path="/detector-packs" element={<RequireAuth><DetectorPacks /></RequireAuth>} />
         <Route path="/runbooks" element={<RequireAuth><Runbooks /></RequireAuth>} />
         {STUBS.map(([path, title]) => (
           <Route key={path} path={path} element={<RequireAuth><Placeholder title={title} /></RequireAuth>} />

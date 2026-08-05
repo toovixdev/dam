@@ -1577,6 +1577,86 @@ async function runAdminMigration() {
       console.log(`[VA] generated Ed25519 pack-signing key ${keyId}`);
     }
 
+    // ── Classification detector content platform ──────────────────────────────────────
+    // The sensitive-data detector library (PII/PCI/PHI/financial/secret patterns) lives centrally
+    // here, not baked into the agent — same model as the VA check library. Each detector carries a
+    // column-NAME hint and/or a CONTENT rule (regex or Luhn); the agent pulls the curated pack,
+    // compiles the patterns, and classifies by name + content. Central update = no agent rollout.
+    await client.query(`CREATE TABLE IF NOT EXISTS classifier_defs (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      detector_id  VARCHAR(80) NOT NULL,
+      tag          VARCHAR(40) NOT NULL,             -- tag applied to matching columns (pci, aadhaar, ssn…)
+      label        VARCHAR(160),
+      category     VARCHAR(20),                      -- PII | PCI | PHI | FINANCIAL | SECRET | NETWORK
+      sensitivity  VARCHAR(15) NOT NULL,             -- critical | high | medium | low
+      name_regex   TEXT,                             -- column-name hint (case-insensitive), nullable
+      content_kind VARCHAR(12) NOT NULL DEFAULT 'none', -- none | regex | luhn
+      content_regex TEXT,                            -- value pattern when content_kind='regex'
+      threshold    REAL NOT NULL DEFAULT 0.6,        -- fraction of sampled values that must match
+      region       VARCHAR(12) DEFAULT 'any',        -- applicability: any | IN | US | EU | UK | global
+      enabled      BOOLEAN NOT NULL DEFAULT true,    -- admin curation
+      source       VARCHAR(20) DEFAULT 'builtin',    -- builtin | custom | import | agent
+      updated_at   TIMESTAMPTZ DEFAULT now(),
+      created_at   TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (detector_id)
+    )`);
+    // Ed25519 signing key for detector packs — the agent runs only packs signed by this key, so a
+    // MITM/mirror can't inject a detector regex that runs against customer data. Its own keypair
+    // (independent of the VA key), private half encrypted at rest under the platform secrets key.
+    await client.query(`CREATE TABLE IF NOT EXISTS classifier_signing_key (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      key_id VARCHAR(32), public_pem TEXT, private_pem_enc TEXT,
+      created_at TIMESTAMPTZ DEFAULT now()
+    )`);
+    if (!(await client.query('SELECT 1 FROM classifier_signing_key LIMIT 1')).rows.length) {
+      const kp = crypto.generateKeyPairSync('ed25519');
+      const pub = kp.publicKey.export({ type: 'spki', format: 'pem' });
+      const priv = kp.privateKey.export({ type: 'pkcs8', format: 'pem' });
+      const keyId = crypto.createHash('sha256').update(pub).digest('hex').slice(0, 16);
+      const privStore = secrets.hasKey ? JSON.stringify({ enc: secrets.encSecret(priv) }) : priv;
+      await client.query('INSERT INTO classifier_signing_key (key_id, public_pem, private_pem_enc) VALUES ($1,$2,$3)', [keyId, pub, privStore]);
+      console.log(`[Classify] generated Ed25519 detector-pack signing key ${keyId}`);
+    }
+    // First-run seed: ship a real detector library out of the box (the agent's built-ins + an
+    // expansion across national IDs, PHI, financial and secret patterns). ON CONFLICT DO NOTHING so
+    // admin curation and later imports are never clobbered on reboot. [name_regex, content_kind,
+    // content_regex, region] — name_regex is matched case-insensitively by the agent.
+    if (!(await client.query('SELECT 1 FROM classifier_defs LIMIT 1')).rows.length) {
+      // detector_id, tag, label, category, sens, name_regex, content_kind, content_regex, region
+      const seed = [
+        ['card-number', 'pci', 'Payment card number', 'PCI', 'critical', 'card_number|card_no|ccnum|creditcard|card_num|pan_number', 'luhn', null, 'any'],
+        ['card-cvv', 'pci', 'Card verification value', 'PCI', 'critical', '\\bcvv\\b|cvc|card_sec', 'none', null, 'any'],
+        ['card-expiry', 'pci', 'Card expiry date', 'PCI', 'high', 'card_expiry|exp_date|(^|_)expiry', 'none', null, 'any'],
+        ['card-last4', 'pci', 'Card last four digits', 'PCI', 'medium', 'card_last4|last4', 'none', null, 'any'],
+        ['email', 'email', 'Email address', 'PII', 'high', '(^|_)email', 'regex', '^[^@\\s]+@[^@\\s]+\\.[^@\\s]{2,}$', 'any'],
+        ['person-name', 'name', 'Person name', 'PII', 'high', 'first_name|last_name|full_name|fullname|cardholder|customer_name|contact_name', 'none', null, 'any'],
+        ['dob', 'dob', 'Date of birth', 'PII', 'high', '(^|_)dob(_|$)|date_of_birth|birth_date', 'none', null, 'any'],
+        ['phone', 'phone', 'Phone number', 'PII', 'medium', '(^|_)phone|mobile_no|contact_no', 'none', null, 'any'],
+        ['postal-address', 'address', 'Postal address', 'PII', 'medium', '(^|_)address|postal_code|pincode|zip_code', 'none', null, 'any'],
+        ['ip-address', 'ip', 'IP address', 'NETWORK', 'low', '(^|_)ip(_|$)|ip_addr|ipaddress', 'regex', '^(\\d{1,3}\\.){3}\\d{1,3}$', 'any'],
+        ['us-ssn', 'ssn', 'US Social Security Number', 'PII', 'critical', 'ssn|social_security|(^|_)sin(_|$)', 'regex', '^\\d{3}-?\\d{2}-?\\d{4}$', 'US'],
+        ['us-routing', 'bank_routing', 'US bank routing (ABA) number', 'FINANCIAL', 'high', 'routing_number|aba_routing|(^|_)aba(_|$)', 'regex', '^\\d{9}$', 'US'],
+        ['us-npi', 'npi', 'US healthcare provider (NPI)', 'PHI', 'high', '\\bnpi\\b|national_provider', 'regex', '^\\d{10}$', 'US'],
+        ['in-aadhaar', 'aadhaar', 'India Aadhaar number', 'PII', 'critical', 'aadhaar|aadhar', 'regex', '^\\d{4}\\s?\\d{4}\\s?\\d{4}$', 'IN'],
+        ['in-pan', 'pan', 'India PAN', 'PII', 'high', '(^|_)pan(_|$)', 'regex', '^[A-Za-z]{5}[0-9]{4}[A-Za-z]$', 'IN'],
+        ['in-gstin', 'gstin', 'India GSTIN', 'FINANCIAL', 'high', 'gstin|gst_no', 'regex', '^\\d{2}[A-Za-z]{5}\\d{4}[A-Za-z]\\d[A-Za-z\\d]Z[A-Za-z\\d]$', 'IN'],
+        ['passport', 'gov_id', 'Passport number', 'PII', 'high', 'passport', 'regex', '^[A-Za-z][0-9]{7,8}$', 'any'],
+        ['tax-id', 'gov_id', 'Tax identification number', 'PII', 'high', 'tax_id|taxid|(^|_)tin(_|$)', 'none', null, 'any'],
+        ['uk-nino', 'gov_id', 'UK National Insurance number', 'PII', 'high', 'national_insurance|\\bnino\\b', 'regex', '^[A-Za-z]{2}\\d{6}[A-Za-z]$', 'UK'],
+        ['iban', 'bank_account', 'IBAN', 'FINANCIAL', 'high', '\\biban\\b', 'regex', '^[A-Z]{2}\\d{2}[A-Z0-9]{11,30}$', 'any'],
+        ['swift-bic', 'bank_swift', 'SWIFT / BIC code', 'FINANCIAL', 'medium', 'swift|bic_code|(^|_)bic(_|$)', 'regex', '^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$', 'any'],
+        ['secret-credential', 'secret', 'Credential / secret', 'SECRET', 'critical', 'password|passwd|(^|_)secret|api_key|apikey|access_token|private_key|client_secret', 'none', null, 'any'],
+        ['jwt-token', 'secret', 'JSON Web Token', 'SECRET', 'high', 'jwt|id_token|bearer', 'regex', '^eyJ[A-Za-z0-9_-]+\\.eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$', 'any'],
+      ];
+      for (const [did, tag, label, cat, sens, nre, kind, cre, region] of seed) {
+        await client.query(
+          `INSERT INTO classifier_defs (detector_id, tag, label, category, sensitivity, name_regex, content_kind, content_regex, region, source)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'builtin') ON CONFLICT (detector_id) DO NOTHING`,
+          [did, tag, label, cat, sens, nre, kind, cre, region]);
+      }
+      console.log(`[Classify] seeded ${seed.length} builtin detectors`);
+    }
+
     const ff = await client.query('SELECT COUNT(*) AS n FROM feature_flags');
     if (parseInt(ff.rows[0].n) === 0) {
       // cols: key, name, description, stage, starter, business, enterprise, core, gated, target, error, sort
@@ -9539,6 +9619,181 @@ app.get('/api/admin/va/checks/export', async (req, res) => {
     `SELECT engine, check_id, benchmark, section, title, severity, query, expect, remediation, refs, min_version, max_version, applies_managed
        FROM va_check_defs ${engine ? 'WHERE engine=$1' : ''} ORDER BY engine, check_id`, engine ? [engine] : [])).rows;
   res.json({ exported_at: new Date().toISOString(), count: rows.length, checks: rows });
+});
+
+// ── Classification detector content store (platform-managed detector library) ──────────
+// Same shape as the VA check platform: detectors live centrally, agents register their built-ins,
+// admins curate/extend, agents pull the curated + signed pack. Central update = no agent rollout.
+function clPackVersion(rows) {
+  const basis = rows.map((r) => `${r.detector_id}:${r.updated_at instanceof Date ? r.updated_at.getTime() : r.updated_at}`).sort().join('|');
+  return crypto.createHash('sha256').update(basis).digest('hex').slice(0, 16);
+}
+let _clSignKey = null;
+async function classifierSigningKey() {
+  if (_clSignKey) return _clSignKey;
+  const row = (await pgPool.query('SELECT key_id, public_pem, private_pem_enc FROM classifier_signing_key ORDER BY created_at LIMIT 1')).rows[0];
+  if (!row) return null;
+  let priv = row.private_pem_enc;
+  try { const o = JSON.parse(priv); if (o && o.enc) priv = secrets.decSecret(o.enc); } catch (e) { /* legacy plaintext */ }
+  _clSignKey = { keyId: row.key_id, publicPem: row.public_pem, privatePem: priv };
+  return _clSignKey;
+}
+// Applicability: a detector applies unless its region is pinned and the agent reports a different
+// one. Unknown region (older agent / unset) → applies, so we never silently drop a detector.
+function clApplies(r, ctx) {
+  if (r.region && r.region !== 'any' && ctx.region && r.region !== ctx.region) return false;
+  return true;
+}
+const CL_CATS = ['PII', 'PCI', 'PHI', 'FINANCIAL', 'SECRET', 'NETWORK'];
+const CL_SEVS = ['critical', 'high', 'medium', 'low'];
+const CL_KINDS = ['none', 'regex', 'luhn'];
+const CL_REGIONS = ['any', 'IN', 'US', 'EU', 'UK', 'global'];
+function clValidateDetector(b) {
+  if (!b.detector_id || !/^[a-z0-9][a-z0-9-]{2,79}$/.test(b.detector_id)) return 'detector_id must be kebab-case, 3–80 chars (a-z, 0-9, -)';
+  if (!b.tag || !/^[a-z0-9_]{2,40}$/.test(b.tag)) return 'tag must be 2–40 chars (a-z, 0-9, _)';
+  if (!CL_SEVS.includes(b.sensitivity)) return 'sensitivity must be one of ' + CL_SEVS.join(', ');
+  const kind = b.content_kind || 'none';
+  if (!CL_KINDS.includes(kind)) return 'content_kind must be one of ' + CL_KINDS.join(', ');
+  if (kind === 'regex' && !(b.content_regex && String(b.content_regex).trim())) return 'content_regex is required when content_kind = regex';
+  if (b.category && !CL_CATS.includes(b.category)) return 'category must be one of ' + CL_CATS.join(', ');
+  if (b.region && !CL_REGIONS.includes(b.region)) return 'region must be one of ' + CL_REGIONS.join(', ');
+  if (!b.name_regex && kind === 'none') return 'a detector needs a name_regex or a content rule (content_kind regex/luhn)';
+  try { if (b.name_regex) new RegExp(b.name_regex, 'i'); } catch (e) { return 'name_regex is not a valid regular expression: ' + e.message; }
+  try { if (b.content_regex) new RegExp(b.content_regex); } catch (e) { return 'content_regex is not a valid regular expression: ' + e.message; }
+  if (b.threshold != null && !(Number(b.threshold) > 0 && Number(b.threshold) <= 1)) return 'threshold must be between 0 and 1';
+  return null;
+}
+function clThreshold(v) { const n = Number(v); return n > 0 && n <= 1 ? n : 0.6; }
+
+// Agent self-registration: seed any detectors we don't already have (ON CONFLICT DO NOTHING
+// preserves admin curation + the platform seed). Keeps the library current as agent versions ship.
+app.post('/api/classification/detectors/register', async (req, res) => {
+  const { token, detectors } = req.body || {};
+  const tenantId = await tenantFromEnrollToken(token);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  if (!Array.isArray(detectors)) return res.status(400).json({ error: 'detectors[] required' });
+  let added = 0;
+  for (const d of detectors) {
+    if (!d.detector_id || !d.tag || !CL_SEVS.includes(d.sensitivity)) continue;
+    const kind = CL_KINDS.includes(d.content_kind) ? d.content_kind : 'none';
+    const r = await pgPool.query(
+      `INSERT INTO classifier_defs (detector_id, tag, label, category, sensitivity, name_regex, content_kind, content_regex, threshold, region, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'agent') ON CONFLICT (detector_id) DO NOTHING`,
+      [d.detector_id, d.tag, (d.label || d.detector_id).slice(0, 160), d.category || null, d.sensitivity, d.name_regex || null, kind, d.content_regex || null, clThreshold(d.threshold), CL_REGIONS.includes(d.region) ? d.region : 'any']);
+    if (r.rowCount) added++;
+  }
+  if (added) console.log(`[Classify] agent registered ${added} new detector(s) (of ${detectors.length})`);
+  res.json({ ok: true, registered: detectors.length, added });
+});
+// Agent pull: the curated (enabled) detector pack + a version for change-detection, signed.
+app.get('/api/classification/detectorpack', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.query.token || req.headers['x-enroll-token']);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const ctx = { region: String(req.query.region || '') };
+  const all = (await pgPool.query(
+    `SELECT detector_id, tag, category, sensitivity, name_regex, content_kind, content_regex, threshold, region, updated_at
+       FROM classifier_defs WHERE enabled=true ORDER BY detector_id`)).rows;
+  const rows = all.filter((r) => clApplies(r, ctx));   // applicability filter — only what fits this agent
+  const version = clPackVersion(rows);
+  if (req.query.version && req.query.version === version) return res.json({ version, unchanged: true });
+  const detectors = rows.map((r) => ({ detector_id: r.detector_id, tag: r.tag, sensitivity: r.sensitivity, name_regex: r.name_regex || '', content_kind: r.content_kind, content_regex: r.content_regex || '', threshold: r.threshold }));
+  // Sign the exact payload string the agent will verify + parse (avoids re-serialization drift).
+  const key = await classifierSigningKey();
+  const payload = JSON.stringify({ version, detectors });
+  const signature = key ? vaSign(key.privatePem, payload) : null;
+  res.json({ version, count: detectors.length, detectors, payload, signature, key_id: key ? key.keyId : null });
+});
+// The detector-pack signing public key — agents fetch it (over TLS) to verify pulled packs.
+app.get('/api/classification/detectorpack/pubkey', async (req, res) => {
+  const tenantId = await tenantFromEnrollToken(req.query.token || req.headers['x-enroll-token']);
+  if (!tenantId) return res.status(401).json({ error: 'Invalid enrollment token' });
+  const key = await classifierSigningKey();
+  if (!key) return res.status(503).json({ error: 'signing key not ready' });
+  res.json({ key_id: key.keyId, public_pem: key.publicPem });
+});
+// Admin: browse + curate the platform detector library.
+app.get('/api/admin/classification/detectors', async (req, res) => {
+  const rows = (await pgPool.query(
+    `SELECT id, detector_id, tag, label, category, sensitivity, name_regex, content_kind, content_regex, threshold, region, enabled, source, updated_at
+       FROM classifier_defs
+      ORDER BY CASE sensitivity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, detector_id`)).rows;
+  const enabled = rows.filter((r) => r.enabled);
+  res.json({ total: rows.length, enabled: enabled.length, version: clPackVersion(enabled), detectors: rows });
+});
+app.post('/api/admin/classification/detectors/:id/toggle', async (req, res) => {
+  const r = await pgPool.query('UPDATE classifier_defs SET enabled=$2, updated_at=now() WHERE id=$1 RETURNING detector_id, enabled', [req.params.id, !!(req.body && req.body.enabled)]);
+  if (!r.rows.length) return res.status(404).json({ error: 'detector not found' });
+  res.json({ ok: true, ...r.rows[0] });
+});
+// Create a custom detector → agents pull + apply it on their next scan.
+app.post('/api/admin/classification/detectors', async (req, res) => {
+  const b = req.body || {};
+  const err = clValidateDetector(b); if (err) return res.status(400).json({ error: err });
+  try {
+    const r = await pgPool.query(
+      `INSERT INTO classifier_defs (detector_id, tag, label, category, sensitivity, name_regex, content_kind, content_regex, threshold, region, source, enabled)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'custom',true) RETURNING id`,
+      [b.detector_id, b.tag, (b.label || b.detector_id).slice(0, 160), b.category || null, b.sensitivity, b.name_regex || null, b.content_kind || 'none', b.content_regex || null, clThreshold(b.threshold), b.region || 'any']);
+    res.json({ ok: true, id: r.rows[0].id });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'a detector with that detector_id already exists' });
+    res.status(500).json({ error: e.message });
+  }
+});
+// Edit any detector (its definition). Agent-registered/seed detectors can be corrected here too.
+app.put('/api/admin/classification/detectors/:id', async (req, res) => {
+  const b = req.body || {};
+  const err = clValidateDetector(b); if (err) return res.status(400).json({ error: err });
+  try {
+    const r = await pgPool.query(
+      `UPDATE classifier_defs SET detector_id=$2, tag=$3, label=$4, category=$5, sensitivity=$6, name_regex=$7, content_kind=$8, content_regex=$9, threshold=$10, region=$11, updated_at=now() WHERE id=$1 RETURNING id`,
+      [req.params.id, b.detector_id, b.tag, (b.label || b.detector_id).slice(0, 160), b.category || null, b.sensitivity, b.name_regex || null, b.content_kind || 'none', b.content_regex || null, clThreshold(b.threshold), b.region || 'any']);
+    if (!r.rows.length) return res.status(404).json({ error: 'detector not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.code === '23505') return res.status(409).json({ error: 'a detector with that detector_id already exists' });
+    res.status(500).json({ error: e.message });
+  }
+});
+// Delete a detector. An agent-registered detector reappears when that agent next registers —
+// disable it instead to keep it permanently out. Custom/import detectors delete cleanly.
+app.delete('/api/admin/classification/detectors/:id', async (req, res) => {
+  const r = await pgPool.query('DELETE FROM classifier_defs WHERE id=$1 RETURNING source', [req.params.id]);
+  if (!r.rows.length) return res.status(404).json({ error: 'detector not found' });
+  res.json({ ok: true, reappears: r.rows[0].source === 'agent' });
+});
+// Bulk import a detector pack (array, or { detectors: [...] }) — load a hand-authored batch or a
+// shared expansion pack at once. Upserts: existing detectors are updated in place, curation kept.
+app.post('/api/admin/classification/detectors/import', async (req, res) => {
+  const body = req.body || {};
+  const detectors = Array.isArray(body) ? body : (Array.isArray(body.detectors) ? body.detectors : null);
+  if (!detectors) return res.status(400).json({ error: 'expected an array of detectors, or { detectors: [...] }' });
+  let added = 0, updated = 0; const errors = [];
+  for (const d of detectors) {
+    const err = clValidateDetector(d);
+    if (err) { errors.push({ detector_id: d.detector_id || '(missing)', error: err }); continue; }
+    try {
+      const r = await pgPool.query(
+        `INSERT INTO classifier_defs (detector_id, tag, label, category, sensitivity, name_regex, content_kind, content_regex, threshold, region, source, enabled)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'import',true)
+         ON CONFLICT (detector_id) DO UPDATE SET
+           tag=EXCLUDED.tag, label=EXCLUDED.label, category=EXCLUDED.category, sensitivity=EXCLUDED.sensitivity,
+           name_regex=EXCLUDED.name_regex, content_kind=EXCLUDED.content_kind, content_regex=EXCLUDED.content_regex,
+           threshold=EXCLUDED.threshold, region=EXCLUDED.region, source='import', updated_at=now()
+         RETURNING (xmax = 0) AS inserted`,
+        [d.detector_id, d.tag, (d.label || d.detector_id).slice(0, 160), d.category || null, d.sensitivity, d.name_regex || null, d.content_kind || 'none', d.content_regex || null, clThreshold(d.threshold), d.region || 'any']);
+      if (r.rows[0].inserted) added++; else updated++;
+    } catch (e) { errors.push({ detector_id: d.detector_id, error: e.message }); }
+  }
+  console.log(`[Classify] detector pack import: +${added} added, ${updated} updated, ${errors.length} error(s)`);
+  res.json({ ok: true, total: detectors.length, added, updated, errors });
+});
+// Export the library as an importable pack — backup / versioning / sharing.
+app.get('/api/admin/classification/detectors/export', async (req, res) => {
+  const rows = (await pgPool.query(
+    `SELECT detector_id, tag, label, category, sensitivity, name_regex, content_kind, content_regex, threshold, region
+       FROM classifier_defs ORDER BY detector_id`)).rows;
+  res.json({ exported_at: new Date().toISOString(), count: rows.length, detectors: rows });
 });
 
 // ── Compliance Center ─────────────────────────────────────

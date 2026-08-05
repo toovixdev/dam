@@ -1,0 +1,14 @@
+{
+  "pack": "Global classification expansion",
+  "note": "Additional sensitive-data detectors (national IDs, PHI codes, financial identifiers) loaded via the bulk-import pipeline (Admin → Content Packs → Detectors → Import). Extends the built-in seed; upserts by detector_id, curation preserved.",
+  "detectors": [
+    { "detector_id": "ca-sin", "tag": "gov_id", "label": "Canada Social Insurance Number", "category": "PII", "sensitivity": "critical", "name_regex": "\\bsin\\b|social_insurance", "content_kind": "regex", "content_regex": "^\\d{3}-?\\d{3}-?\\d{3}$", "threshold": 0.6, "region": "any" },
+    { "detector_id": "us-ein", "tag": "tax_id", "label": "US Employer Identification Number", "category": "FINANCIAL", "sensitivity": "high", "name_regex": "\\bein\\b|employer_id", "content_kind": "regex", "content_regex": "^\\d{2}-?\\d{7}$", "threshold": 0.6, "region": "US" },
+    { "detector_id": "eu-vat", "tag": "vat_number", "label": "EU VAT number", "category": "FINANCIAL", "sensitivity": "medium", "name_regex": "vat_number|\\bvat\\b", "content_kind": "regex", "content_regex": "^[A-Z]{2}[A-Z0-9]{8,12}$", "threshold": 0.6, "region": "EU" },
+    { "detector_id": "icd10-diagnosis", "tag": "diagnosis", "label": "ICD-10 diagnosis code", "category": "PHI", "sensitivity": "high", "name_regex": "icd|diagnosis_code|dx_code", "content_kind": "regex", "content_regex": "^[A-Z]\\d{2}(\\.[A-Z0-9]{1,4})?$", "threshold": 0.6, "region": "any" },
+    { "detector_id": "medical-record-number", "tag": "mrn", "label": "Medical record number", "category": "PHI", "sensitivity": "high", "name_regex": "\\bmrn\\b|medical_record|patient_id", "content_kind": "none", "content_regex": "", "threshold": 0.6, "region": "any" },
+    { "detector_id": "drivers-license", "tag": "gov_id", "label": "Driver's licence number", "category": "PII", "sensitivity": "high", "name_regex": "driver_?licen|dl_number|license_no|licence_no", "content_kind": "none", "content_regex": "", "threshold": 0.6, "region": "any" },
+    { "detector_id": "crypto-wallet", "tag": "crypto_wallet", "label": "Cryptocurrency wallet address", "category": "FINANCIAL", "sensitivity": "medium", "name_regex": "wallet|btc_addr|eth_addr|crypto_addr", "content_kind": "regex", "content_regex": "^(0x[a-fA-F0-9]{40}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$", "threshold": 0.6, "region": "any" },
+    { "detector_id": "aws-access-key", "tag": "secret", "label": "AWS access key ID", "category": "SECRET", "sensitivity": "critical", "name_regex": "aws_?access|access_key_id", "content_kind": "regex", "content_regex": "^(AKIA|ASIA)[A-Z0-9]{16}$", "threshold": 0.6, "region": "any" }
+  ]
+}

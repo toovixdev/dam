@@ -33,6 +33,7 @@ const NAV = [
 
   { sec: 'Product Config' },
   { id: 'content-packs',  ic: '⭳', label: 'Content Packs',       to: '/content-packs' },
+  { id: 'detector-packs', ic: '◈', label: 'Detector Packs',      to: '/detector-packs' },
   { id: 'agent-versions', ic: '⊡', label: 'Agent Versions',      to: '/agent-versions' },
 ];
 
