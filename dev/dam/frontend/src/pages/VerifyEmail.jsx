@@ -1,6 +1,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 
+// Module-scoped guard: React StrictMode invokes the effect twice on mount (and prod serves the
+// Vite dev server), which would POST the one-time verification token twice — the second call
+// then reports "already used". Persisting this across the StrictMode remount ensures we submit
+// each token exactly once. The server is also idempotent as a backstop.
+const submitted = new Set();
+
 export default function VerifyEmail() {
   const navigate = useNavigate();
   const [state, setState] = useState('verifying'); // verifying | ok | error
@@ -9,6 +15,8 @@ export default function VerifyEmail() {
   useEffect(() => {
     const token = new URLSearchParams(window.location.search).get('token');
     if (!token) { setState('error'); setError('No verification token in the link.'); return; }
+    if (submitted.has(token)) return; // already submitted this token (StrictMode double-invoke)
+    submitted.add(token);
     (async () => {
       try {
         const res = await fetch('/api/auth/verify-email', {

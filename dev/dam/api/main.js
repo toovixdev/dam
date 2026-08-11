@@ -2454,15 +2454,24 @@ app.post('/api/auth/verify-email', async (req, res) => {
   const token = String(req.body?.token || '').trim();
   if (!token) return res.status(400).json({ error: 'Missing verification token' });
   try {
+    // Match by token regardless of status so a double-submit is IDEMPOTENT instead of failing
+    // with "invalid or already used" on a successful first activation. This fires when React
+    // StrictMode re-invokes the effect (prod serves the Vite dev server) or a client retries:
+    // the first call activates + would clear the token, and the racing second call would then
+    // find nothing. We keep invite_token on activation (it grants no session — verify issues no
+    // token, login still needs password + MFA) so the repeat still resolves to the same user.
     const u = (await pgPool.query(
-      `SELECT u.id, u.email, u.full_name, u.role, u.invite_expires_at, t.id AS tenant_id, t.name AS tenant_name, t.slug AS tenant_slug
+      `SELECT u.id, u.email, u.full_name, u.role, u.status, u.invite_expires_at, t.id AS tenant_id, t.name AS tenant_name, t.slug AS tenant_slug
        FROM users u JOIN tenants t ON u.tenant_id = t.id
-       WHERE u.invite_token = $1 AND u.status = 'unverified'`, [token])).rows[0];
+       WHERE u.invite_token = $1`, [token])).rows[0];
     if (!u) return res.status(404).json({ error: 'This verification link is invalid or already used. Try signing in.' });
+    // Already verified → idempotent success (the second, racing submit lands here).
+    if (u.status === 'active') return res.json({ verified: true, slug: u.tenant_slug, email: u.email });
+    if (u.status !== 'unverified') return res.status(404).json({ error: 'This verification link is invalid or already used. Try signing in.' });
     if (u.invite_expires_at && new Date(u.invite_expires_at) < new Date())
       return res.status(410).json({ error: 'This verification link has expired. Please sign up again.' });
 
-    await pgPool.query(`UPDATE users SET status='active', invite_token=NULL, invite_expires_at=NULL WHERE id=$1`, [u.id]);
+    await pgPool.query(`UPDATE users SET status='active', invite_expires_at=NULL WHERE id=$1`, [u.id]);
     writeAudit({ tenantId: u.tenant_id, actorId: u.id, actorEmail: u.email, action: 'auth.email_verified', resourceType: 'user', resourceId: u.id, details: {} });
     // Workspace is now live → welcome the new admin (best-effort; never block activation).
     const tierRow = (await pgPool.query('SELECT tier FROM tenants WHERE id = $1', [u.tenant_id])).rows[0];
