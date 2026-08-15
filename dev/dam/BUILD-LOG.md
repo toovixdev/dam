@@ -2707,3 +2707,30 @@ that *already* held a `dam_svc` DB login (for `CLASSIFY=true`) — so enabling V
 
 **Not covered:** db-vm-mongo (MongoDB — not VA-eligible) and the two `not_monitored` Cloud SQL PaaS
 DBs (no agent). Rollback per VM: restore `dam-agent.bak-20260803` + drop `VA_SCAN`, restart.
+
+## Windows host agent for SQL Server (audit-forward / Extended Events) (2026-08-15)
+
+Added a Windows build of the agent so it can run **as a Windows service on the SQL Server host**,
+capturing via **Extended Events** (statement text + row counts, captures TLS-encrypted sessions —
+XEvents sees post-decryption). No injection into `sqlservr.exe`. The Linux eBPF "host" mode does
+**not** port to Windows (eBPF is Linux-only; SQL Server on Windows does TLS via Schannel, not
+OpenSSL — no libssl to probe), so this uses the XEvents source instead.
+
+**Enabling refactor (only two Linux-only spots blocked `GOOS=windows`):**
+- AF_PACKET network capture → `network_linux.go` (verbatim) + `network_other.go` stub.
+- audit-forward `flock` → `flockFile` in `lock_unix.go` (flock) / `lock_windows.go` (LockFileEx).
+- `main()` → `platformMain(runAgent)`; `platform_windows.go` adds SCM integration (`svc.Run` +
+  install/uninstall/start/stop subcommands, file logging under ProgramData);
+  `platform_other.go` runs directly on Linux/macOS.
+- `env_file.go` — a service inherits no env, so read `%ProgramData%\TooVix\dam-agent.env`
+  (or `DAM_AGENT_ENV`); real env wins. `x/sys` promoted to a direct dep.
+
+**Verified:** `GOOS=windows` build → `dam-agent.exe` (30 MB); full **Linux** Docker image
+(`go generate` + build) still compiles clean — no regression to the production path. Commit `bc8b9db`.
+
+**Docs:** `docs/sop-sqlserver-windows-host-agent.md` (XEvents session DDL, `VIEW SERVER STATE`
+login, config file, service install/verify) + `docs/sop-sqlserver-windows-install.ps1` installer.
+
+**Not yet done:** runtime test on a real Windows SQL Server (compile + service logic verified;
+end-to-end enroll/capture pending a Windows SQL box). Binary is unsigned (SmartScreen/EDR will
+warn until code-signed).
