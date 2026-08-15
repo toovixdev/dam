@@ -5290,7 +5290,7 @@ app.delete('/api/instances/:id', authRequired, async (req, res) => {
 app.get('/api/agents', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
     `SELECT a.id, a.agent_type, a.host, a.version, a.status, a.last_heartbeat, a.created_at,
-            a.instance_id,
+            a.instance_id, a.config->>'platform' AS platform, a.config->>'source' AS source,
             i.name AS instance_name, i.host AS instance_host, i.port AS instance_port
      FROM agents a LEFT JOIN db_instances i ON a.instance_id = i.id
      WHERE a.tenant_id = $1
@@ -5381,7 +5381,10 @@ async function tenantFromEnrollToken(token) {
 }
 
 app.post('/api/agents/enroll', async (req, res) => {
-  const { token, host, port, engine, agent_type, agent_host, version } = req.body;
+  const { token, host, port, engine, agent_type, agent_host, version, platform, source } = req.body;
+  // platform (linux|windows) + audit source let the console show an on-host Windows service
+  // distinctly from a remote AgentLite collector. Stored in the agent's config JSONB.
+  const enrollCfg = JSON.stringify({ platform: platform || null, source: source || null });
   // Resolve the tenant FROM the token (per-tenant). The legacy global dev token still works
   // for local agents and maps to the reference (oldest) tenant only.
   let tenantId = null;
@@ -5413,12 +5416,16 @@ app.post('/api/agents/enroll', async (req, res) => {
   let agentId;
   if (existing.rows.length) {
     agentId = existing.rows[0].id;
-    await pgPool.query(`UPDATE agents SET status='online', last_heartbeat=now(), version=$2 WHERE id=$1`, [agentId, version || '0.1.0']);
+    await pgPool.query(
+      `UPDATE agents SET status='online', last_heartbeat=now(), version=$2,
+              config = coalesce(config,'{}'::jsonb) || $3::jsonb WHERE id=$1`,
+      [agentId, version || '0.1.0', enrollCfg]
+    );
   } else {
     const created = await pgPool.query(
-      `INSERT INTO agents (tenant_id, instance_id, agent_type, host, version, status, last_heartbeat)
-       VALUES ($1,$2,$3,$4,$5,'online',now()) RETURNING id`,
-      [tenantId, instanceId, agent_type, agent_host || null, version || '0.1.0']
+      `INSERT INTO agents (tenant_id, instance_id, agent_type, host, version, config, status, last_heartbeat)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,'online',now()) RETURNING id`,
+      [tenantId, instanceId, agent_type, agent_host || null, version || '0.1.0', enrollCfg]
     );
     agentId = created.rows[0].id;
   }

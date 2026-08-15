@@ -23,6 +23,14 @@ const TYPE_LABEL = {
   audit_pull: 'AgentLite', cloud_push: 'Cloud Push', collector_poll: 'Collector',
 };
 
+// An audit-forward agent running as a service ON the DB host (reported platform=windows) reads
+// less like a remote collector when labelled by WHERE it runs. This is the Windows on-host
+// Extended-Events deployment; it still enrolls as audit_pull. Everything else uses TYPE_LABEL.
+function agentTypeLabel(a) {
+  if (a && a.agent_type === 'audit_pull' && a.platform === 'windows') return 'On-host (Windows)';
+  return TYPE_LABEL[a && a.agent_type] || (a && a.agent_type) || '-';
+}
+
 // Per-type baseline ingest rate (events/s) used to derive demo telemetry until
 // the agents emit real throughput/lag metrics.
 const TYPE_EPS_BASE = {
@@ -100,7 +108,7 @@ export default function Agents() {
   // Agents-by-type distribution for the donut.
   const typeData = Object.entries(
     rows.reduce((acc, a) => {
-      const t = TYPE_LABEL[a.agent_type] || a.agent_type || 'Unknown';
+      const t = agentTypeLabel(a) || 'Unknown';
       acc[t] = (acc[t] || 0) + 1;
       return acc;
     }, {})
@@ -118,7 +126,7 @@ export default function Agents() {
   });
 
   const columns = [
-    { key: 'agent_type', label: 'Type', render: (v) => TYPE_LABEL[v] || v || '-' },
+    { key: 'agent_type', label: 'Type', render: (_v, row) => agentTypeLabel(row) },
     { key: 'instance_name', label: 'Instance', render: (v, row) => (
       <span>{v || row.instance || '—'}{v && row.instance && v !== row.instance && <span className="mono muted" style={{ fontSize: 11, marginLeft: 6 }}>{row.instance}</span>}</span>
     ) },

@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -760,6 +761,8 @@ func enrollWithRetry(cfg Config) (string, string) {
 		"agent_type": agentTypeByMode[cfg.Mode],
 		"agent_host": cfg.AgentHost,
 		"version":    cfg.Version,
+		"platform":   runtime.GOOS,    // linux|windows — lets the console distinguish an on-host Windows service from a remote collector
+		"source":     cfg.AuditSource, // audit-forward source (xevents|general_log|pgaudit|…) for a clearer capture label
 	})
 	for {
 		resp, err := http.Post(cfg.ControlPlane+"/api/agents/enroll", "application/json", bytes.NewReader(body))
