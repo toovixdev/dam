@@ -33,6 +33,7 @@ services:
   # ═══════════════════════════════════════════════════════════
 
   client-postgres:
+    restart: unless-stopped
     image: postgres:16-alpine
     container_name: client-postgres
     environment:
@@ -52,6 +53,7 @@ services:
       retries: 5
 
   client-mysql:
+    restart: unless-stopped
     image: mysql:8.0
     container_name: client-mysql
     environment:
@@ -74,6 +76,7 @@ services:
   # A second, "shadow" MySQL on a NON-default port (3307) — used to demo
   # auto-discovery: DAM finds it by protocol handshake, not by port number.
   client-mysql-2:
+    restart: unless-stopped
     image: mysql:8.0
     container_name: client-mysql-2
     command: ["--port=3307"]
@@ -94,6 +97,7 @@ services:
       retries: 10
 
   client-mongo:
+    restart: unless-stopped
     image: mongo:7
     container_name: client-mongo
     environment:
@@ -136,6 +140,7 @@ services:
   # ═══════════════════════════════════════════════════════════
 
   dam-postgres:
+    restart: unless-stopped
     image: postgres:16-alpine
     container_name: dam-postgres
     environment:
@@ -155,6 +160,7 @@ services:
       retries: 5
 
   dam-clickhouse:
+    restart: unless-stopped
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: dam-clickhouse
     environment:
@@ -176,6 +182,7 @@ services:
         hard: 262144
 
   dam-redis:
+    restart: unless-stopped
     image: redis:7-alpine
     container_name: dam-redis
     ports:
@@ -190,6 +197,7 @@ services:
       retries: 5
 
   dam-nats:
+    restart: unless-stopped
     image: nats:2-alpine
     container_name: dam-nats
     ports:
@@ -201,6 +209,7 @@ services:
 
   # Immutable (WORM) archive for audit evidence — S3-compatible, Object Lock enabled.
   dam-minio:
+    restart: unless-stopped
     image: minio/minio:latest
     container_name: dam-minio
     command: server /data --console-address ":9090"
@@ -237,6 +246,7 @@ services:
   # and mints short-lived, scoped DB users on demand — so DAM stores NO DB password.
   # On both networks: dam-net (DAM reaches it) + client-net (it reaches client DBs).
   dam-vault:
+    restart: unless-stopped
     image: hashicorp/vault:1.15
     container_name: dam-vault
     cap_add:
@@ -284,6 +294,7 @@ services:
   # dam-signer-keys, which the DAM API never mounts. Exposed on :3100 so the
   # approver's browser can sign directly, without DAM seeing the approver credential.
   dam-approval-signer:
+    restart: unless-stopped
     build: ./dam/approval-signer
     container_name: dam-approval-signer
     ports:
@@ -298,6 +309,7 @@ services:
       - dam-net
 
   dam-api:
+    restart: unless-stopped
     build:
       context: ./dam
       dockerfile: api/Dockerfile
@@ -409,6 +421,7 @@ services:
       - client-net   # DSAR subject discovery + Vault reach client DBs
 
   dam-frontend:
+    restart: unless-stopped
     image: nginx:alpine
     container_name: dam-frontend
     ports:
@@ -422,6 +435,7 @@ services:
       - dam-api
 
   dam-admin-frontend:
+    restart: unless-stopped
     image: nginx:alpine
     container_name: dam-admin-frontend
     ports:
@@ -435,6 +449,7 @@ services:
       - dam-api
 
   dam-react:
+    restart: unless-stopped
     build: ./dam/frontend
     container_name: dam-react
     ports:
@@ -451,6 +466,7 @@ services:
   # Super-Admin console (React/Vite) — sits beside the product app on its own port.
   # The static admin mockups remain available via dam-admin-frontend (nginx, :8092).
   dam-admin-react:
+    restart: unless-stopped
     build: ./dam/admin-frontend
     container_name: dam-admin-react
     ports:
@@ -490,6 +506,7 @@ services:
   # ═══════════════════════════════════════════════════════════
 
   dam-collector:
+    restart: unless-stopped
     build: ./dam/collector
     container_name: dam-collector
     environment:
@@ -527,6 +544,7 @@ services:
   #  and it streaming-pulls audit events, authing to Pub/Sub via the VM SA (ADC).
   # ═══════════════════════════════════════════════════════════
   dam-audit-consumer:
+    restart: unless-stopped
     build: ./dam/audit-consumer
     container_name: dam-audit-consumer
     environment:
@@ -556,6 +574,7 @@ services:
   #  Sits on client-net (reachability to DB subnets) and reports candidates.
   # ═══════════════════════════════════════════════════════════
   dam-discovery:
+    restart: unless-stopped
     build: ./dam/discovery
     container_name: dam-discovery
     environment:
@@ -578,6 +597,7 @@ services:
   #  Increment 1: inline PROXY for MySQL. Built locally (no registry).
   # ═══════════════════════════════════════════════════════════
   dam-agent-mysql-proxy:
+    restart: unless-stopped
     build: ./dam/agent
     container_name: dam-agent-mysql-proxy
     environment:
@@ -613,6 +633,7 @@ services:
   # INLINE PROXY agent for the discovered instance client-mysql-2 (port 3307).
   # Listens on 3307 and forwards to client-mysql-2:3307; can block/quarantine.
   dam-agent-mysql2-proxy:
+    restart: unless-stopped
     build: ./dam/agent
     container_name: dam-agent-mysql2-proxy
     environment:
@@ -640,6 +661,7 @@ services:
   # tails system.profile, forwarding each operation as a DAM event. Connects to mongo over
   # the network (no namespace sharing needed), and reaches the platform on dam-net.
   dam-agent-mongo:
+    restart: unless-stopped
     build: ./dam/agent-mongo
     container_name: dam-agent-mongo
     environment:
