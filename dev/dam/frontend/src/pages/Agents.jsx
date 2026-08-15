@@ -465,6 +465,29 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
                   <span><b>{o.t}</b> <span className="muted">— {o.d}</span></span>
                 </label>
               ))}
+              <details style={{ marginTop: 10 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>SQL Server prep — run this in SSMS first ▾</summary>
+                <div className="muted" style={{ fontSize: 11.5, margin: '6px 0 4px', lineHeight: 1.5 }}>
+                  Needs <b>mixed-mode auth</b> (Server → Properties → Security → restart). Replace <code>YourDB</code> and the password. First in PowerShell: <code>mkdir C:\SQLAudit</code>. Confirm capture with <code>SELECT name FROM sys.dm_xe_sessions WHERE name='ToovixXE'</code>.
+                </div>
+                <pre style={{ background: '#0b1220', color: '#dfe7f0', borderRadius: 8, padding: '10px 12px', overflowX: 'auto', fontSize: 11, lineHeight: 1.55, margin: '4px 0' }}><code>{mssqlSource === 'xevents'
+                  ? `CREATE EVENT SESSION ToovixXE ON SERVER
+  ADD EVENT sqlserver.sql_statement_completed
+    (ACTION(sqlserver.server_principal_name, sqlserver.client_hostname, sqlserver.database_name)
+     WHERE [sqlserver].[database_name]=N'YourDB')
+  ADD TARGET package0.event_file (SET filename=N'C:\\SQLAudit\\ToovixXE.xel', max_file_size=50, max_rollover_files=5)
+  WITH (MAX_DISPATCH_LATENCY=5 SECONDS, STARTUP_STATE=ON);
+ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   -- START, not ON
+CREATE LOGIN dam_svc WITH PASSWORD='<StrongSecret!>', CHECK_POLICY=ON;
+GRANT VIEW SERVER STATE TO [dam_svc];`
+                  : `CREATE SERVER AUDIT ToovixAudit TO FILE (FILEPATH='C:\\SQLAudit\\', MAXSIZE=50 MB, MAX_ROLLOVER_FILES=5) WITH (ON_FAILURE=CONTINUE);
+ALTER SERVER AUDIT ToovixAudit WITH (STATE=ON);
+CREATE DATABASE AUDIT SPECIFICATION ToovixDbAudit FOR SERVER AUDIT ToovixAudit
+  ADD (SELECT, INSERT, UPDATE, DELETE ON SCHEMA::dbo BY public) WITH (STATE=ON);
+CREATE LOGIN dam_svc WITH PASSWORD='<StrongSecret!>', CHECK_POLICY=ON;
+GRANT CONTROL SERVER TO [dam_svc];`}</code></pre>
+                <div style={{ fontSize: 11.5, marginTop: 4 }}>Full steps + SSMS connect gotchas (trust-cert · 18456): <a href="/guides/sop.html#mssql-lite" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--green)', fontWeight: 600 }}>SQL Server SOP ↗</a></div>
+              </details>
             </div>
           )}
           {has('agentless') && (
