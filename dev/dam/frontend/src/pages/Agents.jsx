@@ -454,7 +454,7 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
             <div style={{ background: 'var(--surface-2)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 14px', marginBottom: 14 }}>
               <div style={{ fontSize: 12.5, fontWeight: 600, marginBottom: 6 }}>SQL Server telemetry source</div>
               <div className="muted" style={{ fontSize: 11.5, marginBottom: 8, lineHeight: 1.5 }}>
-                SQL Server’s telemetry is binary, so the agent <b>polls it over TDS</b> — it runs on any Linux host that can reach <code>{`${instEngine === 'mssql' ? '<db>' : ''}`}:1433</code>, <b>not</b> on the Windows box. Needs <code>DB_USER</code>/<code>DB_PASSWORD</code>.
+                SQL Server’s telemetry (Extended Events) is read over TDS. Run the agent <b>either</b> as a <b>Windows service on the SQL Server host itself</b>, <b>or</b> as a remote agent on any Linux host that can reach <code>{`${instEngine === 'mssql' ? '<db>' : ''}`}:1433</code>. Both capture TLS sessions + row counts; both need <code>DB_USER</code>/<code>DB_PASSWORD</code>.
               </div>
               {[
                 { v: 'sql_server_audit', t: 'SQL Server Audit', d: 'Object-level scoping (audit only your tables) — cleanest trail. No row counts.' },

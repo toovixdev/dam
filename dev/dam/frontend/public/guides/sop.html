@@ -224,7 +224,7 @@ sudo -u postgres psql -c "SELECT pg_reload_conf();"
   <h3 id="mssql-prereq">Prerequisites</h3>
   <ul>
     <li><b>Version:</b> SQL Server 2017+.</li>
-    <li><b>Collector host:</b> any <b>Linux x86-64</b> host that can reach <code>&lt;db&gt;:1433</code> — <b>nothing is installed on Windows</b> (the agent polls over TDS).</li>
+    <li><b>Where the agent runs — two options:</b> <b>(a) On the Windows SQL Server host</b> — the agent runs as a <b>Windows service</b> reading XEvents locally (nothing extra to provision); or <b>(b) a remote Linux x86-64 collector</b> that reaches <code>&lt;db&gt;:1433</code> and polls over TDS (nothing installed on Windows). Both use AgentLite/XEvents and capture <b>TLS-encrypted sessions + row counts</b>.</li>
     <li><b>Mixed-mode auth:</b> the collector uses <b>SQL authentication</b> (Windows auth can't be used from Linux), so enable it: Server → <b>Properties → Security</b> → "SQL Server and Windows Authentication mode" → restart the service. Check with <code>SELECT SERVERPROPERTY('IsIntegratedSecurityOnly')</code> (<code>1</code> = mixed mode is OFF).</li>
     <li><b>Login:</b> a SQL login with <b>VIEW SERVER STATE</b> (Extended Events) or <b>CONTROL SERVER</b> (SQL Server Audit). Classification reuses the same read-only login.</li>
   </ul>
@@ -234,7 +234,7 @@ sqlcmd -S localhost -E -C -Q "CREATE LOGIN [HOST\you] FROM WINDOWS; ALTER SERVER
 net stop MSSQLSERVER &amp;&amp; net start MSSQLSERVER</code></pre></aside>
 
   <h3 id="mssql-agent">Agent — network / host</h3>
-  <aside class="na"><b>Not available for SQL Server.</b> Host mode hooks OpenSSL, but SQL Server encrypts with Windows <b>SChannel</b> — there's no <code>libssl</code> to attach to, and there's no on-host wire agent for Windows. Use <b>AgentLite</b> below (it even gives row counts via Extended Events).</aside>
+  <aside class="na"><b>No eBPF/network mode for SQL Server</b> — but you still get the "host agent" benefits on-host. Host mode hooks OpenSSL, and SQL Server encrypts with Windows <b>SChannel</b> (no <code>libssl</code> to probe). Instead, run <b>AgentLite with Extended Events</b> — it can run <b>as a service on the Windows SQL Server host itself</b> (see below). XEvents hands it the statement <em>after</em> SQL Server decrypts, so it captures <b>TLS-encrypted</b> sessions and <b>row counts</b> — without injecting anything into <code>sqlservr.exe</code>.</aside>
 
   <h3 id="mssql-lite">AgentLite — Extended Events / Audit (TDS poll)</h3>
   <aside><b>Two halves.</b> SQL Server <b>captures</b> statements to a local <code>.xel</code> file; a Linux <b>collector polls that over TDS</b> and forwards to DAM. Your queries do <b>not</b> reach DAM until the collector is running — SQL Server has no connection to DAM on its own.</aside>
@@ -256,13 +256,31 @@ SELECT TOP 5 CAST(event_data AS XML) FROM sys.fn_xe_file_target_read_file('C:\SQ
   <pre><code>CREATE LOGIN dam_svc WITH PASSWORD='&lt;StrongSecret!&gt;', CHECK_POLICY=ON;   <span class="cmt">-- needs mixed-mode auth (prereqs)</span>
 GRANT VIEW SERVER STATE TO [dam_svc];   <span class="cmt">-- XEvents; use CONTROL SERVER for SQL Server Audit</span></code></pre>
 
-  <h4>3 · Collector — run the Linux forwarder</h4>
+  <h4>3 · Forwarder — pick where the agent runs</h4>
+  <p><b>Option A — on the Windows SQL Server host</b> (runs as a Windows service; no separate box). Put <code>dam-agent.exe</code> on the host, write the config, install + start the service:</p>
+  <pre><code><span class="cmt"># config file: C:\ProgramData\TooVix\dam-agent.env</span>
+MODE=audit-forward
+DB_ENGINE=mssql
+AUDIT_SOURCE=xevents
+MSSQL_XE_SESSION=ToovixXE          <span class="cmt"># discovers the live .xel + follows rollover (omit AUDIT_LOG)</span>
+TARGET_HOST=&lt;this-server-hostname&gt; <span class="cmt"># instance identity; connects locally</span>
+TARGET_PORT=1433
+DB_USER=dam_svc
+DB_PASSWORD=&lt;StrongSecret!&gt;
+AGENT_ENROLL_TOKEN=tvxenr_...
+CONTROL_PLANE=https://dam.yourcompany.com
+
+<span class="cmt"># elevated PowerShell:</span>
+&amp; 'C:\Program Files\TooVix\dam-agent.exe' install   <span class="cmt"># registers service "TooVixDAMAgent"</span>
+&amp; 'C:\Program Files\TooVix\dam-agent.exe' start
+Get-Content 'C:\ProgramData\TooVix\dam-agent.log' -Tail 20 -Wait</code></pre>
+  <p><b>Option B — a remote Linux collector</b> (nothing on Windows; polls over TDS):</p>
   <pre><code><span class="cmt"># any Linux host reaching &lt;db&gt;:1433:</span>
 MODE=audit-forward DB_ENGINE=mssql AUDIT_SOURCE=xevents   <span class="cmt"># or sql_server_audit</span>
 TARGET_HOST=&lt;sqlserver-addr&gt; TARGET_PORT=1433 DB_USER=dam_svc DB_PASSWORD=…
-AUDIT_LOG='C:\SQLAudit\ToovixXE*.xel'
+MSSQL_XE_SESSION=ToovixXE          <span class="cmt"># or AUDIT_LOG='C:\SQLAudit\ToovixXE*.xel' (DB-side path, read over TDS)</span>
 AGENT_ENROLL_TOKEN=tvxenr_... CONTROL_PLANE=https://dam.yourcompany.com</code></pre>
-  <aside>The collector <b>auto-trusts SQL Server's self-signed certificate</b> (<code>TrustServerCertificate=true</code>) and, on-prem, connects cleartext by default (<code>MSSQL_ENCRYPT=disable</code>; Azure SQL is auto-forced to TLS). No cert setup needed. One collector host can run <b>many</b> <code>dam-agent@&lt;name&gt;</code> instances — one per SQL Server.</aside>
+  <aside>Either way the agent <b>auto-trusts SQL Server's self-signed certificate</b> (<code>TrustServerCertificate=true</code>) and, on-prem, connects cleartext by default (<code>MSSQL_ENCRYPT=disable</code>; Azure SQL is auto-forced to TLS) — no cert setup. One host runs <b>many</b> agents/services — one per SQL Server instance. The Windows <code>.exe</code> is <b>unsigned</b> today, so SmartScreen/EDR may warn on first run.</aside>
 
   <h3 id="mssql-paas">PaaS — Azure SQL (agentless / collector)</h3>
   <ul>
