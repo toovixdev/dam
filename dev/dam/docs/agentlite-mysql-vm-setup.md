@@ -288,6 +288,29 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;
 
 > **MongoDB: classification is not supported yet.** `CLASSIFY=true` is ignored for `DB_ENGINE=mongodb` — the scanner reads `information_schema`, which has no MongoDB equivalent (collections are schemaless, so classifying them means sampling documents). Capture still tags statements whose **text** contains sensitive field names (`email`, `aadhaar`, `ssn`, `card`…), but a read of a sensitive collection that doesn't name such a field — e.g. `db.kyc_documents.find({status:"verified"})` — will arrive **untagged**. If you rely on sensitive-collection policies, raise this with your DAM operator.
 
+### (Optional) Enable Vulnerability Assessment (VA) scanning
+
+VA runs three read-only assessments against the database: **CIS-style security checks**, a **CVE / patch-level** review (derived from the detected version), and an **entitlement / rights review** (enumerates DB principals + their privileges). It **reuses the same read-only login** created above and is **capture-mode-independent** — it runs alongside AgentLite (audit-forward) *and* the network / host / inline-proxy modes. Supported engines: **MySQL, PostgreSQL, SQL Server, Oracle** (**not** MongoDB).
+
+Turn it on by adding **`VA_SCAN=true`** to the agent (the `.env` file or a Docker `-e` flag); the login must already be passed as `DB_USER`/`DB_PASSWORD` (PostgreSQL/SQL Server/Oracle also need `DB_NAME`/`ORACLE_SERVICE`). The classification grants above already cover VA on every engine **except SQL Server**:
+
+- **🐬 MySQL / MariaDB** — no extra grant. `SELECT, PROCESS ON *.*` (above) already lets VA read global settings and `mysql.user` (entitlements).
+- **🐘 PostgreSQL** — no extra grant. `pg_monitor` (above) covers `pg_settings`, `pg_hba_file_rules`, and `pg_roles` (entitlements).
+- **🪟 SQL Server** — add two server-level read grants so VA can see the configuration and the login/role catalog:
+  ```sql
+  GRANT VIEW SERVER STATE   TO [dam_va];   -- sys.configurations, sys.dm_*
+  GRANT VIEW ANY DEFINITION TO [dam_va];   -- sys.server_principals, sys.sql_logins (entitlements)
+  ```
+- **🅾️ Oracle** — no extra grant. `SELECT_CATALOG_ROLE` (above) already reads `V$PARAMETER`, `DBA_USERS`, and `DBA_ROLE_PRIVS`.
+
+Restart the agent after setting the flag. It runs the first scan ~20 s after start, then every `VA_SCAN_INTERVAL_MIN` (default **12 h**); the **Run scan** button on the console's Vulnerability page triggers it on demand. A healthy start logs:
+```
+VA context: engine=postgresql version=16.3 managed=self-managed
+VA scan reported (CIS PostgreSQL): 19 pass / 11 fail / 1 error — {"score":70,…}
+VA entitlements reported: 14 principals — {"principals":14,"highRisk":1}
+```
+Findings appear under **Vulnerability** in the DAM console. `VA_SCAN=true` with no `DB_USER` (or on MongoDB) logs `VA scan enabled but skipped` and does nothing.
+
 ---
 
 ## 4. Step 3 — Get your enrollment token
@@ -357,7 +380,7 @@ sudo systemctl enable --now dam-agent@audit
 journalctl -u dam-agent@audit -f     # watch it enroll + start tailing
 ```
 
-> To also run **classification** (Step 2), add to the env / `-e` flags: `CLASSIFY=true`, `DB_USER=dam_svc`, `DB_PASSWORD=<the password you set>`.
+> To also run **classification** (Step 2), add to the env / `-e` flags: `CLASSIFY=true`, `DB_USER=dam_svc`, `DB_PASSWORD=<the password you set>`. To also run **VA scanning** (Step 2 → VA subsection), add `VA_SCAN=true` alongside the same `DB_USER`/`DB_PASSWORD` (SQL Server needs the two extra grants noted there).
 
 **MongoDB variant.** There's no log file, so drop `AUDIT_LOG` and the `-v` log mount, and supply the connection instead. The collector needs no privileged access to the host and can run **anywhere** that can reach `27017`:
 ```bash

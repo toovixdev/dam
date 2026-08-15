@@ -146,8 +146,17 @@ appears within seconds. **PASS: event visible.**
 ---
 
 ## Part 4 — (Optional) classification / VA read-only login
-Capture needs no DB login. For column classification / VA scanning add a read-only `dam_svc`
-(see `sop-postgres-dam-svc.md`) and set `CLASSIFY=true DB_USER=dam_svc DB_PASSWORD=… DB_NAME=yourdb`.
+Capture needs no DB login. For column classification and/or VA scanning add a read-only `dam_svc`
+(see `sop-postgres-dam-svc.md`, which grants `pg_monitor` — all VA needs on PostgreSQL) and set:
+```
+DB_USER=dam_svc DB_PASSWORD=… DB_NAME=yourdb
+CLASSIFY=true          # PII/PCI column classification
+VA_SCAN=true           # CIS checks + CVE/patch review + entitlement review
+```
+Both are independent of network capture — turn on either or both. After restart, VA runs its first
+scan ~20 s in (then every `VA_SCAN_INTERVAL_MIN`, default 12 h); confirm with
+`journalctl -u dam-agent@<name> | grep -iE 'VA context|VA scan reported|VA entitlements'`.
+Findings land under **Vulnerability** in the console.
 
 ---
 
