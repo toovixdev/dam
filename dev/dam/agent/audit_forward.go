@@ -512,6 +512,13 @@ func orDefault(s, d string) string {
 
 // shouldForward drops obvious client/monitoring noise so the trail stays about real activity.
 func shouldForward(sql string) bool {
+	// The agent logs into the monitored DB itself (classification scans + value sampling, VA checks,
+	// audit polls). Those reads land in the DB's native audit log and would re-enter as "user"
+	// activity — so drop anything carrying our per-process marker. Contains, not a leading-"/*"
+	// prefix check: robust even if pgaudit / the general log shifts or reformats the comment.
+	if isAgentOwnQuery(sql) {
+		return false
+	}
 	u := strings.ToUpper(strings.TrimSpace(sql))
 	switch {
 	case u == "", u == "COMMIT", u == "ROLLBACK", u == "PING":

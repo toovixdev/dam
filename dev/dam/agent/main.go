@@ -987,7 +987,10 @@ func sampleColumnValues(db *sql.DB, driver, schema, table, col string) []string 
 	default: // mysql, postgres
 		q = fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s IS NOT NULL LIMIT 200", qc, qs, qt, qc)
 	}
-	rows, err := db.Query(q)
+	// Tag the sample read as the agent's own so no capture path (direct OR audit-forward) mistakes
+	// it for user activity — this query reads real values from sensitive columns, so an unmarked
+	// version shows up in the DB's native audit log and trips the tenant's data-access policies.
+	rows, err := db.Query(tagAgentQuery(q))
 	if err != nil {
 		return nil
 	}
