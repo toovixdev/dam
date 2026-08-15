@@ -86,6 +86,7 @@
       <li><a href="#bus">Publish to an audit stream (optional)</a></li>
       <li><a href="#trouble">Troubleshooting</a></li>
       <li><a href="#security">Security &amp; privacy</a></li>
+      <li><a href="#sops">SOPs — host &amp; network agents (VM)</a></li>
     </ol>
   </div>
 
@@ -515,6 +516,84 @@ az role assignment create --assignee &lt;VM_MANAGED_IDENTITY_OBJECT_ID&gt; \
     <li><b>Least privilege:</b> the <code>dam_svc</code> login is read-only per engine (MySQL <code>SELECT, PROCESS</code>; PG <code>pg_monitor</code>; SQL Server read + <code>VIEW DATABASE/SERVER STATE</code>; Oracle <code>AUDIT_VIEWER</code> + <code>SELECT_CATALOG_ROLE</code>). It can never modify data. Rotate its password per your policy.</li>
     <li><b>MongoDB:</b> <code>system.profile</code> contains <b>query filters and inserted documents</b>, so it holds real data values on the server — treat the profiler as sensitive, and note that enabling it is a <b>visible change to the database's behaviour</b> (write overhead), not a passive read. Keep <code>dam_svc</code> on the <code>toovixProfiler</code> custom role from §2: <b><code>dbAdmin</code> would let a monitoring account drop collections</b>, which is far more privilege than capture requires.</li>
   </ul>
+
+  <hr />
+
+  <h2 id="sops">11. SOPs — host &amp; network capture on a self-managed VM</h2>
+  <p>AgentLite (above) tails the DB's own audit log. When you need <b>row counts</b> (mass-read / exfiltration
+  detection) or you want to capture <b>TLS-encrypted</b> sessions without a proxy, run the <b>same agent
+  binary</b> in a different mode <b>on the DB host</b>. Choose by <b>transport</b>:</p>
+
+  <table>
+    <thead><tr><th>Mode</th><th>Reads</th><th>Plaintext</th><th>TLS</th><th>Row counts</th><th>Blocks</th></tr></thead>
+    <tbody>
+      <tr><td><b>AgentLite</b> (audit-forward)</td><td>DB audit log</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td></tr>
+      <tr><td><b>Network</b> (passive)</td><td>the wire (AF_PACKET)</td><td>✅</td><td>❌ ciphertext</td><td>✅</td><td>❌</td></tr>
+      <tr><td><b>Host</b> (eBPF)</td><td>libssl, below TLS</td><td>❌</td><td>✅</td><td>✅</td><td>❌</td></tr>
+      <tr><td><b>Inline proxy</b></td><td>terminates the connection</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    </tbody>
+  </table>
+  <aside class="warn"><b>One decoding agent per transport.</b> Network reads only <b>plaintext</b>; host reads only <b>TLS</b>. A connection is one or the other, so you may run <b>both</b> on a mixed-transport DB with <b>no double-counting</b> — but never pair a passive agent with the inline proxy (it re-emits traffic → duplicate events).</aside>
+
+  <h3>11a — Network agent (plaintext DB) · PostgreSQL</h3>
+  <p><b>Pre-checks (go/no-go), run on the DB VM:</b></p>
+  <ul>
+    <li><b>Plaintext</b> — app connections show <code>ssl = f</code> (network mode can't decode TLS).</li>
+    <li><b>TCP, not unix-socket</b> — <code>client_addr</code> is an IP (a sniffer sees no unix-socket packets → use AgentLite).</li>
+    <li><b>Right interface</b> — the NIC or <code>lo</code> that carries app↔DB packets; use <code>any</code> if unsure.</li>
+  </ul>
+  <pre><code><span class="cmt"># confirm plaintext + TCP</span>
+sudo -u postgres psql -d yourdb -c "SELECT s.ssl, count(*) FROM pg_stat_ssl s JOIN pg_stat_activity a ON a.pid=s.pid WHERE a.backend_type='client backend' GROUP BY s.ssl;"
+sudo -u postgres psql -d yourdb -c "SELECT COALESCE(host(client_addr)::text,'unix-socket') conn, count(*) FROM pg_stat_activity WHERE backend_type='client backend' GROUP BY 1;"
+
+<span class="cmt"># install (as root) — .deb + systemd</span>
+curl -fsSL $CONTROL_PLANE/api/download/dam-agent_amd64.deb -o dam-agent.deb &amp;&amp; dpkg -i dam-agent.deb
+mkdir -p /etc/toovix; cat &gt; /etc/toovix/agent-network.env &lt;&lt;EOF
+MODE=network
+DB_ENGINE=postgresql
+TARGET_HOST=&lt;db-private-ip&gt;
+TARGET_PORT=5432
+CAPTURE_IFACE=any            <span class="cmt"># eth0 / ens5 / lo / any</span>
+AGENT_ENROLL_TOKEN=tvxenr_...
+CONTROL_PLANE=$CONTROL_PLANE
+EOF
+systemctl enable --now dam-agent@network
+journalctl -u dam-agent@network -f</code></pre>
+  <aside>No events? Set <code>CAPTURE_DEBUG=true</code> and watch the log: <code>N frames seen</code> climbing = right interface; stuck at <b>0 frames</b> = wrong <code>CAPTURE_IFACE</code> (try <code>any</code>).</aside>
+
+  <h3>11b — Host (eBPF) agent (TLS DB) · PostgreSQL</h3>
+  <aside class="warn"><b>TLS-only.</b> Host mode hooks <code>libssl</code> to read plaintext <em>below</em> TLS. If the DB isn't using TLS — or the app is plaintext / unix-socket — it captures <b>nothing</b>. Needs <b>amd64</b>, <b>kernel ≥ 5.8</b>, <b>BTF</b>, and runs <b>privileged</b> on the DB host.</aside>
+  <p><b>Pre-checks (go/no-go), run on the DB VM:</b></p>
+  <pre><code>uname -m                 <span class="cmt"># x86_64</span>
+uname -r                 <span class="cmt"># &gt;= 5.8</span>
+ls /sys/kernel/btf/vmlinux
+sudo -u postgres psql -tAc "SHOW ssl;"                       <span class="cmt"># on</span>
+grep -l libssl /proc/$(pgrep -x postgres | head -1)/maps    <span class="cmt"># libssl mapped</span>
+sudo -u postgres psql -d yourdb -c "SELECT s.ssl, count(*) FROM pg_stat_ssl s JOIN pg_stat_activity a ON a.pid=s.pid WHERE a.backend_type='client backend' GROUP BY s.ssl;"   <span class="cmt"># app rows ssl=t</span></code></pre>
+  <p><b>Install (as root):</b></p>
+  <pre><code>curl -fsSL $CONTROL_PLANE/api/download/dam-agent_amd64.deb -o dam-agent.deb &amp;&amp; dpkg -i dam-agent.deb
+mkdir -p /etc/toovix; cat &gt; /etc/toovix/agent-host.env &lt;&lt;EOF
+MODE=host
+DB_ENGINE=postgresql
+TARGET_HOST=&lt;db-private-ip&gt;
+TARGET_PORT=5432
+AGENT_ENROLL_TOKEN=tvxenr_...
+CONTROL_PLANE=$CONTROL_PLANE
+EOF
+systemctl enable --now dam-agent@host
+journalctl -u dam-agent@host -f     <span class="cmt"># PASS: uses .../libssl.so + attached uprobe SSL_write</span></code></pre>
+  <aside class="warn"><b>Plaintext DB but you want host mode?</b> Enable TLS first: create a server cert/key in the data dir (<code>chmod 600 server.key</code>), <code>ALTER SYSTEM SET ssl='on'</code> + reload, then move the <b>app</b> to <code>sslmode=require</code>. Host mode captures nothing until clients actually use TLS.</aside>
+
+  <h3>11c — Read-only <code>dam_svc</code> role (classification / VA) · PostgreSQL</h3>
+  <p>Capture needs no DB login; classification and VA scanning use a least-privilege reader:</p>
+  <pre><code>CREATE ROLE dam_svc LOGIN PASSWORD '&lt;strong-secret&gt;';
+GRANT pg_monitor TO dam_svc;               <span class="cmt">-- read settings/stats; no write</span>
+<span class="cmt">-- per target database (\c yourdb):</span>
+GRANT CONNECT ON DATABASE yourdb TO dam_svc;
+GRANT USAGE ON SCHEMA public TO dam_svc;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO dam_svc;</code></pre>
+  <p>Then add <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=…</code>, <code>DB_NAME=yourdb</code> to the agent env. The role is <b>read-only</b> — it can never modify data.</p>
 
   <footer>
     Questions, or an engine not covered here? Contact your TooVix DAM operator. AgentLite audit-forward supports <b>MySQL/MariaDB, PostgreSQL, SQL Server (Audit + Extended Events), MongoDB, and Oracle</b>, across VMs and managed services (Cloud SQL, RDS, Azure SQL, Atlas, Autonomous DB). For real-time blocking, or row counts on an engine whose audit source lacks them, use network / host / inline-proxy capture instead.
