@@ -1181,14 +1181,41 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
       <h2>PostgreSQL — network agent (plaintext DB)</h2>
       <p>The right mode for a <b>plaintext</b> Postgres: decodes the wire in the clear, gives <b>row counts</b>, needs <b>no eBPF/kernel features</b> and <b>no DB or app change</b>.</p>
       <h4>Pre-checks — run on the DB VM (go/no-go)</h4>
-      <ul class="checklist">
-        <li><b>Plaintext</b> — app connections show <code>ssl = f</code>; network mode can't decode TLS.</li>
-        <li><b>TCP, not unix-socket</b> — <code>client_addr</code> is an IP (a sniffer sees no unix-socket packets → use AgentLite).</li>
-        <li><b>Right interface</b> — the NIC or <code>lo</code> that carries app↔DB packets; use <code>any</code> if unsure.</li>
-      </ul>
-      <pre><code><span class="cmt"># plaintext? (want ssl=f)     TCP? (want an IP, not unix-socket)</span>
-sudo -u postgres psql -d yourdb -c "SELECT s.ssl,count(*) FROM pg_stat_ssl s JOIN pg_stat_activity a ON a.pid=s.pid WHERE a.backend_type='client backend' GROUP BY s.ssl;"
-sudo -u postgres psql -d yourdb -c "SELECT COALESCE(host(client_addr)::text,'unix-socket') conn,count(*) FROM pg_stat_activity WHERE backend_type='client backend' GROUP BY 1;"</code></pre>
+      <p>Three gates decide whether network mode will actually capture. Run each on the Postgres VM.</p>
+
+      <p><b>① Traffic is plaintext</b> — network mode can't decode TLS.</p>
+      <pre><code><span class="cmt"># (a) does the server even offer TLS? "off" = guaranteed plaintext</span>
+sudo -u postgres psql -tAc "SHOW ssl;"
+
+<span class="cmt"># (b) are the APP's live sessions actually encrypted? (per connection)</span>
+sudo -u postgres psql -x -c "SELECT a.pid, a.usename, a.client_addr, s.ssl
+  FROM pg_stat_activity a LEFT JOIN pg_stat_ssl s ON s.pid = a.pid
+  WHERE a.backend_type = 'client backend';"</code></pre>
+      <div class="note"><b>Read it:</b> app rows with <code>ssl = f</code> → plaintext → <b>network mode works</b>. Any <code>ssl = t</code> → those sessions are encrypted → use the <a href="#sop-pg-host">host agent</a> for them.</div>
+
+      <p><b>② Traffic is over TCP, not the unix socket</b> — a sniffer sees no unix-socket packets.</p>
+      <pre><code><span class="cmt"># app connection source: an IP = TCP; "UNIX-SOCKET" = local socket</span>
+sudo -u postgres psql -c "SELECT usename, COALESCE(host(client_addr)::text,'UNIX-SOCKET') AS source, count(*)
+  FROM pg_stat_activity WHERE backend_type = 'client backend' GROUP BY 1,2 ORDER BY 3 DESC;"
+
+<span class="cmt"># OS-level cross-check — established TCP sessions on 5432:</span>
+sudo ss -tnp state established '( sport = :5432 )'</code></pre>
+      <div class="note"><b>Read it:</b> an <b>IP</b> in <code>source</code> → TCP → <b>good</b>. Only <code>UNIX-SOCKET</code> → nothing on the wire → use <a href="#deploy-lite">AgentLite</a> instead.</div>
+
+      <p><b>③ Pick the capture interface</b> — the #1 cause of "0 events".</p>
+      <pre><code><span class="cmt"># who connects to 5432, and from which peer address?</span>
+sudo ss -Htnp state established '( sport = :5432 )' | awk '{print $4"  &lt;-  "$5}'
+
+<span class="cmt"># this host's interfaces + their IPs</span>
+ip -o -4 addr show | awk '{print $2, $4}'
+
+<span class="cmt"># which interface carries a given client/peer IP?  (127.0.0.1 -&gt; lo)</span>
+ip route get &lt;PEER_IP&gt;                 <span class="cmt"># look for:  dev &lt;iface&gt;</span>
+
+<span class="cmt"># confirm that interface actually sees 5432 traffic:</span>
+sudo timeout 5 tcpdump -i &lt;iface&gt; -nn -c 5 'tcp port 5432'</code></pre>
+      <div class="note"><b>Read it:</b> remote peers → set <code>CAPTURE_IFACE</code> to that NIC (<code>eth0</code>, <code>ens5</code>…); <code>127.0.0.1</code> → <code>lo</code>; unsure or mixed → <code>any</code> (sniffs all, incl. loopback).</div>
+
       <h4>Install (as root) — .deb + systemd</h4>
       <pre><code>curl -fsSL $CP/api/download/dam-agent_amd64.deb -o dam-agent.deb &amp;&amp; dpkg -i dam-agent.deb
 mkdir -p /etc/toovix; cat &gt; /etc/toovix/agent-network.env &lt;&lt;EOF
@@ -1236,16 +1263,33 @@ journalctl -u dam-agent@host -f     <span class="cmt"># PASS: uses .../libssl.so
 
     <section id="sop-dam-svc">
       <span class="part-badge">Part 4 · SOPs</span>
-      <h2>Read-only <code>dam_svc</code> role (classification / VA)</h2>
-      <p>Capture needs no DB login. Classification and vulnerability scanning use a least-privilege reader — it can never modify data:</p>
+      <h2>Adding the read-only <code>dam_svc</code> role (classification / VA)</h2>
+      <p>Capture needs <b>no</b> DB login. Add this only for <b>column classification</b> (PII/PCI) or <b>vulnerability scanning</b>. It's strictly read-only — it can never modify data.</p>
+
+      <h4>1 · Create the role &amp; grant read (as a superuser)</h4>
       <pre><code>CREATE ROLE dam_svc LOGIN PASSWORD '&lt;strong-secret&gt;';
-GRANT pg_monitor TO dam_svc;                 <span class="cmt">-- read settings/stats; no write</span>
-<span class="cmt">-- per target database (\c yourdb):</span>
-GRANT CONNECT ON DATABASE yourdb TO dam_svc;
+GRANT pg_monitor TO dam_svc;                 <span class="cmt">-- read settings/stats for VA; NO write</span></code></pre>
+      <p>Then, connected to <b>each</b> database you want covered (<code>psql -d yourdb</code>):</p>
+      <pre><code>GRANT CONNECT ON DATABASE yourdb TO dam_svc;
 GRANT USAGE ON SCHEMA public TO dam_svc;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO dam_svc;</code></pre>
-      <p>Then add <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=…</code>, <code>DB_NAME=yourdb</code> to the agent env.</p>
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO dam_svc;   <span class="cmt">-- future tables too</span></code></pre>
+      <div class="note"><b>Non-<code>public</code> schemas / app-owned tables:</b> repeat <code>USAGE</code>+<code>SELECT</code> per schema, and if the app creates tables as a different owner also run <code>ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO dam_svc;</code>.</div>
+
+      <h4>2 · Let the agent host reach it</h4>
+      <pre><code><span class="cmt"># self-managed: add to pg_hba.conf, then reload (no restart)</span>
+hostssl  all  dam_svc  10.0.0.20/32  scram-sha-256      <span class="cmt"># agent host IP; use 'host' if not on TLS</span>
+sudo -u postgres psql -c "SELECT pg_reload_conf();"</code></pre>
+      <p>On managed Postgres (RDS / Cloud SQL / Azure) there's no <code>pg_hba</code> — allow the agent host via the <b>security group / authorized networks / firewall</b> instead.</p>
+
+      <h4>3 · Verify (read yes, write no)</h4>
+      <pre><code>SELECT has_table_privilege('dam_svc','public.your_table','SELECT');   <span class="cmt">-- expect: t</span>
+SELECT has_table_privilege('dam_svc','public.your_table','INSERT');   <span class="cmt">-- expect: f</span>
+<span class="cmt"># login test from the agent host:</span>
+psql "host=&lt;db&gt; port=5432 dbname=yourdb user=dam_svc sslmode=prefer" -c "SELECT count(*) FROM information_schema.columns;"</code></pre>
+
+      <h4>4 · Point the agent at it</h4>
+      <p>Add to the agent env (alongside the capture config): <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=…</code>, <code>DB_NAME=yourdb</code>. Add <code>VA_SCAN=true</code> to also run vulnerability assessment.</p>
     </section>
 
     <section id="bestpractice">
