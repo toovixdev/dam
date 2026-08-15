@@ -291,6 +291,15 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instId]);
 
+  // SQL Server hosts are Windows → offer the .exe (on-host service) or Docker, not the Linux
+  // systemd/.deb/.rpm formats. Keep the selected deployment format valid for the engine.
+  useEffect(() => {
+    if (instEngine === 'mssql') setPlatform((p) => (p === 'windows_exe' || p === 'docker') ? p : 'windows_exe');
+    else setPlatform((p) => (p === 'windows_exe' ? 'binary' : p));
+    setInstructions(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instEngine]);
+
   const preview = {
     'Networked SQL': has('network') || has('host') || has('proxy') || has('agentless') ? 'Yes' : '—',
     'TLS-encrypted traffic': has('agentless') || has('proxy') || has('host') ? 'Yes' : has('network') ? 'No (cleartext only)' : '—',
@@ -517,12 +526,26 @@ GRANT CONTROL SERVER TO [dam_svc];`}</code></pre>
       {!isPaas && (
         <>
           <div className="section-label">Deployment format</div>
-          <select value={platform} onChange={(e) => { setPlatform(e.target.value); setInstructions(null); }} style={{ marginBottom: 14 }}>
-            <option value="binary">Static binary + systemd (no Docker)</option>
-            <option value="docker">Docker image</option>
-            <option value="package">OS package (.deb / .rpm)</option>
+          <select value={platform} onChange={(e) => { setPlatform(e.target.value); setInstructions(null); }} style={{ marginBottom: instEngine === 'mssql' ? 4 : 14 }}>
+            {instEngine === 'mssql' ? (
+              <>
+                <option value="windows_exe">Windows service (.exe) — on the SQL Server host</option>
+                <option value="docker">Docker image (on Windows, or a Linux collector)</option>
+              </>
+            ) : (
+              <>
+                <option value="binary">Static binary + systemd (no Docker)</option>
+                <option value="docker">Docker image</option>
+                <option value="package">OS package (.deb / .rpm)</option>
+              </>
+            )}
             {/* Kubernetes (Helm) hidden until a chart is published — the registry is a placeholder. */}
           </select>
+          {instEngine === 'mssql' && (
+            <div className="muted" style={{ fontSize: 11, marginBottom: 14, lineHeight: 1.5 }}>
+              SQL Server runs on Windows, so the Linux formats (systemd / .deb / .rpm) aren&apos;t shown — use the <b>.exe</b> as a service on the DB host, or <b>Docker</b> (on Windows, or on a remote Linux collector).
+            </div>
+          )}
 
           <div className="section-label">Data classification</div>
           <div className="approach-card" style={{ padding: 12, marginBottom: 8, cursor: canClassify ? 'pointer' : 'not-allowed', opacity: canClassify ? 1 : 0.55 }}
@@ -704,6 +727,25 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   const auditPrereq = agentless && auditEnable
     ? `# AgentLite prerequisite — the DB must be WRITING its audit log to ${auditLog || 'its native audit trail'} first:\n${auditEnable}\n\n`
     : '';
+
+  if (format === 'windows_exe') {
+    // On-host Windows service: the agent runs under the Service Control Manager on the SQL Server
+    // box (reads XEvents locally over TDS — captures TLS + row counts, no sqlservr.exe injection).
+    // The service inherits no user env, so config lives in C:\ProgramData\TooVix\dam-agent.env.
+    return `${warn}# Windows service on the SQL Server host — run in an ELEVATED PowerShell.
+# Obtain dam-agent.exe from your DAM operator, then place it + write the config:
+New-Item -ItemType Directory -Force 'C:\\Program Files\\TooVix','C:\\ProgramData\\TooVix' | Out-Null
+Copy-Item .\\dam-agent.exe 'C:\\Program Files\\TooVix\\dam-agent.exe'
+
+@'
+${env.join('\n')}
+'@ | Set-Content -Encoding ASCII 'C:\\ProgramData\\TooVix\\dam-agent.env'
+
+# Install + start the service (auto-start), then tail the log:
+& 'C:\\Program Files\\TooVix\\dam-agent.exe' install   # registers service "TooVixDAMAgent"
+& 'C:\\Program Files\\TooVix\\dam-agent.exe' start
+Get-Content 'C:\\ProgramData\\TooVix\\dam-agent.log' -Tail 20 -Wait`;
+  }
 
   if (format === 'docker') {
     // Each mode has a different runtime envelope:
