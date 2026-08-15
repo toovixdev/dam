@@ -223,6 +223,7 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
   const [instId, setInstId] = useState(initialInstanceId || instances[0]?.id || '');
   const [modes, setModes] = useState(seeded.length ? seeded : ['network', 'host']);
   const [platform, setPlatform] = useState('binary');
+  const [hostOs, setHostOs] = useState('linux');   // where the AgentLite agent runs: linux | windows
   const [classify, setClassify] = useState(false);
   const [dbUser, setDbUser] = useState('');
   const [dbPass, setDbPass] = useState('');
@@ -291,14 +292,19 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instId]);
 
-  // SQL Server hosts are Windows → offer the .exe (on-host service) or Docker, not the Linux
-  // systemd/.deb/.rpm formats. Keep the selected deployment format valid for the engine.
-  useEffect(() => {
-    if (instEngine === 'mssql') setPlatform((p) => (p === 'windows_exe' || p === 'docker') ? p : 'windows_exe');
-    else setPlatform((p) => (p === 'windows_exe' ? 'binary' : p));
-    setInstructions(null);
+  // Default the agent-host OS per engine (SQL Server is usually Windows). AgentLite runs on
+  // either OS; network/host/proxy are Linux-only (AF_PACKET / eBPF).
+  useEffect(() => { setHostOs(instEngine === 'mssql' ? 'windows' : 'linux'); setInstructions(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instEngine]);
+  // Keep the selected deployment FORMAT valid for the effective host OS.
+  useEffect(() => {
+    const os = modes.includes('agentless') ? hostOs : 'linux';
+    const valid = os === 'windows' ? ['windows_exe', 'docker'] : ['binary', 'docker', 'package'];
+    setPlatform((p) => (valid.includes(p) ? p : valid[0]));
+    setInstructions(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hostOs, modes]);
 
   const preview = {
     'Networked SQL': has('network') || has('host') || has('proxy') || has('agentless') ? 'Yes' : '—',
@@ -309,6 +315,14 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
     'Reroutes clients?': has('proxy') ? 'Yes' : 'No',
     'Containers to deploy': String(modes.length),
   };
+
+  // AgentLite can run on Linux or Windows; wire modes (network/host/proxy) are Linux-only.
+  // The effective host OS drives which deployment formats + commands we show.
+  const isLite = modes.includes('agentless');
+  const effOs = isLite ? hostOs : 'linux';
+  const fmtOpts = effOs === 'windows'
+    ? [['windows_exe', 'Windows service (.exe) — on the DB host'], ['docker', 'Docker image']]
+    : [['binary', 'Static binary + systemd (no Docker)'], ['docker', 'Docker image'], ['package', 'OS package (.deb / .rpm)']];
 
   // The platform can't reach into the customer's environment, so "deploy" issues an
   // enrollment token + install commands. The operator runs them where the DB lives;
@@ -525,27 +539,28 @@ GRANT CONTROL SERVER TO [dam_svc];`}</code></pre>
 
       {!isPaas && (
         <>
-          <div className="section-label">Deployment format</div>
-          <select value={platform} onChange={(e) => { setPlatform(e.target.value); setInstructions(null); }} style={{ marginBottom: instEngine === 'mssql' ? 4 : 14 }}>
-            {instEngine === 'mssql' ? (
-              <>
-                <option value="windows_exe">Windows service (.exe) — on the SQL Server host</option>
-                <option value="docker">Docker image (on Windows, or a Linux collector)</option>
-              </>
-            ) : (
-              <>
-                <option value="binary">Static binary + systemd (no Docker)</option>
-                <option value="docker">Docker image</option>
-                <option value="package">OS package (.deb / .rpm)</option>
-              </>
-            )}
-            {/* Kubernetes (Helm) hidden until a chart is published — the registry is a placeholder. */}
-          </select>
-          {instEngine === 'mssql' && (
-            <div className="muted" style={{ fontSize: 11, marginBottom: 14, lineHeight: 1.5 }}>
-              SQL Server runs on Windows, so the Linux formats (systemd / .deb / .rpm) aren&apos;t shown — use the <b>.exe</b> as a service on the DB host, or <b>Docker</b> (on Windows, or on a remote Linux collector).
+          {isLite && (
+            <>
+              <div className="section-label">Agent host</div>
+              <select value={hostOs} onChange={(e) => { setHostOs(e.target.value); setInstructions(null); }} style={{ marginBottom: 6 }}>
+                <option value="linux">Linux host / collector</option>
+                <option value="windows">Windows host (on-box service)</option>
+              </select>
+              <div className="muted" style={{ fontSize: 11, marginBottom: 14, lineHeight: 1.5 }}>
+                <b>Windows</b> → runs as a service (<code>.exe</code>) on the DB host. <b>Linux</b> → a native package/binary or Docker, on the DB host or a remote collector.
+              </div>
+            </>
+          )}
+          {!isLite && (
+            <div className="muted" style={{ fontSize: 11, marginBottom: 8, lineHeight: 1.5 }}>
+              Network / host / inline-proxy capture is <b>Linux-only</b> (raw-socket &amp; eBPF).
             </div>
           )}
+          <div className="section-label">Deployment format</div>
+          <select value={platform} onChange={(e) => { setPlatform(e.target.value); setInstructions(null); }} style={{ marginBottom: 14 }}>
+            {fmtOpts.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            {/* Kubernetes (Helm) hidden until a chart is published — the registry is a placeholder. */}
+          </select>
 
           <div className="section-label">Data classification</div>
           <div className="approach-card" style={{ padding: 12, marginBottom: 8, cursor: canClassify ? 'pointer' : 'not-allowed', opacity: canClassify ? 1 : 0.55 }}
@@ -732,10 +747,10 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     // On-host Windows service: the agent runs under the Service Control Manager on the SQL Server
     // box (reads XEvents locally over TDS — captures TLS + row counts, no sqlservr.exe injection).
     // The service inherits no user env, so config lives in C:\ProgramData\TooVix\dam-agent.env.
-    return `${warn}# Windows service on the SQL Server host — run in an ELEVATED PowerShell.
-# Obtain dam-agent.exe from your DAM operator, then place it + write the config:
+    return `${warn}# Windows service on the DB host — run in an ELEVATED PowerShell.
+# 1) Download the agent + create the folders:
 New-Item -ItemType Directory -Force 'C:\\Program Files\\TooVix','C:\\ProgramData\\TooVix' | Out-Null
-Copy-Item .\\dam-agent.exe 'C:\\Program Files\\TooVix\\dam-agent.exe'
+Invoke-WebRequest -Uri '${cp}/api/download/dam-agent.exe' -OutFile 'C:\\Program Files\\TooVix\\dam-agent.exe'
 
 @'
 ${env.join('\n')}
