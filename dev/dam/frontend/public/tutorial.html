@@ -1174,10 +1174,11 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
         </tbody>
       </table>
       <div class="tip"><b>One decoding agent per transport.</b> Network reads only plaintext, host reads only TLS — a connection is one or the other, so you may run <b>both</b> on a mixed-transport DB with no double-counting. Never pair a passive agent with the inline proxy (it re-emits traffic → duplicate events).</div>
+      <div class="note"><b>The step-by-step runbooks below are <span class="eng-badge" style="margin:0">🐘 PostgreSQL</span>.</b> The commands (audit source, <code>pg_stat_ssl</code>, <code>pg_hba</code>, grants) are engine-specific — for <b>MySQL, SQL Server, Oracle, MongoDB</b> see the <a href="/guides/agentlite-mysql-vm.html">AgentLite setup guide</a>.</div>
     </section>
 
     <section id="sop-pg-network">
-      <span class="part-badge">Part 4 · SOPs</span>
+      <span class="part-badge">Part 4 · SOPs</span> <span class="eng-badge">🐘 PostgreSQL only</span>
       <h2>PostgreSQL — network agent (plaintext DB)</h2>
       <p>The right mode for a <b>plaintext</b> Postgres: decodes the wire in the clear, gives <b>row counts</b>, needs <b>no eBPF/kernel features</b> and <b>no DB or app change</b>.</p>
       <h4>Pre-checks — run on the DB VM (go/no-go)</h4>
@@ -1233,7 +1234,7 @@ journalctl -u dam-agent@network -f</code></pre>
     </section>
 
     <section id="sop-pg-host">
-      <span class="part-badge">Part 4 · SOPs</span>
+      <span class="part-badge">Part 4 · SOPs</span> <span class="eng-badge">🐘 PostgreSQL only</span>
       <h2>PostgreSQL — host (eBPF) agent (TLS DB)</h2>
       <div class="warn"><b>TLS-only.</b> Host mode hooks <code>libssl</code> to read plaintext <em>below</em> TLS. If the DB isn't using TLS — or the app is plaintext / unix-socket — it captures <b>nothing</b>. Needs <b>amd64</b>, <b>kernel ≥ 5.8</b>, <b>BTF</b>, and runs <b>privileged</b> on the DB host.</div>
       <h4>Pre-checks — run on the DB VM (go/no-go)</h4>
@@ -1262,7 +1263,7 @@ journalctl -u dam-agent@host -f     <span class="cmt"># PASS: uses .../libssl.so
     </section>
 
     <section id="sop-dam-svc">
-      <span class="part-badge">Part 4 · SOPs</span>
+      <span class="part-badge">Part 4 · SOPs</span> <span class="eng-badge">🐘 PostgreSQL only</span>
       <h2>Adding the read-only <code>dam_svc</code> role (classification / VA)</h2>
       <p>Capture needs <b>no</b> DB login. Add this only for <b>column classification</b> (PII/PCI) or <b>vulnerability scanning</b>. It's strictly read-only — it can never modify data.</p>
 
