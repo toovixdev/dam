@@ -9,6 +9,7 @@ require (
 	github.com/microsoft/go-mssqldb v1.7.0
 	github.com/sijms/go-ora/v2 v2.9.0
 	go.mongodb.org/mongo-driver v1.17.1
+	golang.org/x/sys v0.23.0
 )
 
 require (
@@ -25,6 +26,5 @@ require (
 	golang.org/x/crypto v0.26.0 // indirect
 	golang.org/x/exp v0.0.0-20230224173230-c95f2b4c22f2 // indirect
 	golang.org/x/sync v0.8.0 // indirect
-	golang.org/x/sys v0.23.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
 )

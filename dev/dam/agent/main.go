@@ -25,7 +25,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode/utf16"
 
@@ -168,7 +167,14 @@ func loadConfig() Config {
 
 var agentTypeByMode = map[string]string{"network": "network", "host": "host_ebpf", "proxy": "inline_proxy", "audit-forward": "audit_pull"}
 
-func main() {
+func main() { platformMain(runAgent) }
+
+// runAgent is the platform-independent agent entrypoint. It is called directly on Linux/macOS,
+// and under the Windows Service Control Manager on Windows (see platform_windows.go /
+// platform_other.go). loadEnvFileIfPresent lets a Windows service — which doesn't inherit a
+// user's environment — read its config from a file (mirrors a systemd EnvironmentFile).
+func runAgent() {
+	loadEnvFileIfPresent()
 	cfg := loadConfig()
 	log.SetFlags(log.Ltime)
 	log.Printf("=== TooVix DAM Agent v%s · mode=%s engine=%s target=%s:%s ===", cfg.Version, cfg.Mode, cfg.Engine, cfg.TargetHost, cfg.TargetPort)
@@ -227,59 +233,6 @@ func main() {
 // Shares the DB container's network namespace and sniffs its interface, decoding the MySQL
 // wire protocol on the client→server direction. Passive — observes, never blocks.
 var capDebug bool
-
-func runNetwork(cfg Config) {
-	iface := env("CAPTURE_IFACE", "eth0")
-	// "any" (ifindex 0) sniffs ALL interfaces incl. loopback — handy when SQL is run
-	// on the DB host itself (localhost connections travel over lo, not the primary NIC).
-	ifIndex := 0
-	if iface != "any" && iface != "" {
-		ifi, err := net.InterfaceByName(iface)
-		if err != nil {
-			log.Fatalf("interface %s not found: %v", iface, err)
-		}
-		ifIndex = ifi.Index
-	}
-	fd, err := syscall.Socket(syscall.AF_PACKET, syscall.SOCK_RAW, int(htons(0x0003))) // ETH_P_ALL
-	if err != nil {
-		log.Fatalf("AF_PACKET socket failed: %v (needs CAP_NET_RAW / root)", err)
-	}
-	defer syscall.Close(fd)
-	// Large receive buffer so a burst (e.g. a big result set flooding loopback) doesn't
-	// overflow the socket and drop frames — dropped frames desync the packet framer.
-	// SO_RCVBUFFORCE (33) bypasses net.core.rmem_max (we hold CAP_NET_ADMIN).
-	if e := syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, 33, 64*1024*1024); e != nil {
-		syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_RCVBUF, 64*1024*1024)
-	}
-	if err := syscall.Bind(fd, &syscall.SockaddrLinklayer{Protocol: htons(0x0003), Ifindex: ifIndex}); err != nil {
-		log.Fatalf("bind to %s failed: %v", iface, err)
-	}
-	targetPort := uint16(atoiDefault(cfg.TargetPort, 3306))
-	capDebug = env("CAPTURE_DEBUG", "false") == "true"
-	log.Printf("network agent sniffing %s for tcp/%d engine=%s (passive capture, debug=%v)", iface, targetPort, cfg.Engine, capDebug)
-
-	conns := map[string]*connState{}
-	// Big enough for a full IPv4 packet (65535) + link header, and for loopback GSO
-	// super-segments — a too-small buffer truncates large result sets and desyncs framing.
-	frame := make([]byte, 262144)
-	var frames uint64
-	for {
-		n, from, err := syscall.Recvfrom(fd, frame, 0)
-		if err != nil || n < 14 {
-			continue
-		}
-		// On loopback, each packet is delivered twice (outgoing + incoming copy). Skip the
-		// outgoing copy so we don't double-count queries/rows.
-		if sll, ok := from.(*syscall.SockaddrLinklayer); ok && sll.Pkttype == packetOutgoing {
-			continue
-		}
-		frames++
-		if capDebug && frames%50 == 0 {
-			log.Printf("[net-dbg] %d frames seen on %s", frames, iface)
-		}
-		handleFrame(cfg, frame[:n], targetPort, conns)
-	}
-}
 
 // handleFrame parses Ethernet/IPv4/TCP. Client→server payload is decoded for SQL;
 // server→client payload is parsed to count result rows for the pending query.
@@ -782,7 +735,6 @@ func parseResponseTDS(cfg Config, st *connState, buf []byte) []byte {
 	return buf
 }
 
-func htons(i uint16) uint16 { return (i<<8)&0xff00 | i>>8 }
 
 func atoiDefault(s string, d int) int {
 	n := 0
@@ -1513,7 +1465,6 @@ const (
 	nrRows
 )
 
-const packetOutgoing = 4 // linux PACKET_OUTGOING (loopback delivers a tx + rx copy)
 
 // sensTables maps a classified-sensitive table name → policy-taxonomy tags, refreshed by
 // each classification scan. Used to tag captured queries that read a sensitive table.

@@ -16,7 +16,6 @@ import (
 	"os"
 	"regexp"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -363,7 +362,7 @@ func lockAuditForward(path string) bool {
 		if err != nil {
 			continue
 		}
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if !flockFile(f) {
 			f.Close()
 			return false // held by another live audit-forward instance
 		}
