@@ -247,7 +247,12 @@
     <a href="#s-copilot">9 · The AI Copilot</a>
     <a href="#encryption">Encryption &amp; BYOK</a>
     <a href="#admin">Admin: users & setup</a>
-    <div class="toc-title">Part 4 · Wrap-up</div>
+    <div class="toc-title">Part 4 · SOPs & Runbooks</div>
+    <a href="#sop-runbooks">SOPs overview & mode matrix</a>
+    <a href="#sop-pg-network">PostgreSQL — network agent</a>
+    <a href="#sop-pg-host">PostgreSQL — host (eBPF) agent</a>
+    <a href="#sop-dam-svc">Read-only dam_svc role</a>
+    <div class="toc-title">Part 5 · Wrap-up</div>
     <a href="#bestpractice">Best practices</a>
     <a href="#quiz">Knowledge check</a>
     <a href="#glossary">Glossary</a>
@@ -1155,8 +1160,96 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
     </section>
 
     <!-- ══════════ PART 4 ══════════ -->
+    <section id="sop-runbooks">
+      <span class="part-badge">Part 4 · SOPs</span>
+      <h2>SOPs &amp; runbooks — onboarding a self-managed database</h2>
+      <p>The deploy sections above show the <em>commands</em>. These runbooks add the <b>pre-req checks</b> — the go/no-go gates that decide <b>which capture mode is even possible</b> for a given database — plus verification, so everyone follows the same steps. Choose the mode by <b>transport</b>:</p>
+      <table>
+        <thead><tr><th>Mode</th><th>Reads</th><th>Plaintext</th><th>TLS</th><th>Row counts</th><th>Blocks</th></tr></thead>
+        <tbody>
+          <tr><td><b>AgentLite</b></td><td>DB audit log</td><td>✅</td><td>✅</td><td>❌</td><td>❌</td></tr>
+          <tr><td><b>Network</b></td><td>the wire (AF_PACKET)</td><td>✅</td><td>❌ ciphertext</td><td>✅</td><td>❌</td></tr>
+          <tr><td><b>Host (eBPF)</b></td><td>libssl, below TLS</td><td>❌</td><td>✅</td><td>✅</td><td>❌</td></tr>
+          <tr><td><b>Inline proxy</b></td><td>terminates the connection</td><td>✅</td><td>✅</td><td>✅</td><td>✅</td></tr>
+        </tbody>
+      </table>
+      <div class="tip"><b>One decoding agent per transport.</b> Network reads only plaintext, host reads only TLS — a connection is one or the other, so you may run <b>both</b> on a mixed-transport DB with no double-counting. Never pair a passive agent with the inline proxy (it re-emits traffic → duplicate events).</div>
+    </section>
+
+    <section id="sop-pg-network">
+      <span class="part-badge">Part 4 · SOPs</span>
+      <h2>PostgreSQL — network agent (plaintext DB)</h2>
+      <p>The right mode for a <b>plaintext</b> Postgres: decodes the wire in the clear, gives <b>row counts</b>, needs <b>no eBPF/kernel features</b> and <b>no DB or app change</b>.</p>
+      <h4>Pre-checks — run on the DB VM (go/no-go)</h4>
+      <ul class="checklist">
+        <li><b>Plaintext</b> — app connections show <code>ssl = f</code>; network mode can't decode TLS.</li>
+        <li><b>TCP, not unix-socket</b> — <code>client_addr</code> is an IP (a sniffer sees no unix-socket packets → use AgentLite).</li>
+        <li><b>Right interface</b> — the NIC or <code>lo</code> that carries app↔DB packets; use <code>any</code> if unsure.</li>
+      </ul>
+      <pre><code><span class="cmt"># plaintext? (want ssl=f)     TCP? (want an IP, not unix-socket)</span>
+sudo -u postgres psql -d yourdb -c "SELECT s.ssl,count(*) FROM pg_stat_ssl s JOIN pg_stat_activity a ON a.pid=s.pid WHERE a.backend_type='client backend' GROUP BY s.ssl;"
+sudo -u postgres psql -d yourdb -c "SELECT COALESCE(host(client_addr)::text,'unix-socket') conn,count(*) FROM pg_stat_activity WHERE backend_type='client backend' GROUP BY 1;"</code></pre>
+      <h4>Install (as root) — .deb + systemd</h4>
+      <pre><code>curl -fsSL $CP/api/download/dam-agent_amd64.deb -o dam-agent.deb &amp;&amp; dpkg -i dam-agent.deb
+mkdir -p /etc/toovix; cat &gt; /etc/toovix/agent-network.env &lt;&lt;EOF
+MODE=network
+DB_ENGINE=postgresql
+TARGET_HOST=$DB_HOST
+TARGET_PORT=5432
+CAPTURE_IFACE=any            <span class="cmt"># eth0 / ens5 / lo / any</span>
+AGENT_ENROLL_TOKEN=$TOKEN
+CONTROL_PLANE=$CP
+EOF
+systemctl enable --now dam-agent@network
+journalctl -u dam-agent@network -f</code></pre>
+      <div class="tip">No events? Set <code>CAPTURE_DEBUG=true</code> — <b>0 frames</b> in the log means the wrong <code>CAPTURE_IFACE</code> (try <code>any</code>). Verify by running a query over TCP and watching <b>Database Activity</b>.</div>
+    </section>
+
+    <section id="sop-pg-host">
+      <span class="part-badge">Part 4 · SOPs</span>
+      <h2>PostgreSQL — host (eBPF) agent (TLS DB)</h2>
+      <div class="warn"><b>TLS-only.</b> Host mode hooks <code>libssl</code> to read plaintext <em>below</em> TLS. If the DB isn't using TLS — or the app is plaintext / unix-socket — it captures <b>nothing</b>. Needs <b>amd64</b>, <b>kernel ≥ 5.8</b>, <b>BTF</b>, and runs <b>privileged</b> on the DB host.</div>
+      <h4>Pre-checks — run on the DB VM (go/no-go)</h4>
+      <ul class="checklist">
+        <li><code>uname -m</code> = <b>x86_64</b>, <code>uname -r</code> ≥ <b>5.8</b>, and <code>/sys/kernel/btf/vmlinux</code> exists.</li>
+        <li><code>SHOW ssl;</code> = <b>on</b> and <code>libssl</code> is mapped by the postgres process.</li>
+        <li>App connections show <code>ssl = t</code> — they actually use TLS (not unix-socket).</li>
+      </ul>
+      <pre><code>uname -m; uname -r; ls /sys/kernel/btf/vmlinux
+sudo -u postgres psql -tAc "SHOW ssl;"
+grep -l libssl /proc/$(pgrep -x postgres | head -1)/maps
+sudo -u postgres psql -d yourdb -c "SELECT s.ssl,count(*) FROM pg_stat_ssl s JOIN pg_stat_activity a ON a.pid=s.pid WHERE a.backend_type='client backend' GROUP BY s.ssl;"</code></pre>
+      <h4>Install (as root)</h4>
+      <pre><code>curl -fsSL $CP/api/download/dam-agent_amd64.deb -o dam-agent.deb &amp;&amp; dpkg -i dam-agent.deb
+mkdir -p /etc/toovix; cat &gt; /etc/toovix/agent-host.env &lt;&lt;EOF
+MODE=host
+DB_ENGINE=postgresql
+TARGET_HOST=$DB_HOST
+TARGET_PORT=5432
+AGENT_ENROLL_TOKEN=$TOKEN
+CONTROL_PLANE=$CP
+EOF
+systemctl enable --now dam-agent@host
+journalctl -u dam-agent@host -f     <span class="cmt"># PASS: uses .../libssl.so + attached uprobe SSL_write</span></code></pre>
+      <div class="warn"><b>Plaintext DB but you want host mode?</b> Enable TLS first: create a server cert/key in the data dir (<code>chmod 600 server.key</code>), <code>ALTER SYSTEM SET ssl='on'</code> + reload, then move the <b>app</b> to <code>sslmode=require</code>. Nothing is captured until clients actually use TLS.</div>
+    </section>
+
+    <section id="sop-dam-svc">
+      <span class="part-badge">Part 4 · SOPs</span>
+      <h2>Read-only <code>dam_svc</code> role (classification / VA)</h2>
+      <p>Capture needs no DB login. Classification and vulnerability scanning use a least-privilege reader — it can never modify data:</p>
+      <pre><code>CREATE ROLE dam_svc LOGIN PASSWORD '&lt;strong-secret&gt;';
+GRANT pg_monitor TO dam_svc;                 <span class="cmt">-- read settings/stats; no write</span>
+<span class="cmt">-- per target database (\c yourdb):</span>
+GRANT CONNECT ON DATABASE yourdb TO dam_svc;
+GRANT USAGE ON SCHEMA public TO dam_svc;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO dam_svc;</code></pre>
+      <p>Then add <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=…</code>, <code>DB_NAME=yourdb</code> to the agent env.</p>
+    </section>
+
     <section id="bestpractice">
-      <span class="part-badge">Part 4 · Wrap-up</span>
+      <span class="part-badge">Part 5 · Wrap-up</span>
       <h2>Best practices for beginners</h2>
       <ul class="checklist">
         <li><b>Cover everything.</b> Every unmonitored database is a blind spot — register and deploy widely.</li>
@@ -1171,7 +1264,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
     </section>
 
     <section id="quiz" class="quiz">
-      <span class="part-badge">Part 4 · Wrap-up</span>
+      <span class="part-badge">Part 5 · Wrap-up</span>
       <h2>Quick knowledge check</h2>
       <p>Five questions to see what stuck. Click an answer.</p>
 
@@ -1219,7 +1312,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
     </section>
 
     <section id="glossary">
-      <span class="part-badge">Part 4 · Wrap-up</span>
+      <span class="part-badge">Part 5 · Wrap-up</span>
       <h2>Glossary</h2>
       <dl class="gloss">
         <dt>Agent</dt><dd>Software that captures a database's activity and feeds it to TooVix.</dd>
