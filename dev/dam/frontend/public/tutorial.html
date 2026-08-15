@@ -1281,11 +1281,24 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO dam_svc;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO dam_svc;   <span class="cmt">-- future tables too</span></code></pre>
       <div class="note"><b>Non-<code>public</code> schemas / app-owned tables:</b> repeat <code>USAGE</code>+<code>SELECT</code> per schema, and if the app creates tables as a different owner also run <code>ALTER DEFAULT PRIVILEGES FOR ROLE app_owner IN SCHEMA public GRANT SELECT ON TABLES TO dam_svc;</code>.</div>
 
-      <h4>2 · Let the agent host reach it</h4>
-      <pre><code><span class="cmt"># self-managed: add to pg_hba.conf, then reload (no restart)</span>
-hostssl  all  dam_svc  10.0.0.20/32  scram-sha-256      <span class="cmt"># agent host IP; use 'host' if not on TLS</span>
+      <h4>2 · Let the agent host reach it (self-managed only)</h4>
+      <p><b>Test first — you may not need this.</b> The agent logs in as <code>dam_svc</code> only for classification/VA, and for network/host mode it runs <b>on the DB VM itself</b>, so the connection is usually already allowed:</p>
+      <pre><code>psql "host=&lt;TARGET_HOST&gt; port=5432 dbname=yourdb user=dam_svc sslmode=prefer" -c "SELECT 1;"</code></pre>
+      <p>Returns <code>1</code> → done, skip the rest. If it fails with <code>no pg_hba.conf entry for … user "dam_svc"</code>, add a rule for the <b>agent's source IP</b>:</p>
+      <pre><code><span class="cmt"># (a) find the exact IP the server sees (NULL = unix socket → no rule needed):</span>
+psql "host=&lt;TARGET_HOST&gt; port=5432 dbname=yourdb user=dam_svc" -c "SELECT inet_client_addr();"
+
+<span class="cmt"># (b) find the file:</span>
+sudo -u postgres psql -tAc "SHOW hba_file;"
+
+<span class="cmt"># (c) ADD THIS LINE to that pg_hba.conf file (it is a config entry, NOT a shell command).</span>
+<span class="cmt">#     For network/host mode the agent is the DB VM itself → the IP is usually 127.0.0.1:</span>
+hostssl  all  dam_svc  127.0.0.1/32  scram-sha-256     <span class="cmt"># the agent's IP; use 'host' if not on TLS</span>
+
+<span class="cmt"># (d) reload (no restart):</span>
 sudo -u postgres psql -c "SELECT pg_reload_conf();"</code></pre>
-      <p>On managed Postgres (RDS / Cloud SQL / Azure) there's no <code>pg_hba</code> — allow the agent host via the <b>security group / authorized networks / firewall</b> instead.</p>
+      <div class="warn"><b>Use the agent's IP, never the DAM control-plane IP.</b> DAM <b>never connects into your database</b> — the agent only dials <em>out</em> to DAM over HTTPS. So the IP here is the <b>agent's</b> source address (for network/host mode that's the DB VM, typically <code>127.0.0.1</code>); the DAM public IP must never appear in <code>pg_hba.conf</code>.</div>
+      <p>On managed Postgres (RDS / Cloud SQL / Azure) there's no <code>pg_hba</code> file — allow the agent host via the <b>security group / authorized networks / firewall</b> instead.</p>
 
       <h4>3 · Verify (read yes, write no)</h4>
       <pre><code>SELECT has_table_privilege('dam_svc','public.your_table','SELECT');   <span class="cmt">-- expect: t</span>
