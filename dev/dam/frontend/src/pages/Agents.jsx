@@ -734,7 +734,7 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     : (eng === 'oracle')
       ? `#   Oracle — enable Unified Audit / FGA policies; the collector reads UNIFIED_AUDIT_TRAIL over SQL*Net (no local file).`
     : (eng === 'mssql')
-      ? `#   SQL Server — create an Extended Events session (${mssqlSource === 'xevents' ? 'ToovixXE' : 'SQL Server Audit'}); the poller reads it over TDS (no local file).`
+      ? `#   SQL Server — create an Extended Events session (${xe ? 'ToovixXE' : 'SQL Server Audit'}); the poller reads it over TDS (no local file).`
     : (eng === 'mongodb')
       ? `#   MongoDB — enable the profiler (db.setProfilingLevel(2)); the poller reads system.profile over the wire (no local file).`
     : '';
