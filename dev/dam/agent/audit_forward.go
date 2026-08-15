@@ -77,6 +77,18 @@ func runAuditForward(cfg Config) {
 // sys.fn_get_audit_file() — which also means the agent can run on a separate Linux host and reach
 // a Windows SQL Server over the network (no agent on Windows needed).
 //
+// mssqlAuditDB is the database the agent CONNECTS to for server-level audit/XEvents reads.
+// On-prem SQL Server: XEvents/Audit are ON SERVER, so we connect to master — the monitoring
+// login (VIEW SERVER STATE / CONTROL SERVER) is a *server* login that may have no user in the
+// monitored DB, so requesting DB_NAME as the initial catalog gets bounced ("Cannot open database").
+// Azure SQL: the XE session is ON DATABASE, so connect to DB_NAME there.
+func mssqlAuditDB(cfg Config) string {
+	if strings.Contains(strings.ToLower(cfg.TargetHost), ".database.windows.net") {
+		return orDefault(cfg.DBName, "master")
+	}
+	return "master"
+}
+
 // Setup required on the DB: a Server Audit (TO FILE) + a Server Audit Specification (e.g.
 // BATCH_COMPLETED_GROUP / SCHEMA_OBJECT_ACCESS_GROUP), both ENABLED. The login in DB_USER needs
 // CONTROL SERVER (to read the audit file). AUDIT_LOG must be the .sqlaudit path pattern, e.g.
@@ -86,7 +98,7 @@ func tailSqlServerAudit(cfg Config) {
 		log.Fatalf("audit-forward(mssql): DB_USER/DB_PASSWORD are required — the agent reads the audit over TDS (needs CONTROL SERVER)")
 	}
 	pollSec := atoiDefault(env("AUDIT_POLL_SEC", "10"), 10)
-	db, err := sql.Open("sqlserver", mssqlDSN(cfg, orDefault(cfg.DBName, "master")))
+	db, err := sql.Open("sqlserver", mssqlDSN(cfg, mssqlAuditDB(cfg)))
 	if err != nil {
 		log.Fatalf("audit-forward(mssql): open: %v", err)
 	}
@@ -185,7 +197,7 @@ func tailSqlServerXEvents(cfg Config) {
 		log.Fatalf("audit-forward(mssql/xevents): DB_USER/DB_PASSWORD required (reads the XE target over TDS)")
 	}
 	pollSec := atoiDefault(env("AUDIT_POLL_SEC", "10"), 10)
-	db, err := sql.Open("sqlserver", mssqlDSN(cfg, orDefault(cfg.DBName, "master")))
+	db, err := sql.Open("sqlserver", mssqlDSN(cfg, mssqlAuditDB(cfg)))
 	if err != nil {
 		log.Fatalf("audit-forward(mssql/xevents): open: %v", err)
 	}

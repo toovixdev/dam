@@ -70,7 +70,7 @@ AUDIT_SOURCE=xevents
 MSSQL_XE_SESSION=ToovixXE      ; agent discovers the live .xel + follows rollover (omit AUDIT_LOG)
 TARGET_HOST=SQLSERVER01        ; this instance's identity in DAM (and how the agent connects locally)
 TARGET_PORT=1433
-DB_NAME=YourDB
+DB_NAME=YourDB                 ; used by classification; for XEvents the agent connects to master (server-level reads)
 DB_USER=dam_svc
 DB_PASSWORD=CHANGE_ME_strong
 ```
