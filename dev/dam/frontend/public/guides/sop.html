@@ -225,27 +225,44 @@ sudo -u postgres psql -c "SELECT pg_reload_conf();"
   <ul>
     <li><b>Version:</b> SQL Server 2017+.</li>
     <li><b>Collector host:</b> any <b>Linux x86-64</b> host that can reach <code>&lt;db&gt;:1433</code> — <b>nothing is installed on Windows</b> (the agent polls over TDS).</li>
+    <li><b>Mixed-mode auth:</b> the collector uses <b>SQL authentication</b> (Windows auth can't be used from Linux), so enable it: Server → <b>Properties → Security</b> → "SQL Server and Windows Authentication mode" → restart the service. Check with <code>SELECT SERVERPROPERTY('IsIntegratedSecurityOnly')</code> (<code>1</code> = mixed mode is OFF).</li>
     <li><b>Login:</b> a SQL login with <b>VIEW SERVER STATE</b> (Extended Events) or <b>CONTROL SERVER</b> (SQL Server Audit). Classification reuses the same read-only login.</li>
   </ul>
+  <aside class="warn"><b>Connecting with SSMS to run this setup?</b> Two first-time snags: <b>(1)</b> <em>"certificate chain … not trusted"</em> — tick <b>Trust server certificate</b> in the connect dialog (<b>Options → Connection Security</b>); SQL Server's default cert is self-signed. <b>(2)</b> <em>Login failed (18456)</em> for a freshly-created Windows admin — it isn't a SQL login yet. <b>Run SSMS as administrator</b> (so UAC keeps the <code>BUILTIN\Administrators</code> token), or add yourself in single-user mode:
+  <pre><code>net stop MSSQLSERVER &amp;&amp; net start MSSQLSERVER /mSQLCMD
+sqlcmd -S localhost -E -C -Q "CREATE LOGIN [HOST\you] FROM WINDOWS; ALTER SERVER ROLE sysadmin ADD MEMBER [HOST\you];"
+net stop MSSQLSERVER &amp;&amp; net start MSSQLSERVER</code></pre></aside>
 
   <h3 id="mssql-agent">Agent — network / host</h3>
   <aside class="na"><b>Not available for SQL Server.</b> Host mode hooks OpenSSL, but SQL Server encrypts with Windows <b>SChannel</b> — there's no <code>libssl</code> to attach to, and there's no on-host wire agent for Windows. Use <b>AgentLite</b> below (it even gives row counts via Extended Events).</aside>
 
   <h3 id="mssql-lite">AgentLite — Extended Events / Audit (TDS poll)</h3>
-  <p>Pick a source, then run the Linux collector. <b>Extended Events adds row counts</b>; <b>Audit</b> gives cleaner object-level scoping.</p>
-  <pre><code><span class="cmt">-- Extended Events (row counts):</span>
-CREATE EVENT SESSION ToovixXE ON SERVER
+  <aside><b>Two halves.</b> SQL Server <b>captures</b> statements to a local <code>.xel</code> file; a Linux <b>collector polls that over TDS</b> and forwards to DAM. Your queries do <b>not</b> reach DAM until the collector is running — SQL Server has no connection to DAM on its own.</aside>
+
+  <h4>1 · Capture — create the telemetry session (in SSMS)</h4>
+  <p>Extended Events adds <b>row counts</b>; SQL Server Audit gives cleaner object-level scoping. Create the target folder first (PowerShell: <code>mkdir C:\SQLAudit</code>), then:</p>
+  <pre><code>CREATE EVENT SESSION ToovixXE ON SERVER
   ADD EVENT sqlserver.sql_statement_completed
     (ACTION(sqlserver.server_principal_name, sqlserver.client_hostname, sqlserver.database_name)
      WHERE [sqlserver].[database_name]=N'YourDB')
   ADD TARGET package0.event_file (SET filename=N'C:\SQLAudit\ToovixXE.xel', max_file_size=50, max_rollover_files=5)
   WITH (MAX_DISPATCH_LATENCY=5 SECONDS, STARTUP_STATE=ON);
-ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- START, not ON</span>
-GRANT VIEW SERVER STATE TO [dam_svc];</code></pre>
-  <pre><code><span class="cmt"># collector env (any Linux host reaching 1433):</span>
-<span class="cmt">MODE=audit-forward DB_ENGINE=mssql AUDIT_SOURCE=xevents (or sql_server_audit)</span>
-<span class="cmt">TARGET_HOST=&lt;sqlserver-addr&gt; TARGET_PORT=1433 DB_USER=dam_svc DB_PASSWORD=…</span>
-<span class="cmt">on-prem: AUDIT_LOG='C:\SQLAudit\ToovixXE*.xel'</span></code></pre>
+ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- START, not ON</span></code></pre>
+  <p>Confirm it's capturing locally <em>before</em> deploying the collector:</p>
+  <pre><code>SELECT name FROM sys.dm_xe_sessions WHERE name='ToovixXE';   <span class="cmt">-- a row = running</span>
+SELECT TOP 5 CAST(event_data AS XML) FROM sys.fn_xe_file_target_read_file('C:\SQLAudit\ToovixXE*.xel',NULL,NULL,NULL);</code></pre>
+
+  <h4>2 · Login — a SQL login for the collector</h4>
+  <pre><code>CREATE LOGIN dam_svc WITH PASSWORD='&lt;StrongSecret!&gt;', CHECK_POLICY=ON;   <span class="cmt">-- needs mixed-mode auth (prereqs)</span>
+GRANT VIEW SERVER STATE TO [dam_svc];   <span class="cmt">-- XEvents; use CONTROL SERVER for SQL Server Audit</span></code></pre>
+
+  <h4>3 · Collector — run the Linux forwarder</h4>
+  <pre><code><span class="cmt"># any Linux host reaching &lt;db&gt;:1433:</span>
+MODE=audit-forward DB_ENGINE=mssql AUDIT_SOURCE=xevents   <span class="cmt"># or sql_server_audit</span>
+TARGET_HOST=&lt;sqlserver-addr&gt; TARGET_PORT=1433 DB_USER=dam_svc DB_PASSWORD=…
+AUDIT_LOG='C:\SQLAudit\ToovixXE*.xel'
+AGENT_ENROLL_TOKEN=tvxenr_... CONTROL_PLANE=https://dam.yourcompany.com</code></pre>
+  <aside>The collector <b>auto-trusts SQL Server's self-signed certificate</b> (<code>TrustServerCertificate=true</code>) and, on-prem, connects cleartext by default (<code>MSSQL_ENCRYPT=disable</code>; Azure SQL is auto-forced to TLS). No cert setup needed. One collector host can run <b>many</b> <code>dam-agent@&lt;name&gt;</code> instances — one per SQL Server.</aside>
 
   <h3 id="mssql-paas">PaaS — Azure SQL (agentless / collector)</h3>
   <ul>
