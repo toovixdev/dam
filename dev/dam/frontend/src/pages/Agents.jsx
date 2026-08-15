@@ -411,6 +411,9 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
               ))}
             </div>
           </div>
+          <div style={{ margin: '0 0 14px', fontSize: 12.5 }}>
+            📖 <a href="/guides/sop.html" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--green)', fontWeight: 600 }}>Database Onboarding SOPs — prereqs · Agent · AgentLite · PaaS, per engine ↗</a>
+          </div>
           {has('proxy') && (
             <div style={{ background: 'var(--info-soft)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 14, lineHeight: 1.5 }}>
               Inline proxy changes the connection path — clients/apps must connect through the proxy (it forwards to the DB). It&apos;s the only mode that can block. Passive agents alongside it catch traffic that bypasses the proxy.
