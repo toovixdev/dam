@@ -249,9 +249,13 @@
     <a href="#admin">Admin: users & setup</a>
     <div class="toc-title">Part 4 · SOPs & Runbooks</div>
     <a href="#sop-runbooks">SOPs overview & mode matrix</a>
-    <a href="#sop-pg-network">PostgreSQL — network agent</a>
-    <a href="#sop-pg-host">PostgreSQL — host (eBPF) agent</a>
-    <a href="#sop-dam-svc">Read-only dam_svc role</a>
+    <a href="#sop-pg-network">🐘 PostgreSQL — network agent</a>
+    <a href="#sop-pg-host">🐘 PostgreSQL — host (eBPF) agent</a>
+    <a href="#sop-dam-svc">🐘 PostgreSQL — dam_svc role</a>
+    <a href="#sop-mysql">🐬 MySQL — network / host / AgentLite</a>
+    <a href="#sop-mssql">🪟 SQL Server — AgentLite</a>
+    <a href="#sop-oracle">🅾️ Oracle — AgentLite</a>
+    <a href="#sop-mongo">🍃 MongoDB — AgentLite</a>
     <div class="toc-title">Part 5 · Wrap-up</div>
     <a href="#bestpractice">Best practices</a>
     <a href="#quiz">Knowledge check</a>
@@ -1174,7 +1178,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
         </tbody>
       </table>
       <div class="tip"><b>One decoding agent per transport.</b> Network reads only plaintext, host reads only TLS — a connection is one or the other, so you may run <b>both</b> on a mixed-transport DB with no double-counting. Never pair a passive agent with the inline proxy (it re-emits traffic → duplicate events).</div>
-      <div class="note"><b>The step-by-step runbooks below are <span class="eng-badge" style="margin:0">🐘 PostgreSQL</span>.</b> The commands (audit source, <code>pg_stat_ssl</code>, <code>pg_hba</code>, grants) are engine-specific — for <b>MySQL, SQL Server, Oracle, MongoDB</b> see the <a href="/guides/agentlite-mysql-vm.html">AgentLite setup guide</a>.</div>
+      <div class="note"><b>Pick your engine below.</b> Network &amp; host (eBPF) capture apply to <span class="eng-badge" style="margin:0">🐘 PostgreSQL</span> and <span class="eng-badge" style="margin:0">🐬 MySQL</span>; <span class="eng-badge" style="margin:0">🪟 SQL Server</span>, <span class="eng-badge" style="margin:0">🅾️ Oracle</span> and <span class="eng-badge" style="margin:0">🍃 MongoDB</span> use <b>AgentLite</b> (poll/log — no host/network). Commands are engine-specific: run only the ones under your engine's badge. Full prose per engine is in the <a href="/guides/agentlite-mysql-vm.html">AgentLite setup guide</a>.</div>
     </section>
 
     <section id="sop-pg-network">
@@ -1291,6 +1295,104 @@ psql "host=&lt;db&gt; port=5432 dbname=yourdb user=dam_svc sslmode=prefer" -c "S
 
       <h4>4 · Point the agent at it</h4>
       <p>Add to the agent env (alongside the capture config): <code>CLASSIFY=true</code>, <code>DB_USER=dam_svc</code>, <code>DB_PASSWORD=…</code>, <code>DB_NAME=yourdb</code>. Add <code>VA_SCAN=true</code> to also run vulnerability assessment.</p>
+    </section>
+
+    <section id="sop-mysql">
+      <span class="part-badge">Part 4 · SOPs</span> <span class="eng-badge">🐬 MySQL</span>
+      <h2>MySQL — network / host agent, AgentLite &amp; dam_svc</h2>
+      <p>MySQL supports the same modes as PostgreSQL: <b>network</b> (plaintext wire), <b>host/eBPF</b> (below TLS), and <b>AgentLite</b> (general query log). Same three go/no-go gates — MySQL commands below. Port is <b>3306</b>.</p>
+
+      <h4>Pre-checks — run on the DB VM</h4>
+      <pre><code><span class="cmt"># ① plaintext? per-session cipher — empty = plaintext (network OK); a cipher = TLS (host mode)</span>
+mysql -e "SELECT t.processlist_user usr, COALESCE(NULLIF(s.variable_value,''),'(plaintext)') tls
+  FROM performance_schema.status_by_thread s JOIN performance_schema.threads t ON t.thread_id=s.thread_id
+  WHERE s.variable_name='Ssl_cipher';"
+
+<span class="cmt"># ② TCP vs socket? Host='localhost' = unix socket; 'ip:port' = TCP (network needs TCP)</span>
+mysql -e "SELECT SUBSTRING_INDEX(host,':',1) src, count(*) FROM information_schema.processlist GROUP BY 1;"
+
+<span class="cmt"># ③ interface (same as PG, port 3306)</span>
+sudo ss -Htnp state established '( sport = :3306 )' | awk '{print $4"  &lt;-  "$5}'
+ip -o -4 addr show | awk '{print $2, $4}'</code></pre>
+      <div class="note"><b>Read it:</b> plaintext + TCP → <b>network mode</b>; a cipher (TLS) → <b>host mode</b> (needs libssl on <code>mysqld</code>); unix-socket only → AgentLite.</div>
+
+      <h4>Install — network (plaintext) or host (TLS)</h4>
+      <pre><code>cat &gt; /etc/toovix/agent-network.env &lt;&lt;EOF
+MODE=network                <span class="cmt"># host mode: MODE=host (kernel ≥5.8, BTF, privileged, DB must use TLS)</span>
+DB_ENGINE=mysql
+TARGET_HOST=$DB_HOST
+TARGET_PORT=3306
+CAPTURE_IFACE=any
+AGENT_ENROLL_TOKEN=$TOKEN
+CONTROL_PLANE=$CP
+EOF
+systemctl enable --now dam-agent@network      <span class="cmt"># or dam-agent@host</span></code></pre>
+
+      <h4>AgentLite (general query log) — detective, no row counts</h4>
+      <pre><code>mysql -e "SET GLOBAL log_output='FILE'; SET GLOBAL general_log_file='/var/log/mysql/general.log'; SET GLOBAL general_log='ON';"
+<span class="cmt"># agent env: MODE=audit-forward DB_ENGINE=mysql AUDIT_SOURCE=general_log AUDIT_LOG=/var/log/mysql/general.log</span></code></pre>
+
+      <h4>Read-only <code>dam_svc</code> (classification / VA)</h4>
+      <pre><code>CREATE USER 'dam_svc'@'%' IDENTIFIED BY '&lt;strong-secret&gt;';
+GRANT SELECT, PROCESS ON *.* TO 'dam_svc'@'%';
+FLUSH PRIVILEGES;</code></pre>
+    </section>
+
+    <section id="sop-mssql">
+      <span class="part-badge">Part 4 · SOPs</span> <span class="eng-badge">🪟 SQL Server</span>
+      <h2>SQL Server — AgentLite (Extended Events / Audit)</h2>
+      <div class="note"><b>No host/network mode.</b> SQL Server's TLS (SChannel) can't be eBPF-hooked, so it's AgentLite only — a Linux collector <b>polls over TDS</b> (port 1433); nothing is installed on Windows.</div>
+      <h4>1 · Enable a telemetry source</h4>
+      <pre><code><span class="cmt">-- Extended Events (adds ROW COUNTS):</span>
+CREATE EVENT SESSION ToovixXE ON SERVER
+  ADD EVENT sqlserver.sql_statement_completed
+    (ACTION(sqlserver.server_principal_name, sqlserver.client_hostname, sqlserver.database_name)
+     WHERE [sqlserver].[database_name]=N'YourDB')
+  ADD TARGET package0.event_file (SET filename=N'C:\SQLAudit\ToovixXE.xel', max_file_size=50, max_rollover_files=5)
+  WITH (MAX_DISPATCH_LATENCY=5 SECONDS, STARTUP_STATE=ON);
+ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- START, not ON</span></code></pre>
+      <h4>2 · Grant the collector login</h4>
+      <pre><code>GRANT VIEW SERVER STATE TO [dam_svc];   <span class="cmt">-- XEvents; SQL Server Audit needs CONTROL SERVER</span></code></pre>
+      <h4>3 · Run the collector (any Linux host that reaches &lt;db&gt;:1433)</h4>
+      <pre><code><span class="cmt"># env: MODE=audit-forward DB_ENGINE=mssql AUDIT_SOURCE=xevents (or sql_server_audit)</span>
+<span class="cmt">#      TARGET_HOST=&lt;sqlserver-addr&gt; TARGET_PORT=1433 DB_USER=dam_svc DB_PASSWORD=…</span>
+<span class="cmt">#      on-prem: AUDIT_LOG='C:\SQLAudit\ToovixXE*.xel'  ·  Azure SQL: MSSQL_XE_SESSION=ToovixXE (omit AUDIT_LOG)</span></code></pre>
+    </section>
+
+    <section id="sop-oracle">
+      <span class="part-badge">Part 4 · SOPs</span> <span class="eng-badge">🅾️ Oracle</span>
+      <h2>Oracle — AgentLite (Unified Audit Trail)</h2>
+      <div class="note"><b>No host/network mode.</b> The collector polls <code>UNIFIED_AUDIT_TRAIL</code> over SQL*Net (port 1521) with a read-only login — covers VM, RDS and OCI Autonomous DB.</div>
+      <h4>1 · Create the read-only login</h4>
+      <pre><code>CREATE USER dam_svc IDENTIFIED BY "&lt;strong-secret&gt;";
+GRANT CREATE SESSION TO dam_svc;
+GRANT AUDIT_VIEWER TO dam_svc;          <span class="cmt">-- reads UNIFIED_AUDIT_TRAIL</span>
+GRANT SELECT_CATALOG_ROLE TO dam_svc;   <span class="cmt">-- V$SQLSTATS (row counts) + ALL_TAB_COLUMNS (classify)</span></code></pre>
+      <h4>2 · Enable an audit policy (except the monitor login)</h4>
+      <pre><code>CREATE AUDIT POLICY toovix_dml ACTIONS SELECT, INSERT, UPDATE, DELETE;
+AUDIT POLICY toovix_dml EXCEPT dam_svc;   <span class="cmt">-- so the poller doesn't audit its own reads</span></code></pre>
+      <h4>3 · Run the collector</h4>
+      <pre><code><span class="cmt"># env: MODE=audit-forward DB_ENGINE=oracle AUDIT_SOURCE=unified_audit_trail</span>
+<span class="cmt">#      TARGET_HOST=&lt;oracle-addr&gt; TARGET_PORT=1521 ORACLE_SERVICE=&lt;service&gt; DB_USER=dam_svc DB_PASSWORD=…</span></code></pre>
+    </section>
+
+    <section id="sop-mongo">
+      <span class="part-badge">Part 4 · SOPs</span> <span class="eng-badge">🍃 MongoDB</span>
+      <h2>MongoDB — AgentLite (database profiler)</h2>
+      <div class="note"><b>No host/network mode.</b> Community has no audit log; the collector polls the <code>system.profile</code> collection (port 27017) — covers Atlas and any remote <code>mongod</code>.</div>
+      <h4>1 · Enable profiling on the target DB</h4>
+      <pre><code>use yourdb
+db.setProfilingLevel(2, { slowms: 0 })     <span class="cmt">// every op; persist in mongod.conf → operationProfiling.mode: all</span></code></pre>
+      <h4>2 · Create the monitoring user (least privilege — <b>not</b> dbAdmin)</h4>
+      <pre><code>use yourdb
+db.createRole({ role:'toovixProfiler', privileges:[{ resource:{db:'yourdb',collection:''}, actions:['enableProfiler'] }], roles:[] })
+use admin
+db.createUser({ user:'dam_svc', pwd:'&lt;strong-secret&gt;', roles:[
+  { role:'clusterMonitor', db:'admin' }, { role:'read', db:'yourdb' }, { role:'toovixProfiler', db:'yourdb' } ] })</code></pre>
+      <h4>3 · Run the collector</h4>
+      <pre><code><span class="cmt"># env: MODE=audit-forward DB_ENGINE=mongodb AUDIT_SOURCE=profiler</span>
+<span class="cmt">#      TARGET_HOST=&lt;mongo-addr&gt; TARGET_PORT=27017 DB_NAME=yourdb DB_USER=dam_svc DB_PASSWORD=…</span>
+<span class="cmt">#      Atlas: MONGO_URI='mongodb+srv://…'  ·  large reads: MONGO_INCLUDE_GETMORE=true</span></code></pre>
     </section>
 
     <section id="bestpractice">
