@@ -10115,48 +10115,120 @@ app.get('/api/compliance/frameworks', authRequired, async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// Unified framework control matrix — the single auditor-navigable view that joins the three
-// surfaces: posture controls (measured + attested) ↔ their backing catalog evidence reports
-// ↔ the latest sealed/attested evidence record. Matches posture `reference` to catalog `control`
-// on the normalized §-code. Catalog reports with no posture control surface as evidence-only rows.
+// Compose the unified framework matrix: posture controls (measured + attested) ↔ their backing
+// catalog evidence reports ↔ the latest sealed/attested evidence record. Matches posture
+// `reference` to catalog `control` on the normalized §-code. Shared by the matrix API + the
+// audit-binder PDF so both tell the identical story.
+async function frameworkMatrix(tenantId, key) {
+  key = String(key || '').toLowerCase();
+  const fw = (await complianceFrameworks(tenantId)).find((f) => f.key === key);
+  if (!fw) return null;
+  // normalize a citation to its bare code: 'HIPAA §164.312(b)' & '164.312(b)' → '164.312(b)'
+  const norm = (s) => String(s || '').replace(/hipaa|pci-dss|pci|sox|gdpr|§/gi, '').replace(/\s+/g, '').toLowerCase();
+  const reports = COMPLIANCE_CATALOG.filter((c) => c.framework.toUpperCase().startsWith(key.toUpperCase()));
+  const byCode = {};
+  for (const r of reports) (byCode[norm(r.control)] || (byCode[norm(r.control)] = [])).push(r);
+  const ev = reports.length ? (await pgPool.query(
+    `SELECT DISTINCT ON (catalog_id) catalog_id, id, status, reviewer, reviewed_at, generated_at, content_hash, row_total
+       FROM compliance_evidence WHERE tenant_id=$1 AND catalog_id = ANY($2)
+       ORDER BY catalog_id, generated_at DESC`,
+    [tenantId, reports.map((r) => r.id)])).rows : [];
+  const evByCat = {}; for (const e of ev) evByCat[e.catalog_id] = e;
+  const used = new Set();
+  const mapReport = (r) => {
+    used.add(r.id); const e = evByCat[r.id];
+    return { catalogId: r.id, name: r.name, control: r.control, kind: r.kind,
+      latestEvidence: e ? { id: e.id, status: e.status, reviewer: e.reviewer, reviewed_at: e.reviewed_at, generated_at: e.generated_at, content_hash: e.content_hash, rows: e.row_total } : null };
+  };
+  const controls = fw.controls.map((c) => ({ ...c, catalogReports: (byCode[norm(c.reference)] || []).map(mapReport) }));
+  const evidenceOnly = reports.filter((r) => !used.has(r.id)).map(mapReport);
+  const coverage = {
+    postureControls: fw.controls.length,
+    catalogReports: reports.length,
+    controlsWithEvidence: controls.filter((c) => c.catalogReports.some((r) => r.latestEvidence)).length,
+    evidenceRecords: ev.length,
+    attestedRecords: ev.filter((e) => e.status === 'attested').length,
+  };
+  return { key: fw.key, name: fw.name, score: fw.score, status: fw.status, controls, evidenceOnly, coverage };
+}
+// The single auditor-navigable view. Catalog reports with no posture control surface as evidenceOnly.
 app.get('/api/compliance/framework/:key/matrix', authRequired, async (req, res) => {
   try {
-    const key = String(req.params.key || '').toLowerCase();
-    const fws = await complianceFrameworks(req.user.tenantId);
-    const fw = fws.find((f) => f.key === key);
-    if (!fw) return res.status(404).json({ error: 'Unknown framework' });
-    // normalize a citation to its bare code: 'HIPAA §164.312(b)' & '164.312(b)' → '164.312(b)'
-    const norm = (s) => String(s || '').replace(/hipaa|pci-dss|pci|sox|gdpr|§/gi, '').replace(/\s+/g, '').toLowerCase();
-    const reports = COMPLIANCE_CATALOG.filter((c) => c.framework.toUpperCase().startsWith(key.toUpperCase()));
-    const byCode = {};
-    for (const r of reports) (byCode[norm(r.control)] || (byCode[norm(r.control)] = [])).push(r);
-    // latest evidence record per catalog_id for this tenant
-    const ev = reports.length ? (await pgPool.query(
-      `SELECT DISTINCT ON (catalog_id) catalog_id, id, status, reviewer, reviewed_at, generated_at, content_hash, row_total
-         FROM compliance_evidence WHERE tenant_id=$1 AND catalog_id = ANY($2)
-         ORDER BY catalog_id, generated_at DESC`,
-      [req.user.tenantId, reports.map((r) => r.id)])).rows : [];
-    const evByCat = {}; for (const e of ev) evByCat[e.catalog_id] = e;
-    const used = new Set();
-    const mapReport = (r) => {
-      used.add(r.id); const e = evByCat[r.id];
-      return { catalogId: r.id, name: r.name, control: r.control, kind: r.kind,
-        latestEvidence: e ? { id: e.id, status: e.status, reviewer: e.reviewer, reviewed_at: e.reviewed_at, generated_at: e.generated_at, content_hash: e.content_hash, rows: e.row_total } : null };
-    };
-    const controls = fw.controls.map((c) => ({ ...c, catalogReports: (byCode[norm(c.reference)] || []).map(mapReport) }));
-    const evidenceOnly = reports.filter((r) => !used.has(r.id)).map(mapReport);
-    res.json({
-      key: fw.key, name: fw.name, score: fw.score, status: fw.status,
-      controls, evidenceOnly,
-      coverage: {
-        postureControls: fw.controls.length,
-        catalogReports: reports.length,
-        controlsWithEvidence: controls.filter((c) => c.catalogReports.some((r) => r.latestEvidence)).length,
-        evidenceRecords: ev.length,
-        attestedRecords: ev.filter((e) => e.status === 'attested').length,
-      },
-    });
+    const m = await frameworkMatrix(req.user.tenantId, req.params.key);
+    if (!m) return res.status(404).json({ error: 'Unknown framework' });
+    res.json(m);
   } catch (e) { console.error('[Compliance] matrix failed:', e.message); res.status(500).json({ error: 'Matrix failed' }); }
+});
+
+// Audit binder PDF: every control → status → §-citation → backing SEALED evidence record
+// (content hash + reviewer sign-off). Reuses the compliance-pack PDF writer with the matrix data.
+app.get('/api/compliance/framework/:key/binder.pdf', authRequired, async (req, res) => {
+  try {
+    const m = await frameworkMatrix(req.user.tenantId, req.params.key);
+    if (!m) return res.status(404).json({ error: 'Unknown framework' });
+    const h12 = (h) => h ? String(h).slice(0, 12) : '';
+    // Fold each control's backing sealed-evidence record into its evidence line.
+    const enrichCtl = (c) => {
+      let sfx = '';
+      const withEv = c.catalogReports.find((r) => r.latestEvidence);
+      if (withEv) { const e = withEv.latestEvidence;
+        sfx = ` | Report ${withEv.control}: ${e.status}${e.reviewer ? ' by ' + e.reviewer : ''} (sha256:${h12(e.content_hash)})`;
+      } else if (c.catalogReports.length) {
+        sfx = ` | Backing report ${c.catalogReports[0].control} — no evidence generated yet`;
+      }
+      const base = (c.evidence && c.evidence.summary) || '';
+      return { control: c.control, status: c.status, reference: c.reference, evidence: { summary: (base + sfx).trim() } };
+    };
+    // Catalog reports with no posture control → evidence rows.
+    const evRows = m.evidenceOnly.map((r) => {
+      const e = r.latestEvidence;
+      return { control: r.name, status: e && e.status === 'attested' ? 'ok' : 'warn', reference: r.control,
+        evidence: { summary: e ? `Sealed evidence: ${e.status}${e.reviewer ? ' by ' + e.reviewer : ''} (sha256:${h12(e.content_hash)}, ${e.rows} rows)` : 'Evidence report available — not yet generated' } };
+    });
+    const enriched = { name: m.name, score: m.score, status: m.status, controls: m.controls.map(enrichCtl).concat(evRows) };
+    const pdf = buildCompliancePackPdf(enriched, req.user.tenantName || 'Workspace', req.user.email || 'system');
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.binder.export', resourceType: 'framework', resourceId: m.key, details: { score: m.score, evidenceRecords: m.coverage.evidenceRecords } });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="audit-binder-${m.key}.pdf"`);
+    res.send(pdf);
+  } catch (e) { console.error('[Compliance] binder failed:', e.message); res.status(500).json({ error: 'Could not generate binder' }); }
+});
+
+// ── Certified compliance packs — signed, versioned framework content ────────────
+// A "pack" is the framework's control definitions (the catalog reports mapped to §-codes),
+// bundled with a rule citation + effective date + revision and cryptographically signed with
+// the same key the VA check-packs use. This turns hardcoded catalog content into a versioned,
+// verifiable, auto-updating pack (the "certified" story) without a code deploy on the agent side.
+const COMPLIANCE_PACK_META = {
+  hipaa:     { name: 'HIPAA',   rule: 'HIPAA Security Rule — 45 CFR Part 164', effective: '2013-03-26', revision: '1.0.0' },
+  'pci-dss': { name: 'PCI-DSS', rule: 'PCI-DSS v4.0',                          effective: '2024-03-31', revision: '1.0.0' },
+  sox:       { name: 'SOX',     rule: 'Sarbanes-Oxley — ITGC',                 effective: '2004-11-15', revision: '1.0.0' },
+  gdpr:      { name: 'GDPR',    rule: 'EU GDPR 2016/679',                      effective: '2018-05-25', revision: '1.0.0' },
+};
+// The pack-signing public key — consumers fetch it (over TLS) to verify a pulled pack.
+app.get('/api/compliance/pack/pubkey', authRequired, async (req, res) => {
+  const key = await vaSigningKey();
+  if (!key) return res.status(503).json({ error: 'signing key not ready' });
+  res.json({ key_id: key.keyId, public_pem: key.publicPem });
+});
+app.get('/api/compliance/pack/:framework', authRequired, async (req, res) => {
+  try {
+    const fwKey = String(req.params.framework || '').toLowerCase();
+    const meta = COMPLIANCE_PACK_META[fwKey];
+    if (!meta) return res.status(404).json({ error: 'Unknown compliance pack' });
+    const controls = COMPLIANCE_CATALOG
+      .filter((c) => c.framework.toLowerCase() === fwKey || c.framework.toLowerCase() === meta.name.toLowerCase())
+      .map((c) => ({ id: c.id, control: c.control, controlName: c.controlName, kind: c.kind, description: c.description }));
+    // Content version: hash of the control set + revision (changes only when the pack changes).
+    const basis = controls.map((c) => `${c.id}:${c.control}`).sort().join('|') + `|${meta.revision}`;
+    const version = crypto.createHash('sha256').update(basis).digest('hex').slice(0, 16);
+    const pack = { pack_id: fwKey, name: meta.name, rule: meta.rule, effective_date: meta.effective, pack_revision: meta.revision, version, control_count: controls.length, controls };
+    // Sign the exact payload string a verifier will parse (avoids re-serialization drift).
+    const key = await vaSigningKey();
+    const payload = JSON.stringify(pack);
+    const signature = key ? vaSign(key.privatePem, payload) : null;
+    res.json({ ...pack, payload, signature, key_id: key ? key.keyId : null });
+  } catch (e) { console.error('[Compliance] pack failed:', e.message); res.status(500).json({ error: 'Pack build failed' }); }
 });
 // The policy/process controls that carry no telemetry — the only ones an operator can attest.
 // Measured controls reject attestation: their status comes from live data, not sign-off.
