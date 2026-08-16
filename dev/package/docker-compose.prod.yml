@@ -1,0 +1,687 @@
+{
+  "networks": {
+    "client-net": {
+      "driver": "bridge",
+      "name": "dev_client-net"
+    },
+    "dam-net": {
+      "driver": "bridge",
+      "name": "dev_dam-net"
+    }
+  },
+  "services": {
+    "dam-admin-react": {
+      "container_name": "dam-admin-react",
+      "depends_on": {
+        "dam-api": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "5174",
+          "target": 5174
+        }
+      ],
+      "restart": "unless-stopped",
+      "image": "dam-admin-react:prod"
+    },
+    "dam-api": {
+      "container_name": "dam-api",
+      "depends_on": {
+        "dam-approval-signer": {
+          "condition": "service_started",
+          "required": true
+        },
+        "dam-clickhouse": {
+          "condition": "service_started",
+          "required": true
+        },
+        "dam-nats": {
+          "condition": "service_started",
+          "required": true
+        },
+        "dam-postgres": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "dam-redis": {
+          "condition": "service_healthy",
+          "required": true
+        },
+        "dam-vault": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "environment": {
+        "AGENT_ENROLL_TOKEN": "${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}",
+        "API_PUBLIC_URL": "${API_PUBLIC_URL:-http://localhost:3000}",
+        "APP_BASE_URL": "${APP_BASE_URL:-http://localhost:5173}",
+        "ARCHIVE_BUCKET": "${ARCHIVE_BUCKET:-dam-audit-archive}",
+        "ARCHIVE_LOCK_DAYS": "${ARCHIVE_LOCK_DAYS:-7}",
+        "ARCHIVE_LOCK_MODE": "${ARCHIVE_LOCK_MODE:-GOVERNANCE}",
+        "ARCHIVE_PROVIDER": "${ARCHIVE_PROVIDER:-s3}",
+        "AUDIT_SIGNING_KEY": "${AUDIT_SIGNING_KEY:-dev-audit-signing-key}",
+        "AZURE_CLIENT_ID": "${AZURE_CLIENT_ID}",
+        "AZURE_CLIENT_SECRET": "${AZURE_CLIENT_SECRET}",
+        "AZURE_REDIRECT_URI": "${AZURE_REDIRECT_URI}",
+        "AZURE_STORAGE_ACCOUNT": "${AZURE_STORAGE_ACCOUNT:-}",
+        "AZURE_STORAGE_CONNECTION_STRING": "${AZURE_STORAGE_CONNECTION_STRING:-}",
+        "AZURE_STORAGE_KEY": "${AZURE_STORAGE_KEY:-}",
+        "AZURE_TENANT_ID": "${AZURE_TENANT_ID}",
+        "BILLING_TEST_TOTAL_USD": "${BILLING_TEST_TOTAL_USD:-}",
+        "CLICKHOUSE_HOST": "dam-clickhouse",
+        "CLICKHOUSE_PASSWORD": "${DAM_CLICKHOUSE_PASSWORD}",
+        "CLICKHOUSE_PORT": 8123,
+        "CLICKHOUSE_USER": "dam_writer",
+        "CLIENT_MYSQL_ROOT_PASSWORD": "${CLIENT_MYSQL_ROOT_PASSWORD}",
+        "CREDENTIAL_ENCRYPTION_KEY": "${CREDENTIAL_ENCRYPTION_KEY:-}",
+        "EXEC_MYSQL_PASS": "${EXEC_MYSQL_PASS:-${CLIENT_MYSQL_ROOT_PASSWORD}}",
+        "EXEC_MYSQL_USER": "${EXEC_MYSQL_USER:-app_payments}",
+        "EXEC_PG_PASS": "${EXEC_PG_PASS:-${CLIENT_PG_PASSWORD}}",
+        "EXEC_PG_USER": "${EXEC_PG_USER:-app_crm}",
+        "JWT_SECRET": "${DAM_JWT_SECRET}",
+        "NATS_URL": "nats://dam-nats:4222",
+        "NODE_ENV": "development",
+        "NVD_API_KEY": "${NVD_API_KEY:-}",
+        "NVD_SYNC_ENABLED": "${NVD_SYNC_ENABLED:-}",
+        "OKTA_CLIENT_ID": "${OKTA_CLIENT_ID:-}",
+        "OKTA_CLIENT_SECRET": "${OKTA_CLIENT_SECRET:-}",
+        "OKTA_DOMAIN": "${OKTA_DOMAIN:-}",
+        "OKTA_REDIRECT_URI": "${OKTA_REDIRECT_URI:-http://localhost:5173/auth/okta/callback}",
+        "PAYU_MERCHANT_KEY": "${PAYU_MERCHANT_KEY:-}",
+        "PAYU_MODE": "${PAYU_MODE:-test}",
+        "PAYU_SALT": "${PAYU_SALT:-}",
+        "PG_DATABASE": "dam_control",
+        "PG_HOST": "dam-postgres",
+        "PG_PASSWORD": "${DAM_PG_PASSWORD}",
+        "PG_PORT": 5432,
+        "PG_USER": "dam_admin",
+        "PLATFORM_ADMIN_EMAIL": "${PLATFORM_ADMIN_EMAIL:-}",
+        "PLATFORM_ADMIN_PASSWORD": "${PLATFORM_ADMIN_PASSWORD:-}",
+        "RAZORPAY_KEY_ID": "${RAZORPAY_KEY_ID:-}",
+        "RAZORPAY_KEY_SECRET": "${RAZORPAY_KEY_SECRET:-}",
+        "REDIS_URL": "redis://dam-redis:6379",
+        "S3_ACCESS_KEY": "${S3_ACCESS_KEY:-dam_minio}",
+        "S3_ENDPOINT": "${S3_ENDPOINT:-dam-minio}",
+        "S3_PORT": "${S3_PORT:-9000}",
+        "S3_REGION": "${S3_REGION:-us-east-1}",
+        "S3_SECRET_KEY": "${S3_SECRET_KEY:-dam_minio_secret}",
+        "S3_USE_SSL": "${S3_USE_SSL:-false}",
+        "SIGNER_PUBLIC_URL": "${SIGNER_PUBLIC_URL:-http://localhost:3100}",
+        "SIGNER_URL": "${SIGNER_URL:-http://dam-approval-signer:3100}",
+        "SMTP_FROM": "${SMTP_FROM:-TooVix DAM <no-reply@toovix.security>}",
+        "SMTP_HOST": "${SMTP_HOST:-}",
+        "SMTP_PASS": "${SMTP_PASS:-}",
+        "SMTP_PORT": "${SMTP_PORT:-587}",
+        "SMTP_SECURE": "${SMTP_SECURE:-false}",
+        "SMTP_USER": "${SMTP_USER:-}",
+        "USD_TO_INR": "${USD_TO_INR:-83.5}",
+        "VAULT_ADDR": "${VAULT_ADDR:-http://dam-vault:8200}",
+        "VAULT_ROLE_ID_FILE": "/vault-bootstrap/role_id",
+        "VAULT_SECRET_ID_FILE": "/vault-bootstrap/secret_id"
+      },
+      "networks": {
+        "client-net": null,
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "3000",
+          "target": 3000
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "read_only": true,
+          "source": "dam-vault-bootstrap",
+          "target": "/vault-bootstrap",
+          "type": "volume",
+          "volume": {}
+        }
+      ],
+      "image": "dam-api:prod"
+    },
+    "dam-approval-signer": {
+      "container_name": "dam-approval-signer",
+      "environment": {
+        "KEY_DIR": "/keys",
+        "PORT": 3100,
+        "SIGNER_APPROVER_TOKEN": "${SIGNER_APPROVER_TOKEN:-dev-approver-token}"
+      },
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "3100",
+          "target": 3100
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "dam-signer-keys",
+          "target": "/keys",
+          "type": "volume",
+          "volume": {}
+        }
+      ],
+      "image": "dam-approval-signer:prod"
+    },
+    "dam-audit-consumer": {
+      "container_name": "dam-audit-consumer",
+      "depends_on": {
+        "dam-api": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "environment": {
+        "AZURESQL_ENROLL_TOKEN": "${AZURESQL_ENROLL_TOKEN:-}",
+        "CLOUDSQL_ENROLL_TOKEN": "${CLOUDSQL_ENROLL_TOKEN:-}",
+        "CONTROL_PLANE": "http://dam-api:3000",
+        "EVENTHUB_CHECKPOINT_FILE": "/var/lib/toovix/eventhub-checkpoints.json",
+        "EVENTHUB_CONNECTION_STRING": "${EVENTHUB_CONNECTION_STRING:-}",
+        "EVENTHUB_CONSUMER_GROUP": "${EVENTHUB_CONSUMER_GROUP:-toovix-dam}",
+        "EVENTHUB_NAME": "${EVENTHUB_NAME:-toovix-dam-audit}",
+        "EVENTHUB_START": "${EVENTHUB_START:-latest}",
+        "GCP_PROJECT": "${GCP_PROJECT:-}",
+        "PUBSUB_SUBSCRIPTION": "${PUBSUB_SUBSCRIPTION:-}"
+      },
+      "networks": {
+        "dam-net": null
+      },
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "dam-consumer-state",
+          "target": "/var/lib/toovix",
+          "type": "volume",
+          "volume": {}
+        }
+      ],
+      "image": "dam-audit-consumer:prod"
+    },
+    "dam-caddy": {
+      "container_name": "dam-caddy",
+      "depends_on": {
+        "dam-admin-react": {
+          "condition": "service_started",
+          "required": true
+        },
+        "dam-react": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "image": "caddy:2",
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "80",
+          "target": 80
+        },
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "443",
+          "target": 443
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "./config/dam-caddy/Caddyfile",
+          "target": "/etc/caddy/Caddyfile",
+          "type": "bind"
+        },
+        {
+          "source": "caddy-data",
+          "target": "/data",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "source": "caddy-config",
+          "target": "/config",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "dam-clickhouse": {
+      "container_name": "dam-clickhouse",
+      "environment": {
+        "CLICKHOUSE_DB": "dam_analytics",
+        "CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT": 1,
+        "CLICKHOUSE_PASSWORD": "${DAM_CLICKHOUSE_PASSWORD}",
+        "CLICKHOUSE_USER": "dam_writer"
+      },
+      "image": "clickhouse/clickhouse-server:24.3-alpine",
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "8123",
+          "target": 8123
+        },
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "9000",
+          "target": 9000
+        }
+      ],
+      "restart": "unless-stopped",
+      "ulimits": {
+        "nofile": {
+          "hard": 262144,
+          "soft": 262144
+        }
+      },
+      "volumes": [
+        {
+          "source": "dam-ch-data",
+          "target": "/var/lib/clickhouse",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "source": "./config/dam-clickhouse/init.sql",
+          "target": "/docker-entrypoint-initdb.d/01-init.sql",
+          "type": "bind"
+        }
+      ]
+    },
+    "dam-collector": {
+      "container_name": "dam-collector",
+      "depends_on": {
+        "dam-clickhouse": {
+          "condition": "service_started",
+          "required": true
+        },
+        "dam-nats": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "environment": {
+        "AGENT_ENROLL_TOKEN": "${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}",
+        "CLICKHOUSE_HOST": "dam-clickhouse",
+        "CLICKHOUSE_PASSWORD": "${DAM_CLICKHOUSE_PASSWORD}",
+        "CLICKHOUSE_PORT": 8123,
+        "CLICKHOUSE_USER": "dam_writer",
+        "CONTROL_PLANE": "http://dam-api:3000",
+        "MONGO_HOST": "client-mongo",
+        "MONGO_PASSWORD": "${CLIENT_MONGO_PASSWORD}",
+        "MONGO_USER": "admin",
+        "MYSQL_DATABASE": "payments",
+        "MYSQL_HOST": "client-mysql",
+        "MYSQL_PASSWORD": "${CLIENT_MYSQL_ROOT_PASSWORD}",
+        "MYSQL_USER": "app_payments",
+        "NATS_URL": "nats://dam-nats:4222",
+        "PG_DATABASE": "crm",
+        "PG_HOST": "client-postgres",
+        "PG_PASSWORD": "${CLIENT_PG_PASSWORD}",
+        "PG_USER": "app_crm"
+      },
+      "networks": {
+        "client-net": null,
+        "dam-net": null
+      },
+      "restart": "unless-stopped",
+      "image": "dam-collector:prod"
+    },
+    "dam-discovery": {
+      "container_name": "dam-discovery",
+      "depends_on": {
+        "dam-api": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "environment": {
+        "AGENT_ENROLL_TOKEN": "${AGENT_ENROLL_TOKEN:-dev-agent-enroll-token}",
+        "CONTROL_PLANE": "http://dam-api:3000",
+        "DISCOVERY_INTERVAL": "300000",
+        "DISCOVERY_PRESET": "common",
+        "DISCOVERY_TARGETS": "client-postgres,client-mysql,client-mongo,client-mysql-2"
+      },
+      "networks": {
+        "client-net": null,
+        "dam-net": null
+      },
+      "restart": "unless-stopped",
+      "image": "dam-discovery:prod"
+    },
+    "dam-minio": {
+      "command": "server /data --console-address \":9090\"",
+      "container_name": "dam-minio",
+      "environment": {
+        "MINIO_ROOT_PASSWORD": "${MINIO_ROOT_PASSWORD:-dam_minio_secret}",
+        "MINIO_ROOT_USER": "${MINIO_ROOT_USER:-dam_minio}"
+      },
+      "image": "minio/minio:latest",
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "9100",
+          "target": 9000
+        },
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "9090",
+          "target": 9090
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "dam-minio-data",
+          "target": "/data",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "dam-nats": {
+      "command": [
+        "--jetstream",
+        "--store_dir=/data",
+        "-m",
+        "8222"
+      ],
+      "container_name": "dam-nats",
+      "image": "nats:2-alpine",
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "4222",
+          "target": 4222
+        },
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "8222",
+          "target": 8222
+        }
+      ],
+      "restart": "unless-stopped"
+    },
+    "dam-postgres": {
+      "container_name": "dam-postgres",
+      "environment": {
+        "POSTGRES_DB": "dam_control",
+        "POSTGRES_PASSWORD": "${DAM_PG_PASSWORD}",
+        "POSTGRES_USER": "dam_admin"
+      },
+      "healthcheck": {
+        "interval": "5s",
+        "retries": 5,
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U dam_admin -d dam_control"
+        ]
+      },
+      "image": "postgres:16-alpine",
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "5433",
+          "target": 5432
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "dam-pg-data",
+          "target": "/var/lib/postgresql/data",
+          "type": "volume",
+          "volume": {}
+        },
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "source": "./config/dam-postgres/init.sql",
+          "target": "/docker-entrypoint-initdb.d/01-init.sql",
+          "type": "bind"
+        }
+      ]
+    },
+    "dam-react": {
+      "container_name": "dam-react",
+      "depends_on": {
+        "dam-api": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "5173",
+          "target": 5173
+        }
+      ],
+      "restart": "unless-stopped",
+      "image": "dam-react:prod"
+    },
+    "dam-redis": {
+      "container_name": "dam-redis",
+      "healthcheck": {
+        "interval": "5s",
+        "retries": 5,
+        "test": [
+          "CMD",
+          "redis-cli",
+          "ping"
+        ]
+      },
+      "image": "redis:7-alpine",
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "6379",
+          "target": 6379
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "dam-redis-data",
+          "target": "/data",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "dam-registry": {
+      "container_name": "dam-registry",
+      "image": "registry:2",
+      "networks": {
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "host_ip": "127.0.0.1",
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "5001",
+          "target": 5000
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "source": "registry-data",
+          "target": "/var/lib/registry",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    },
+    "dam-vault": {
+      "cap_add": [
+        "IPC_LOCK"
+      ],
+      "command": [
+        "server",
+        "-dev"
+      ],
+      "container_name": "dam-vault",
+      "environment": {
+        "VAULT_ADDR": "http://127.0.0.1:8200",
+        "VAULT_DEV_LISTEN_ADDRESS": "0.0.0.0:8200",
+        "VAULT_DEV_ROOT_TOKEN_ID": "root"
+      },
+      "image": "hashicorp/vault:1.15",
+      "networks": {
+        "client-net": null,
+        "dam-net": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "protocol": "tcp",
+          "published": "8200",
+          "target": 8200
+        }
+      ],
+      "restart": "unless-stopped"
+    },
+    "dam-vault-init": {
+      "container_name": "dam-vault-init",
+      "depends_on": {
+        "dam-vault": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "entrypoint": [
+        "/bin/sh",
+        "/bootstrap.sh"
+      ],
+      "environment": {
+        "BROKER_INVENTORY_PASSWORD": "${BROKER_INVENTORY_PASSWORD:-broker-inventory-pw}",
+        "BROKER_MYSQL_PASSWORD": "${BROKER_MYSQL_PASSWORD:-broker-payments-pw}",
+        "CLIENT_MYSQL_ROOT_PASSWORD": "${CLIENT_MYSQL_ROOT_PASSWORD}",
+        "VAULT_ADDR": "http://dam-vault:8200",
+        "VAULT_BOOTSTRAP_TOKEN": "root"
+      },
+      "image": "hashicorp/vault:1.15",
+      "networks": {
+        "client-net": null,
+        "dam-net": null
+      },
+      "restart": "no",
+      "user": "root",
+      "volumes": [
+        {
+          "bind": {
+            "create_host_path": true
+          },
+          "read_only": true,
+          "source": "./config/dam-vault-init/bootstrap.sh",
+          "target": "/bootstrap.sh",
+          "type": "bind"
+        },
+        {
+          "source": "dam-vault-bootstrap",
+          "target": "/vault-bootstrap",
+          "type": "volume",
+          "volume": {}
+        }
+      ]
+    }
+  },
+  "volumes": {
+    "caddy-config": {
+      "name": "dev_caddy-config"
+    },
+    "caddy-data": {
+      "name": "dev_caddy-data"
+    },
+    "client-mongo-data": {
+      "name": "dev_client-mongo-data"
+    },
+    "client-mysql-data": {
+      "name": "dev_client-mysql-data"
+    },
+    "client-pg-data": {
+      "name": "dev_client-pg-data"
+    },
+    "dam-ch-data": {
+      "name": "dev_dam-ch-data"
+    },
+    "dam-consumer-state": {
+      "name": "dev_dam-consumer-state"
+    },
+    "dam-minio-data": {
+      "name": "dev_dam-minio-data"
+    },
+    "dam-pg-data": {
+      "name": "dev_dam-pg-data"
+    },
+    "dam-redis-data": {
+      "name": "dev_dam-redis-data"
+    },
+    "dam-signer-keys": {
+      "name": "dev_dam-signer-keys"
+    },
+    "dam-vault-bootstrap": {
+      "name": "dev_dam-vault-bootstrap"
+    },
+    "registry-data": {
+      "name": "dev_registry-data"
+    }
+  }
+}

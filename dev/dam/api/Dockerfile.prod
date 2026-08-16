@@ -1,0 +1,14 @@
+# Production dam-api image — fully self-contained (no source bind-mount, no docker cp,
+# no eBPF `go generate`). The control plane only SERVES the agent download artifacts, so
+# they are PRE-BUILT elsewhere and fetched into ./prebuilt-artifacts by build-images.sh.
+# Build context is ./dam (COPY paths are relative to it).
+FROM node:20-alpine
+WORKDIR /app
+COPY api/package.json ./
+RUN npm install --production
+COPY api/main.js api/archive.js api/compliance-catalog.js api/secrets.js api/tenant-crypto.js ./
+# Customer-installable agent artifacts, served at /api/download (pre-built, allow-listed in main.js):
+#   dam-agent-linux-amd64 · dam-agent.exe · dam-agent_amd64.deb · dam-agent_amd64.rpm
+COPY prebuilt-artifacts/ /app/artifacts/
+EXPOSE 3000
+CMD ["node", "main.js"]
