@@ -9997,6 +9997,8 @@ function buildFrameworks(m, states = {}) {
     link: { label: 'Vulnerability Assessment', to: '/vulnerability' } };
   const evPolicy = { summary: policyOn ? `${m.policiesActive} access-control policy/policies active` : 'No access-control policies defined', link: { label: 'Reports', to: '/reports' } };
   const evInv = { summary: `${m.classifiedObjects} object(s) across ${m.dbTotal} database(s) inventoried`, link: { label: 'View Classification', to: '/classification' } };
+  const incidentReady = m.quarantineOn || m.schedIncident > 0;
+  const evIncident = { summary: incidentReady ? `Incident response configured${m.quarantineOn ? ' — auto-quarantine active' : ''}${m.schedIncident > 0 ? ` · ${m.schedIncident} incident report(s) scheduled` : ''}` : 'No incident-response automation configured — enable auto-quarantine or schedule an incident report', link: { label: 'View Alerts', to: '/alerts' } };
   const gapMask = (items, n) => ({ summary: `${n} sensitive column(s) exposed to non-privileged roles`, items, link: { label: 'Fix in Masking', to: 'tab:masking' } });
 
   // measured control → status straight from a boolean signal
@@ -10046,7 +10048,16 @@ function buildFrameworks(m, states = {}) {
       meas('hipaa.trail', chainOk, 'Integrity of the audit trail on all databases', '164.312(b)', evChain),
       att('hipaa.logoff', 'Automatic log-off configured (15m idle)', '164.312(a)(2)(iii)', null),
       att('hipaa.tls', 'Encryption in transit (TLS 1.3)', '164.312(e)(1)', null),
-      meas('hipaa.integrity', chainOk, 'Integrity controls — hash-chain on PHI logs', '164.312(c)(1)', evChain) ] },
+      meas('hipaa.integrity', chainOk, 'Integrity controls — hash-chain on PHI logs', '164.312(c)(1)', evChain),
+      meas('hipaa.emergency', jitGov, 'Emergency access (break-glass) brokered & reviewable', '164.312(a)(2)(ii)', evJit),
+      meas('hipaa.incident', incidentReady, 'Security incident response — detection & procedures', '164.308(a)(6)', evIncident),
+      // Procedural safeguards no DB telemetry can measure — completeness of the rule
+      // depends on a named owner signing these off (absent = gap, honestly).
+      att('hipaa.risk', 'Security risk analysis conducted & current', '164.308(a)(1)(ii)(A)', null),
+      att('hipaa.contingency', 'Data backup & disaster-recovery plan tested', '164.308(a)(7)(ii)', null),
+      att('hipaa.baa', 'Business Associate Agreements in place with all vendors', '164.308(b)(1)', null),
+      att('hipaa.physical', 'Physical safeguards — facility access controls', '164.310(a)(1)', null),
+      att('hipaa.rest', 'Encryption of ePHI at rest', '164.312(a)(2)(iv)', null) ] },
     { key: 'sox', name: 'SOX', controls: [
       meas('sox.302', logging, 'All financial DB changes logged with user identity', 'SOX 302', evLog),
       meas('sox.sod', sod, 'Separation of duties enforced on financial systems', 'SOX 404', evSod),
@@ -10103,9 +10114,53 @@ app.get('/api/compliance/frameworks', authRequired, async (req, res) => {
     res.json(fw);
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
+
+// Unified framework control matrix — the single auditor-navigable view that joins the three
+// surfaces: posture controls (measured + attested) ↔ their backing catalog evidence reports
+// ↔ the latest sealed/attested evidence record. Matches posture `reference` to catalog `control`
+// on the normalized §-code. Catalog reports with no posture control surface as evidence-only rows.
+app.get('/api/compliance/framework/:key/matrix', authRequired, async (req, res) => {
+  try {
+    const key = String(req.params.key || '').toLowerCase();
+    const fws = await complianceFrameworks(req.user.tenantId);
+    const fw = fws.find((f) => f.key === key);
+    if (!fw) return res.status(404).json({ error: 'Unknown framework' });
+    // normalize a citation to its bare code: 'HIPAA §164.312(b)' & '164.312(b)' → '164.312(b)'
+    const norm = (s) => String(s || '').replace(/hipaa|pci-dss|pci|sox|gdpr|§/gi, '').replace(/\s+/g, '').toLowerCase();
+    const reports = COMPLIANCE_CATALOG.filter((c) => c.framework.toUpperCase().startsWith(key.toUpperCase()));
+    const byCode = {};
+    for (const r of reports) (byCode[norm(r.control)] || (byCode[norm(r.control)] = [])).push(r);
+    // latest evidence record per catalog_id for this tenant
+    const ev = reports.length ? (await pgPool.query(
+      `SELECT DISTINCT ON (catalog_id) catalog_id, id, status, reviewer, reviewed_at, generated_at, content_hash, row_total
+         FROM compliance_evidence WHERE tenant_id=$1 AND catalog_id = ANY($2)
+         ORDER BY catalog_id, generated_at DESC`,
+      [req.user.tenantId, reports.map((r) => r.id)])).rows : [];
+    const evByCat = {}; for (const e of ev) evByCat[e.catalog_id] = e;
+    const used = new Set();
+    const mapReport = (r) => {
+      used.add(r.id); const e = evByCat[r.id];
+      return { catalogId: r.id, name: r.name, control: r.control, kind: r.kind,
+        latestEvidence: e ? { id: e.id, status: e.status, reviewer: e.reviewer, reviewed_at: e.reviewed_at, generated_at: e.generated_at, content_hash: e.content_hash, rows: e.row_total } : null };
+    };
+    const controls = fw.controls.map((c) => ({ ...c, catalogReports: (byCode[norm(c.reference)] || []).map(mapReport) }));
+    const evidenceOnly = reports.filter((r) => !used.has(r.id)).map(mapReport);
+    res.json({
+      key: fw.key, name: fw.name, score: fw.score, status: fw.status,
+      controls, evidenceOnly,
+      coverage: {
+        postureControls: fw.controls.length,
+        catalogReports: reports.length,
+        controlsWithEvidence: controls.filter((c) => c.catalogReports.some((r) => r.latestEvidence)).length,
+        evidenceRecords: ev.length,
+        attestedRecords: ev.filter((e) => e.status === 'attested').length,
+      },
+    });
+  } catch (e) { console.error('[Compliance] matrix failed:', e.message); res.status(500).json({ error: 'Matrix failed' }); }
+});
 // The policy/process controls that carry no telemetry — the only ones an operator can attest.
 // Measured controls reject attestation: their status comes from live data, not sign-off.
-const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'gdpr.dsar', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'sox.svcacct', 'iso.crypto', 'iso.incident']);
+const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'gdpr.dsar', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'hipaa.risk', 'hipaa.contingency', 'hipaa.baa', 'hipaa.physical', 'hipaa.rest', 'sox.svcacct', 'iso.crypto', 'iso.incident']);
 app.post('/api/compliance/controls/:key', authRequired, async (req, res) => {
   if (!EVIDENCE_ATTEST_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Only Compliance, Auditor, or Admin roles may attest controls' });
   const key = req.params.key;
