@@ -1089,10 +1089,14 @@ func scanTargets(cfg Config) ([]scanTarget, error) {
 		if len(dbList) == 0 {
 			return nil, fmt.Errorf("mssql classification: no databases to scan (set DB_NAME=<db>[,<db>] or '*')")
 		}
-		// SQL Server's information_schema is per-database, like Postgres.
-		const q = `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns
-			WHERE table_schema NOT IN ('sys')
-			ORDER BY table_schema, table_name, ordinal_position`
+		// SQL Server's information_schema is per-database, like Postgres. Reference the views and
+		// their columns in UPPERCASE: INFORMATION_SCHEMA.* are defined in uppercase, so a database
+		// with a CASE-SENSITIVE collation rejects the lowercase form as "invalid object name". The
+		// uppercase form resolves under both case-insensitive and case-sensitive collations. Results
+		// are read positionally, so the casing of the SELECT aliases does not matter.
+		const q = `SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
+			WHERE TABLE_SCHEMA NOT IN ('sys')
+			ORDER BY TABLE_SCHEMA, TABLE_NAME, ORDINAL_POSITION`
 		ts := make([]scanTarget, 0, len(dbList))
 		for _, d := range dbList {
 			ts = append(ts, scanTarget{driver: "sqlserver", dsn: mssqlDSN(cfg, d), query: tagAgentQuery(q), dbLabel: d})

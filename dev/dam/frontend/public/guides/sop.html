@@ -85,7 +85,7 @@
     <div class="toc-grid">
       <div class="toc-row"><b>🐬 MySQL</b><br><a href="#mysql-prereq">Prereqs</a> · <a href="#mysql-agent">Agent</a> · <a href="#mysql-lite">AgentLite</a> · <a href="#mysql-paas">PaaS</a></div>
       <div class="toc-row"><b>🐘 PostgreSQL</b><br><a href="#pg-prereq">Prereqs</a> · <a href="#pg-agent">Agent</a> · <a href="#pg-lite">AgentLite</a> · <a href="#pg-paas">PaaS</a></div>
-      <div class="toc-row"><b>🪟 SQL Server</b><br><a href="#mssql-prereq">Prereqs</a> · <a href="#mssql-agent">Agent</a> · <a href="#mssql-lite">AgentLite</a> · <a href="#mssql-paas">PaaS</a></div>
+      <div class="toc-row"><b>🪟 SQL Server</b><br><a href="#mssql-prereq">Prereqs</a> · <a href="#mssql-agent">Agent</a> · <a href="#mssql-lite">AgentLite</a> · <a href="#mssql-paas">PaaS</a> · <a href="#mssql-express">Express</a></div>
       <div class="toc-row"><b>🅾️ Oracle</b><br><a href="#ora-prereq">Prereqs</a> · <a href="#ora-agent">Agent</a> · <a href="#ora-lite">AgentLite</a> · <a href="#ora-paas">PaaS</a></div>
       <div class="toc-row"><b>🍃 MongoDB</b><br><a href="#mongo-prereq">Prereqs</a> · <a href="#mongo-agent">Agent</a> · <a href="#mongo-lite">AgentLite</a> · <a href="#mongo-paas">PaaS</a></div>
     </div>
@@ -253,8 +253,18 @@ ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- STA
 SELECT TOP 5 CAST(event_data AS XML) FROM sys.fn_xe_file_target_read_file('C:\SQLAudit\ToovixXE*.xel',NULL,NULL,NULL);</code></pre>
 
   <h4>2 · Login — a SQL login for the collector</h4>
-  <pre><code>CREATE LOGIN dam_svc WITH PASSWORD='&lt;StrongSecret!&gt;', CHECK_POLICY=ON;   <span class="cmt">-- needs mixed-mode auth (prereqs)</span>
-GRANT VIEW SERVER STATE TO [dam_svc];   <span class="cmt">-- XEvents; use CONTROL SERVER for SQL Server Audit</span></code></pre>
+  <p>These are <b>server-level</b>, so run them in the <code>master</code> database — otherwise <code>GRANT VIEW SERVER STATE</code> fails with <em>"can only be granted when the current database is master"</em>:</p>
+  <pre><code>USE master;
+GO
+CREATE LOGIN dam_svc WITH PASSWORD='&lt;StrongSecret!&gt;', CHECK_POLICY=ON;   <span class="cmt">-- needs mixed-mode auth (prereqs)</span>
+GRANT VIEW SERVER STATE TO [dam_svc];   <span class="cmt">-- XEvents; use CONTROL SERVER for SQL Server Audit</span>
+GO</code></pre>
+  <p><b>Classification only</b> (<code>CLASSIFY=true</code>): the classifier <b>logs into each database</b> to read its schema, which the server-level login can't do alone (else <em>"cannot open database … requested by the login"</em>). Add <code>dam_svc</code> as a read-only user in <b>every database in <code>DB_NAME</code></b>:</p>
+  <pre><code>USE [YourDB];   <span class="cmt">-- repeat for each database in DB_NAME</span>
+GO
+CREATE USER dam_svc FOR LOGIN dam_svc;
+ALTER ROLE db_datareader ADD MEMBER dam_svc;   <span class="cmt">-- read INFORMATION_SCHEMA + sample values at rest</span>
+GO</code></pre>
 
   <h4>3 · Forwarder — pick where the agent runs</h4>
   <p><b>Option A — on the Windows SQL Server host</b> (runs as a Windows service; no separate box). Put <code>dam-agent.exe</code> on the host, write the config, install + start the service:</p>
@@ -288,6 +298,74 @@ AGENT_ENROLL_TOKEN=tvxenr_... CONTROL_PLANE=https://dam.yourcompany.com</code></
     <li><b>SQL Auditing → Event Hub</b> (fully agentless, no row counts): <b>database-level</b> auditing routed to an Event Hub the DAM connector consumes.</li>
   </ul>
   <p>DDL + full setup: <a href="/guides/agentlite-mysql-vm.html">AgentLite guide § SQL Server</a>.</p>
+
+  <h3 id="mssql-express">SQL Server Express — DAM setup</h3>
+  <p>Express (and Developer / Web / Standard / LocalDB) work exactly like the full edition — capture is edition-agnostic. Follow these Express-specific prerequisites, then the three setup steps.</p>
+
+  <h4>Prerequisites (Express-specific)</h4>
+  <ul>
+    <li><b>Capture source:</b> use <b>Extended Events</b> — core-engine on every edition, incl. Express. (SQL Server Audit instead needs <b>2016 SP1+</b>.)</li>
+    <li><b>Enable TCP/IP</b> — <b>off by default</b> on Express. SQL Server Configuration Manager → <b>SQL Server Network Configuration → Protocols for SQLEXPRESS → TCP/IP → Enable</b>, then restart the instance. The agent always connects over TCP, so this is required.</li>
+    <li><b>Pin a static port</b> — Express (instance <code>HOST\SQLEXPRESS</code>) uses a <b>dynamic</b> port. In the same TCP/IP dialog → <b>IP Addresses → IPAll</b>: set <b>TCP Port</b> = <code>1433</code>, clear <b>TCP Dynamic Ports</b>, restart. The agent connects by <code>host:port</code>.</li>
+    <li><b>Mixed-mode auth</b> — enable SQL authentication: Server → <b>Properties → Security</b> → "SQL Server and Windows Authentication mode" → restart. (Needed for the login in step&nbsp;2.)</li>
+    <li><b>Mind the caps</b> — Express allows ~1&nbsp;GB RAM / 10&nbsp;GB per DB; keep the XE file small (<code>max_file_size=50</code>).</li>
+  </ul>
+
+  <h4>Setup steps</h4>
+  <p><b>1 · Create the Extended Events session</b> (in SSMS; create the folder first with <code>mkdir C:\SQLAudit</code>):</p>
+  <pre><code>CREATE EVENT SESSION ToovixXE ON SERVER
+  ADD EVENT sqlserver.sql_statement_completed
+    (ACTION(sqlserver.server_principal_name, sqlserver.client_hostname, sqlserver.database_name)
+     WHERE [sqlserver].[database_name]=N'YourDB')
+  ADD TARGET package0.event_file (SET filename=N'C:\SQLAudit\ToovixXE.xel', max_file_size=50, max_rollover_files=5)
+  WITH (MAX_DISPATCH_LATENCY=5 SECONDS, STARTUP_STATE=ON);
+ALTER EVENT SESSION ToovixXE ON SERVER STATE = START;   <span class="cmt">-- START, not ON</span></code></pre>
+
+  <p><b>2 · Create the DAM login</b> — server-level, so run it in the <code>master</code> database (else the <code>GRANT</code> errors with <em>"can only be granted when the current database is master"</em>):</p>
+  <pre><code>USE master;
+GO
+CREATE LOGIN dam_svc WITH PASSWORD='&lt;StrongSecret!&gt;', CHECK_POLICY=ON;
+GRANT VIEW SERVER STATE TO [dam_svc];   <span class="cmt">-- XEvents; use CONTROL SERVER for SQL Server Audit</span>
+GO</code></pre>
+  <p><b>Classification only</b> (<code>CLASSIFY=true</code>): capture needs nothing more, but the classifier <b>logs into each database</b> to read its schema — the server-level login can't open a user DB on its own (you'd see <em>"cannot open database … requested by the login"</em>). Add <code>dam_svc</code> as a read-only user in <b>every database listed in <code>DB_NAME</code></b>:</p>
+  <pre><code>USE [YourDB];   <span class="cmt">-- repeat for each database in DB_NAME</span>
+GO
+CREATE USER dam_svc FOR LOGIN dam_svc;
+ALTER ROLE db_datareader ADD MEMBER dam_svc;   <span class="cmt">-- read INFORMATION_SCHEMA + sample values at rest</span>
+GO</code></pre>
+
+  <p><b>3 · Run the agent.</b> Steps 1–2 above were T-SQL in <b>SSMS</b>. Step 3 is <b>not</b> in SSMS — it runs on the operating system. Pick <b>one</b> option and point <code>TARGET_PORT</code> at the static port from the prereqs.</p>
+
+  <p style="margin-bottom:4px"><b>Option A — Windows service, on the SQL Server host itself.</b></p>
+  <p style="margin:6px 0 4px"><b>3a · Get the binary.</b> &nbsp;<span style="color:var(--muted)">Where: Windows PowerShell (Admin), or your SSH session into the host — no browser needed.</span> &nbsp;The control plane serves the <code>.exe</code> at a plain URL, so download it straight to disk:</p>
+  <pre><code>New-Item -ItemType Directory -Force 'C:\Program Files\TooVix' | Out-Null
+Invoke-WebRequest -Uri https://dam.yourcompany.com/api/download/dam-agent.exe `
+  -OutFile 'C:\Program Files\TooVix\dam-agent.exe'
+<span class="cmt"># or (works in PowerShell, cmd, or an SSH shell): curl.exe -L https://dam.yourcompany.com/api/download/dam-agent.exe -o "C:\Program Files\TooVix\dam-agent.exe"</span></code></pre>
+  <p style="margin:6px 0 4px"><span style="color:var(--muted)">Prefer a browser? The same file is at <b>Agents → Add agent → Windows</b> in the DAM console, or directly at <code>https://dam.yourcompany.com/api/download/dam-agent.exe</code>.</span></p>
+  <p style="margin:6px 0 4px"><b>3b · Write the config file.</b> &nbsp;<span style="color:var(--muted)">Where: Notepad, opened <b>as Administrator</b> (the path is under <code>C:\ProgramData</code>).</span> &nbsp;Save this as <code>C:\ProgramData\TooVix\dam-agent.env</code> — it is a plain text file, <b>not</b> a command to run:</p>
+  <pre><code>MODE=audit-forward
+DB_ENGINE=mssql
+AUDIT_SOURCE=xevents
+MSSQL_XE_SESSION=ToovixXE
+TARGET_HOST=&lt;this-server&gt;   <span class="cmt"># e.g. localhost — the SQL Server host itself</span>
+TARGET_PORT=1433            <span class="cmt"># the static port you pinned in the prereqs</span>
+DB_USER=dam_svc
+DB_PASSWORD=&lt;StrongSecret!&gt;
+AGENT_ENROLL_TOKEN=tvxenr_...
+CONTROL_PLANE=https://dam.yourcompany.com</code></pre>
+  <p style="margin:6px 0 4px"><b>3c · Install &amp; start the service.</b> &nbsp;<span style="color:var(--muted)">Where: <b>Windows PowerShell — Run as Administrator</b> (right-click the Start menu → "Terminal (Admin)" / "Windows PowerShell (Admin)"). Not SSMS.</span></p>
+  <pre><code>&amp; 'C:\Program Files\TooVix\dam-agent.exe' install   <span class="cmt"># registers service "TooVixDAMAgent"</span>
+&amp; 'C:\Program Files\TooVix\dam-agent.exe' start
+Get-Content 'C:\ProgramData\TooVix\dam-agent.log' -Tail 20 -Wait   <span class="cmt"># watch it enroll + capture</span></code></pre>
+
+  <p style="margin:14px 0 4px"><b>Option B — remote Linux collector</b> (nothing installed on Windows). &nbsp;<span style="color:var(--muted)">Where: a <b>bash shell</b> on any Linux host that can reach <code>&lt;db&gt;:1433</code>.</span> &nbsp;Same settings as an environment, e.g. via Docker:</p>
+  <pre><code>docker run -d --name toovix-agent-mssql --restart unless-stopped \
+  -e MODE=audit-forward -e DB_ENGINE=mssql -e AUDIT_SOURCE=xevents -e MSSQL_XE_SESSION=ToovixXE \
+  -e TARGET_HOST=&lt;sqlserver-addr&gt; -e TARGET_PORT=1433 \
+  -e DB_USER=dam_svc -e DB_PASSWORD='&lt;StrongSecret!&gt;' \
+  -e AGENT_ENROLL_TOKEN=tvxenr_... -e CONTROL_PLANE=https://dam.yourcompany.com  &lt;dam-agent-image&gt;</code></pre>
+  <p>Both options are the standard SQL Server forwarder from <a href="#mssql-lite">AgentLite above</a> — Express changes nothing beyond the prerequisites.</p>
 
   <!-- ================= ORACLE ================= -->
   <h2 id="ora"><span class="eng-h">🅾️ Oracle <span class="badge">port 1521</span></span></h2>
