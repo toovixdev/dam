@@ -2784,3 +2784,24 @@ Deploy: `docker cp` main.js + compliance-catalog.js into dam-api, restart. Commi
 fb31468. Verified on prod (awstest tenant): matrix join correct, pack signature verifies, binder is valid PDF.
 Remaining gap vs Guardium/Imperva is auditor *familiarity* with report format, not capability. The pack
 signer + matrix are the reusable pattern to lift PCI/SOX/GDPR breadth next.
+
+## PCI-DSS deepened to v4.0 + NUL-byte evidence fix (2026-08-16)
+
+Closed the PCI depth gap vs Guardium/Imperva, mirroring the HIPAA hardening.
+- **Catalog 5 -> 11 PCI reports**: added the v4.0 10.2.1.x access breakdown — CHD access
+  10.2.1.1 & modification 10.2.2 (scoped to `pci`/`pan` cardholder tags via a new `chdAny`
+  helper, not all-sensitive), admin/root actions 10.2.1.2, invalid access 10.2.1.4, credential
+  changes 10.2.1.5 (GRANT + ALTER USER/password SQL), system-object DDL 10.2.1.7. Same
+  object-vs-subject scoping principle as HIPAA: CHD reads/writes are object-scoped; admin/auth
+  controls are subject-level.
+- **Posture 4 -> 8 controls**: Req 8 unique IDs (8.2.1), admin actions logged (10.2.1.2), Req 4
+  transmission encryption (4.2.1, attestable), Req 11 vulnerability scans (11.3.1). Signed pack,
+  matrix, and binder pick these up automatically (PCI signed pack now 11 controls, sig-verified).
+- **Bug fix (all reports)**: a captured sql_text with an embedded NUL made the compliance_evidence
+  JSONB insert fail ("unsupported Unicode escape sequence"), erroring the whole run. Now scrub NUL
+  bytes from snapshot string fields before hashing + insert. Surfaced by pci-chd-access.
+
+Verified on prod (awstest): all 6 new PCI reports run; totals faithful to raw predicates
+(chd-access 16, chd-modification 49, admin-actions 17 = posture shared-acct metric, DDL 8).
+Commits ba88286, a8fbf8c. Catalog now 24 reports across 4 frameworks; HIPAA + PCI-DSS at parity,
+SOX + GDPR remain the depth gap.
