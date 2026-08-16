@@ -2734,3 +2734,25 @@ login, config file, service install/verify) + `docs/sop-sqlserver-windows-instal
 **Not yet done:** runtime test on a real Windows SQL Server (compile + service logic verified;
 end-to-end enroll/capture pending a Windows SQL box). Binary is unsigned (SmartScreen/EDR will
 warn until code-signed).
+
+## SQL Server XEvents: MSSQL_XE_SESSION over wildcard AUDIT_LOG (offset-poisoning fix) (2026-08-16)
+
+**Bug (found on live SQL Server Express box):** the on-prem XEvents AgentLite config emitted a
+**wildcard** `AUDIT_LOG=C:\SQLAudit\ToovixXE*.xel`. SQL Server names each event-file
+`ToovixXE_0_<timestamp>.xel` and mints a **new** timestamp on every DROP/CREATE of the session;
+old files linger on disk. The agent seeds its resume point from `MAX(file_offset)` across **every**
+file the wildcard matches — but `file_offset` is **per-file**, so a stale old file (high offsets)
+pins the seed above a fresh file's low offsets and **every new event is silently skipped**. Symptom:
+capture looks perfect (marker is in the `.xel`, thousands of events, reads fast), heartbeat fresh,
+classification works — but DAM shows **zero** forwarded events. Works right after you delete the old
+`.xel` files (fresh file only → correct seed), then breaks again on the next session recreate.
+
+**Fix:** use **`MSSQL_XE_SESSION=ToovixXE`** for on-prem XEvents (was Azure-only). It asks the live
+session for its *current* file and reads only that, so recreates/rollovers just work and stale files
+can't poison the seed. Deploy modal (`Agents.jsx`) now emits `MSSQL_XE_SESSION` for `mssql+xevents`
+and never a wildcard `AUDIT_LOG`; `sop.html` documents the footgun + recreate handling. Commit
+`186eba1` (frontend is Vite-dev bind-mounted on prod → HMR, no rebuild).
+
+**Follow-up (agent code, not yet done):** the underlying agent still mis-seeds if someone *does*
+pass a multi-file wildcard `AUDIT_LOG`; hardening the wildcard path to seed per-current-file (and
+rebuilding `dam-agent.exe`) is deferred. `MSSQL_XE_SESSION` is the supported path.
