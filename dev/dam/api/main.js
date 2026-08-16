@@ -10018,6 +10018,10 @@ function buildFrameworks(m, states = {}) {
       meas('pci.req10', logging, 'Req 10 — log all access to cardholder data', 'PCI 10.2', evPci),
       att('pci.req7', 'Req 7 — least-privilege access enforced', 'PCI 7.2', jitGov ? `${m.jitTotal} brokered grant(s)` : 'no brokering signal'),
       meas('pci.req3', !(m.pciUnmasked > 0), m.pciUnmasked > 0 ? `Req 3 — ${m.pciUnmasked} cardholder column(s) not masked/tokenized` : 'Req 3 — cardholder data masked/tokenized', 'PCI 3.4', m.pciUnmasked > 0 ? gapMask(pciItems, m.pciUnmasked) : evClass),
+      meas('pci.req8', uniqueIds, 'Req 8 — unique user IDs, no shared/generic accounts', 'PCI 8.2.1', evUnique),
+      meas('pci.req10_2', privMon, 'Req 10.2.1.2 — administrative actions logged', 'PCI 10.2.1.2', evPriv),
+      att('pci.req4', 'Req 4 — encryption of cardholder data in transit (TLS)', 'PCI 4.2.1', null),
+      meas('pci.req11', vaReal, vaReal ? 'Req 11.3 — vulnerability scans current, no critical open' : (m.vaScans > 0 ? `Req 11.3 — VA overdue or ${m.vaCrit} critical open` : 'Req 11.3 — no vulnerability scan has run'), 'PCI 11.3.1', evVa),
       meas('pci.req10_5', chainOk, 'Req 10.5 — audit trail integrity', 'PCI 10.5', evChain) ] },
     { key: 'gdpr', name: 'GDPR', controls: [
       meas('gdpr.art30', covered, 'Database activity logging for all critical systems', 'GDPR Art.30', evCovered),
@@ -10232,7 +10236,7 @@ app.get('/api/compliance/pack/:framework', authRequired, async (req, res) => {
 });
 // The policy/process controls that carry no telemetry — the only ones an operator can attest.
 // Measured controls reject attestation: their status comes from live data, not sign-off.
-const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'gdpr.dsar', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'hipaa.risk', 'hipaa.contingency', 'hipaa.baa', 'hipaa.physical', 'hipaa.rest', 'sox.svcacct', 'iso.crypto', 'iso.incident']);
+const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'pci.req4', 'gdpr.dsar', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'hipaa.risk', 'hipaa.contingency', 'hipaa.baa', 'hipaa.physical', 'hipaa.rest', 'sox.svcacct', 'iso.crypto', 'iso.incident']);
 app.post('/api/compliance/controls/:key', authRequired, async (req, res) => {
   if (!EVIDENCE_ATTEST_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Only Compliance, Auditor, or Admin roles may attest controls' });
   const key = req.params.key;

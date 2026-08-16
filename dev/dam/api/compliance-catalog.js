@@ -25,13 +25,18 @@ const PERSONAL = ['pii', 'aadhaar', 'pan', 'ssn', 'dob', 'email', 'name', 'addre
 const PHI = ['phi'];
 
 // Generic / shared accounts — a unique-user-identification violation (HIPAA
-// §164.312(a)(2)(i)). Kept in sync with the posture model's sharedAcctEvents metric.
+// §164.312(a)(2)(i), PCI Req 8.2.1). Kept in sync with the posture model's sharedAcctEvents metric.
 const SHARED_ACCOUNTS = ['root', 'admin', 'sa', 'postgres', 'system', 'mysql'];
+
+// Cardholder data (CHD) — PCI-DSS controls scope to the cardholder-data tags specifically,
+// not all sensitive data, so a PII/PHI read isn't miscounted as CHD access.
+const CARDHOLDER = ['pci', 'pan'];
 
 const chList = (arr) => '[' + arr.map((t) => `'${t}'`).join(',') + ']';
 const sensAny = `hasAny(tags, ${chList(SENSITIVE)})`;
 const personalAny = `hasAny(tags, ${chList(PERSONAL)})`;
 const phiAny = `hasAny(tags, ${chList(PHI)})`;
+const chdAny = `hasAny(tags, ${chList(CARDHOLDER)})`;
 const sharedAcct = `lower(principal) IN (${SHARED_ACCOUNTS.map((a) => `'${a}'`).join(',')})`;
 
 // kind:
@@ -224,6 +229,71 @@ const CATALOG = [
     description: 'Activity from shared or generic accounts (root/admin/sa/postgres/system/mysql) — each row is a unique-user-identification violation to resolve under §164.312(a)(2)(i).',
     kind: 'exception',
     where: () => `${sharedAcct}`,
+  },
+
+  // ── PCI-DSS v4.0 — cardholder-data controls + the Req 10.2.1.x access breakdown ──────
+  // CHD reads/writes scope to the `pci`/`pan` tags (not all sensitive data); the Req 8/10
+  // access controls are subject/session-level. Deepens PCI from legacy 3.2.1 coverage to the
+  // v4.0 sub-requirement granularity auditors expect.
+  {
+    id: 'pci-chd-access',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.1.1',
+    controlName: 'Individual access to cardholder data',
+    name: 'Access to cardholder data (PCI)',
+    description: 'Every read of a cardholder-data (pci/pan) object — the §10.2.1.1 record of individual user access to CHD. Object-scoped to cardholder data specifically.',
+    kind: 'activity',
+    where: () => `operation = 'SELECT' AND ${chdAny}`,
+  },
+  {
+    id: 'pci-chd-modification',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.2',
+    controlName: 'Modification of cardholder data',
+    name: 'Modifications to cardholder data (PCI)',
+    description: 'INSERT/UPDATE/DELETE against cardholder-data objects — the change record for CHD integrity review.',
+    kind: 'activity',
+    where: () => `operation IN ('INSERT','UPDATE','DELETE') AND ${chdAny}`,
+  },
+  {
+    id: 'pci-admin-actions',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.1.2',
+    controlName: 'Administrative / root actions',
+    name: 'Administrative & root-account actions',
+    description: 'Activity by administrative/generic accounts (root/admin/sa/postgres/system/mysql) — the §10.2.1.2 record of all actions taken by individuals with administrative access.',
+    kind: 'activity',
+    where: () => `${sharedAcct}`,
+  },
+  {
+    id: 'pci-invalid-access',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.1.4',
+    controlName: 'Invalid logical access attempts',
+    name: 'Invalid / anomalous access attempts',
+    description: 'Authentication events scored anomalous (≥ 50) — the §10.2.1.4 invalid-access-attempt queue (no explicit auth-failure flag is captured, so anomaly score is the signal).',
+    kind: 'exception',
+    where: () => `(operation IN ('LOGIN','LOGOUT') OR event_class = 'auth') AND anomaly_score >= 50`,
+  },
+  {
+    id: 'pci-credential-changes',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.1.5',
+    controlName: 'Changes to authentication credentials',
+    name: 'Credential & privilege changes',
+    description: 'GRANT/REVOKE and identity statements (ALTER USER, SET PASSWORD, IDENTIFIED BY) — the §10.2.1.5 record of changes to identification and authentication credentials.',
+    kind: 'activity',
+    where: () => `operation IN ('GRANT') OR sql_text ILIKE '%alter user%' OR sql_text ILIKE '%identified by%' OR sql_text ILIKE '%set password%'`,
+  },
+  {
+    id: 'pci-system-object-changes',
+    framework: 'PCI-DSS',
+    control: 'PCI 10.2.1.7',
+    controlName: 'Creation / deletion of system objects',
+    name: 'System-level object changes (DDL)',
+    description: 'All DDL (CREATE/ALTER/DROP) — the §10.2.1.7 record of creation and deletion of system-level objects.',
+    kind: 'activity',
+    where: () => `operation = 'DDL'`,
   },
 ];
 
