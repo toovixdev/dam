@@ -769,6 +769,25 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE classified_columns DROP COLUMN IF EXISTS schema_name`);
     await client.query(`ALTER TABLE classified_columns DROP COLUMN IF EXISTS table_name`);
 
+    // Manual "not sensitive" overrides (false-positive suppression), keyed by the column's STABLE
+    // natural identity — db + schema + object + column — NOT classified_columns.id, which is
+    // regenerated on every scan (each scan DELETEs + re-INSERTs the whole set). Applied at read
+    // time so an override survives re-scans and takes effect immediately. Reason is optional (audit).
+    await client.query(`CREATE TABLE IF NOT EXISTS classification_overrides (
+      id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id    UUID REFERENCES tenants(id),
+      database_id  UUID REFERENCES databases(id),
+      schema_name  VARCHAR(80),
+      object_name  VARCHAR(120),
+      column_name  VARCHAR(120),
+      decision     VARCHAR(20) NOT NULL DEFAULT 'not_sensitive',
+      reason       TEXT,
+      actor_id     UUID,
+      actor_email  VARCHAR(200),
+      created_at   TIMESTAMPTZ DEFAULT now(),
+      UNIQUE (tenant_id, database_id, schema_name, object_name, column_name)
+    )`);
+
     // Remove the old hand-seeded (fake) classification rows — classification is now
     // populated by the real scanner. Seed rows are identifiable by their fixed owners.
     await client.query(
@@ -8884,20 +8903,34 @@ app.get('/api/classification/objects', authRequired, async (req, res) => {
   res.json(rows);
 });
 
-// Column-level inventory, joined up to its object for schema/table context.
+// Column-level inventory, joined up to its object for schema/table context. A manual
+// "not sensitive" override (classification_overrides) is applied here at read time: the effective
+// tag/sensitivity are neutralised and the override metadata is exposed so the UI can show + reverse it.
 app.get('/api/classification/columns', authRequired, async (req, res) => {
   const { rows } = await pgPool.query(
     `SELECT cc.*, o.schema_name, o.object_name AS table_name, o.object_type,
             d.name AS database_name,
             COALESCE(cc.tags[1], 'unknown') AS tag,
-            cc.detection_method AS detector
+            cc.detection_method AS detector,
+            (ov.id IS NOT NULL) AS overridden,
+            ov.reason      AS override_reason,
+            ov.actor_email AS override_by,
+            ov.created_at  AS override_at
      FROM classified_columns cc
      JOIN classified_objects o ON cc.object_id = o.id
      JOIN databases d ON cc.database_id = d.id
+     LEFT JOIN classification_overrides ov
+       ON ov.tenant_id = cc.tenant_id AND ov.database_id = cc.database_id
+      AND ov.schema_name = o.schema_name AND ov.object_name = o.object_name
+      AND ov.column_name = cc.column_name AND ov.decision = 'not_sensitive'
      WHERE cc.tenant_id = $1
      ORDER BY cc.confidence DESC`, [req.user.tenantId]
   );
-  res.json(rows);
+  // Neutralise the classification for overridden columns, but keep the original for the audit view.
+  const out = rows.map((r) => r.overridden
+    ? { ...r, original_tag: r.tag, original_sensitivity: r.sensitivity, tag: 'not_sensitive', sensitivity: 'none' }
+    : r);
+  res.json(out);
 });
 
 // Classification coverage per database — REAL, from the agent's last scan totals.
@@ -8947,8 +8980,15 @@ const CLASSIFICATION_DETECTORS = [
 ];
 app.get('/api/classification/detectors', authRequired, async (req, res) => {
   const hits = (await pgPool.query(
-    `SELECT COALESCE(tags[1], 'unknown') AS tag, COUNT(*)::int AS hits
-     FROM classified_columns WHERE tenant_id = $1 GROUP BY 1`, [req.user.tenantId]
+    `SELECT COALESCE(cc.tags[1], 'unknown') AS tag, COUNT(*)::int AS hits
+     FROM classified_columns cc
+     JOIN classified_objects o ON cc.object_id = o.id
+     LEFT JOIN classification_overrides ov
+       ON ov.tenant_id = cc.tenant_id AND ov.database_id = cc.database_id
+      AND ov.schema_name = o.schema_name AND ov.object_name = o.object_name
+      AND ov.column_name = cc.column_name AND ov.decision = 'not_sensitive'
+     WHERE cc.tenant_id = $1 AND ov.id IS NULL
+     GROUP BY 1`, [req.user.tenantId]
   )).rows.reduce((m, r) => { m[r.tag] = r.hits; return m; }, {});
   // A detector is "active" if the scanner ran it; all catalog detectors run on every scan.
   const scanned = (await pgPool.query(
@@ -10192,6 +10232,48 @@ app.post('/api/classification/columns/:id/mask', authRequired, async (req, res) 
   const { rows } = await pgPool.query('UPDATE classified_columns SET is_masked = $2 WHERE id = $1 AND tenant_id = $3 RETURNING id, is_masked', [req.params.id, masked, req.user.tenantId]);
   if (!rows.length) return res.status(404).json({ error: 'Column not found' });
   res.json(rows[0]);
+});
+
+// Mark a single classified column as NOT sensitive (false-positive override), scoped to the EXACT
+// column. Resolved to the column's stable natural key (db+schema+object+column) so it survives the
+// scan's delete/re-insert cycle; applied at read time by /api/classification/columns. Reason optional.
+app.post('/api/classification/columns/:id/override', authRequired, async (req, res) => {
+  const reason = (req.body && typeof req.body.reason === 'string' && req.body.reason.trim())
+    ? req.body.reason.trim().slice(0, 1000) : null;
+  const col = (await pgPool.query(
+    `SELECT cc.column_name, cc.database_id, o.schema_name, o.object_name
+       FROM classified_columns cc JOIN classified_objects o ON cc.object_id = o.id
+      WHERE cc.id = $1 AND cc.tenant_id = $2`, [req.params.id, req.user.tenantId]
+  )).rows[0];
+  if (!col) return res.status(404).json({ error: 'Column not found' });
+  const { rows } = await pgPool.query(
+    `INSERT INTO classification_overrides
+       (tenant_id, database_id, schema_name, object_name, column_name, decision, reason, actor_id, actor_email)
+     VALUES ($1,$2,$3,$4,$5,'not_sensitive',$6,$7,$8)
+     ON CONFLICT (tenant_id, database_id, schema_name, object_name, column_name)
+       DO UPDATE SET decision='not_sensitive', reason=EXCLUDED.reason,
+                     actor_id=EXCLUDED.actor_id, actor_email=EXCLUDED.actor_email, created_at=now()
+     RETURNING id, created_at`,
+    [req.user.tenantId, col.database_id, col.schema_name, col.object_name, col.column_name,
+     reason, req.user.userId || null, req.user.email || null]
+  );
+  res.json({ ok: true, overridden: true, id: rows[0].id, reason, at: rows[0].created_at });
+});
+
+// Restore a column to its detected classification (remove the not-sensitive override).
+app.delete('/api/classification/columns/:id/override', authRequired, async (req, res) => {
+  const col = (await pgPool.query(
+    `SELECT cc.column_name, cc.database_id, o.schema_name, o.object_name
+       FROM classified_columns cc JOIN classified_objects o ON cc.object_id = o.id
+      WHERE cc.id = $1 AND cc.tenant_id = $2`, [req.params.id, req.user.tenantId]
+  )).rows[0];
+  if (!col) return res.status(404).json({ error: 'Column not found' });
+  await pgPool.query(
+    `DELETE FROM classification_overrides
+      WHERE tenant_id=$1 AND database_id=$2 AND schema_name=$3 AND object_name=$4 AND column_name=$5`,
+    [req.user.tenantId, col.database_id, col.schema_name, col.object_name, col.column_name]
+  );
+  res.json({ ok: true, overridden: false });
 });
 
 // ── Reports ───────────────────────────────────────────────

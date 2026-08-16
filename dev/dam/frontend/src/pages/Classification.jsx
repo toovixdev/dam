@@ -9,7 +9,7 @@ import { TagBadge, StatusBadge } from '../components/shared/Badge';
 import useApiData from '../hooks/useApiData';
 import { toast } from '../components/shared/Toast';
 import { exportCsv } from '../exportCsv';
-import { apiPost } from '../api/client';
+import { apiPost, apiDelete } from '../api/client';
 
 export default function Classification() {
   const { data: inventoryData, loading, refetch } = useApiData('/classification/columns');
@@ -46,6 +46,22 @@ export default function Classification() {
     } else { toast('Could not start scan', 'err'); }
   };
 
+  // False-positive handling: mark a single column "not sensitive" (optional audit reason), or
+  // restore it. The override is applied server-side at read time and survives re-scans, so a
+  // refetch immediately reflects the change.
+  const markNotSensitive = async (row) => {
+    const reason = window.prompt(`Mark "${row.column_name}" as NOT sensitive.\n\nOptional — reason for the audit trail:`, '');
+    if (reason === null) return; // cancelled
+    const res = await apiPost(`/classification/columns/${row.id}/override`, { reason: reason.trim() });
+    if (res && res.ok) { toast(`Marked ${row.column_name} not sensitive`, 'ok'); refetch(); refetchDetectors(); }
+    else { toast('Could not update column', 'err'); }
+  };
+  const restoreClassification = async (row) => {
+    const res = await apiDelete(`/classification/columns/${row.id}/override`);
+    if (res && res.ok) { toast(`Restored classification for ${row.column_name}`, 'ok'); refetch(); refetchDetectors(); }
+    else { toast('Could not restore column', 'err'); }
+  };
+
   const onExport = () => {
     if (activeTab === 'objects') {
       exportCsv('toovix-classified-objects.csv',
@@ -54,13 +70,13 @@ export default function Classification() {
       toast(`Exported ${objects.length} objects`, 'ok');
     } else {
       exportCsv('toovix-classified-columns.csv',
-        ['Database', 'Schema', 'Table', 'Column', 'Classification', 'Sensitivity', 'Detector', 'Masked'],
-        inventory.map((c) => [c.database_name, c.schema_name, c.table_name, c.column_name, c.tag, c.sensitivity, c.detector, c.is_masked]));
+        ['Database', 'Schema', 'Table', 'Column', 'Classification', 'Sensitivity', 'Detector', 'Masked', 'Overridden', 'Override Reason'],
+        inventory.map((c) => [c.database_name, c.schema_name, c.table_name, c.column_name, c.tag, c.sensitivity, c.detector, c.is_masked, c.overridden ? 'yes' : '', c.override_reason || '']));
       toast(`Exported ${inventory.length} columns`, 'ok');
     }
   };
   const classifiedObjects = objects.length;
-  const sensitiveCount = inventory.length;                       // every classified column is a PII/PCI hit
+  const sensitiveCount = inventory.filter((c) => !c.overridden).length;   // exclude columns marked "not sensitive"
   const detectorsActive = detectorsData?.active ?? 0;            // real: detectors that ran on the last scan
   const avgCoverage = coverageData?.coverage_pct ?? 0;           // real: % of databases classification-scanned
 
@@ -111,12 +127,18 @@ export default function Classification() {
     { key: 'schema_name', label: 'Schema' },
     { key: 'table_name', label: 'Table' },
     { key: 'column_name', label: 'Column' },
-    { key: 'tag', label: 'Classification', render: (v) => <TagBadge tag={v || 'unknown'} /> },
+    { key: 'tag', label: 'Classification', render: (v, row) => row.overridden
+      ? <span className="badge" style={{ color: 'var(--muted)' }} title={`Marked not sensitive${row.override_by ? ' by ' + row.override_by : ''}${row.override_reason ? ' — ' + row.override_reason : ''}`}>not sensitive</span>
+      : <TagBadge tag={v || 'unknown'} /> },
     { key: 'sensitivity', label: 'Sensitivity', render: (v) => {
       const colors = { critical: 'var(--danger)', high: 'var(--amber)', medium: 'var(--info)', low: 'var(--green)' };
       return <span style={{ fontWeight: 600, color: colors[v] || 'var(--muted)' }}>{v || '-'}</span>;
     }},
     { key: 'detector', label: 'Detector' },
+    { key: 'actions', label: '', sortable: false, render: (_v, row) => row.overridden
+      ? <button className="btn-secondary" style={{ padding: '2px 8px', fontSize: 12 }} onClick={() => restoreClassification(row)}>Restore</button>
+      : <button className="btn-secondary" style={{ padding: '2px 8px', fontSize: 12 }} onClick={() => markNotSensitive(row)}>Mark not sensitive</button>
+    },
   ];
 
   const coverageColumns = [
