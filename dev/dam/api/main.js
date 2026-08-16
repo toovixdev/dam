@@ -10826,10 +10826,14 @@ app.post('/api/compliance/catalog/:id/run', authRequired, async (req, res) => {
     if (total > 0 && (!Array.isArray(rows) || rows.length === 0)) console.warn(`[Compliance] ${def.id}: count=${total} but 0 rows snapshotted — the row query may have failed silently`);
     const now = new Date();
     const from = new Date(now.getTime() - days * 86400000);
+    // Postgres JSONB rejects \u0000 — scrub null bytes from snapshot string fields so a captured
+    // query text with an embedded NUL can't fail the evidence insert (surfaced by PCI CHD reports).
+    const scrub = (v) => (typeof v === 'string' ? v.replace(/\u0000/g, '') : v);
+    const cleanRows = (Array.isArray(rows) ? rows : []).map((row) => { const o = {}; for (const k in row) o[k] = scrub(row[k]); return o; });
     const snapshot = {
       def: { id: def.id, name: def.name, framework: def.framework, control: def.control, kind: def.kind },
       period: { from: from.toISOString(), to: now.toISOString(), days },
-      total, returned: Array.isArray(rows) ? rows.length : 0, rows: Array.isArray(rows) ? rows : [],
+      total, returned: cleanRows.length, rows: cleanRows,
     };
     const contentHash = crypto.createHash('sha256').update(stableStr(snapshot)).digest('hex');
     const r = (await pgPool.query(
