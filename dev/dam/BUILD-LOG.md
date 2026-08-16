@@ -2756,3 +2756,31 @@ and never a wildcard `AUDIT_LOG`; `sop.html` documents the footgun + recreate ha
 **Follow-up (agent code, not yet done):** the underlying agent still mis-seeds if someone *does*
 pass a multi-file wildcard `AUDIT_LOG`; hardening the wildcard path to seed per-current-file (and
 rebuilding `dam-agent.exe`) is deferred. `MSSQL_XE_SESSION` is the supported path.
+
+## HIPAA pack hardened to full parity — 5 workstreams (2026-08-16)
+
+Moved HIPAA from "posture-only, no evidence reports" to full capability parity across the
+auditor-evidence dimension. The compliance system has **two surfaces**: the evidence **catalog**
+(`compliance-catalog.js`, runnable→sealed→attestable reports) and the **posture model**
+(`complianceFrameworks()` in main.js, measured + attested control scoring). They were disconnected.
+
+1. **Measurable coverage** — HIPAA catalog now 9 reports: ePHI access §164.312(b), integrity
+   §164.312(c)(1), activity-review ×3 §164.308(a)(1)(ii)(D), auth §164.312(d), access-mgmt
+   §164.308(a)(4), log-in monitoring §164.308(a)(5)(ii)(C), shared-account §164.312(a)(2)(i).
+   All ePHI-scoped via the `phi` tag; shared-account list matches the posture sharedAcctEvents metric.
+2. **Attestable procedural controls** — added the safeguards no telemetry can measure (risk analysis,
+   contingency, BAA, physical, encryption-at-rest) to the HIPAA posture def + `ATTESTABLE_CONTROLS`.
+   Honest completeness → the HIPAA score dropped (unattested = gap until signed off).
+3. **Unified matrix** — `GET /api/compliance/framework/:key/matrix` joins posture ↔ catalog ↔ latest
+   sealed evidence by normalized §-code (`frameworkMatrix()` helper). Added break-glass
+   §164.312(a)(2)(ii) (reuses JIT) + incident §164.308(a)(6) (reuses auto-quarantine) posture controls.
+4. **Signed versioned packs** — `GET /api/compliance/pack/:framework` (+ `/pack/pubkey`) serves the
+   catalog control set + rule citation + effective date + revision, content-versioned and signed with
+   the VA pack-signing key (`vaSigningKey`/`vaSign`). Covers all 4 frameworks. Signature round-trip verified.
+5. **Audit-binder PDF** — `GET /api/compliance/framework/:key/binder.pdf` renders control → status →
+   §-citation → backing sealed evidence (content hash + reviewer sign-off), reusing `buildCompliancePackPdf`.
+
+Deploy: `docker cp` main.js + compliance-catalog.js into dam-api, restart. Commits d3f557f, 81e77bf,
+fb31468. Verified on prod (awstest tenant): matrix join correct, pack signature verifies, binder is valid PDF.
+Remaining gap vs Guardium/Imperva is auditor *familiarity* with report format, not capability. The pack
+signer + matrix are the reusable pattern to lift PCI/SOX/GDPR breadth next.
