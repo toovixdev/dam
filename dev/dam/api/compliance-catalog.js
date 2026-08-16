@@ -24,10 +24,15 @@ const PERSONAL = ['pii', 'aadhaar', 'pan', 'ssn', 'dob', 'email', 'name', 'addre
 // mapping for the Security Rule's ePHI requirements.
 const PHI = ['phi'];
 
+// Generic / shared accounts — a unique-user-identification violation (HIPAA
+// §164.312(a)(2)(i)). Kept in sync with the posture model's sharedAcctEvents metric.
+const SHARED_ACCOUNTS = ['root', 'admin', 'sa', 'postgres', 'system', 'mysql'];
+
 const chList = (arr) => '[' + arr.map((t) => `'${t}'`).join(',') + ']';
 const sensAny = `hasAny(tags, ${chList(SENSITIVE)})`;
 const personalAny = `hasAny(tags, ${chList(PERSONAL)})`;
 const phiAny = `hasAny(tags, ${chList(PHI)})`;
+const sharedAcct = `lower(principal) IN (${SHARED_ACCOUNTS.map((a) => `'${a}'`).join(',')})`;
 
 // kind:
 //   'activity'  — an evidence log the reviewer confirms was reviewed (PCI 10.6 style).
@@ -189,6 +194,36 @@ const CATALOG = [
     description: 'LOGIN/LOGOUT and auth-class events on systems holding ePHI — the account-usage record for §164.312(d) authentication review.',
     kind: 'activity',
     where: () => `(operation IN ('LOGIN','LOGOUT') OR event_class = 'auth')`,
+  },
+  {
+    id: 'hipaa-access-management',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.308(a)(4)',
+    controlName: 'Access authorization & management',
+    name: 'Access authorization changes (DDL / GRANT)',
+    description: 'Schema and privilege changes (DDL, GRANT/REVOKE) on systems holding ePHI — the §164.308(a)(4) record that access to ePHI is granted, modified, and reviewed under authorization.',
+    kind: 'activity',
+    where: () => `operation IN ('DDL','GRANT')`,
+  },
+  {
+    id: 'hipaa-login-monitoring',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.308(a)(5)(ii)(C)',
+    controlName: 'Log-in monitoring',
+    name: 'Anomalous authentication activity',
+    description: 'Authentication events scored anomalous (≥ 50) — the §164.308(a)(5)(ii)(C) log-in-monitoring queue for discrepancy review (no explicit auth-failure flag is captured, so anomaly score is the signal).',
+    kind: 'exception',
+    where: () => `(operation IN ('LOGIN','LOGOUT') OR event_class = 'auth') AND anomaly_score >= 50`,
+  },
+  {
+    id: 'hipaa-shared-account',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.312(a)(2)(i)',
+    controlName: 'Unique user identification',
+    name: 'Shared / generic-account activity',
+    description: 'Activity from shared or generic accounts (root/admin/sa/postgres/system/mysql) — each row is a unique-user-identification violation to resolve under §164.312(a)(2)(i).',
+    kind: 'exception',
+    where: () => `${sharedAcct}`,
   },
 ];
 
