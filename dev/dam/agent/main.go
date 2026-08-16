@@ -819,6 +819,8 @@ var nameClassifiers = []nameClassifier{
 	{regexp.MustCompile(`(?i)passport|tax_id|taxid|(^|_)tin(_|$)|(^|_)pan(_|$)`), "gov_id", "high"},
 	{regexp.MustCompile(`(?i)(^|_)phone|mobile_no|contact_no`), "phone", "medium"},
 	{regexp.MustCompile(`(?i)(^|_)address|postal_code|pincode|zip_code`), "address", "medium"},
+	// ePHI (HIPAA) — health/medical column names. Collapses to the `phi` policy tag.
+	{regexp.MustCompile(`(?i)diagnos|icd_?(9|10)?_?code|medical_record|(^|_)mrn(_|$)|health_plan|(^|_)npi(_|$)|medicaid|medicare|prescription|medication|lab_result|(^|_)patient(_|$)|encounter_id|allerg|blood_type|health_condition`), "phi", "critical"},
 }
 
 func classifyCol(name string) (tag, sens string, ok bool) {
@@ -1487,6 +1489,8 @@ func policyTagFor(t string) string {
 		return "pci"
 	case "aadhaar":
 		return "aadhaar"
+	case "phi":
+		return "phi"
 	default:
 		return "pii"
 	}
@@ -2194,6 +2198,9 @@ func detectTags(sql string) []string {
 	}
 	if strings.Contains(u, "EMAIL") || strings.Contains(u, "PHONE") || strings.Contains(u, "ADDRESS") || strings.Contains(u, "DOB") {
 		add("pii")
+	}
+	if strings.Contains(u, "DIAGNOS") || strings.Contains(u, "PATIENT") || strings.Contains(u, "MEDICAL_RECORD") || strings.Contains(u, "MRN") || strings.Contains(u, "ICD") || strings.Contains(u, "MEDICATION") || strings.Contains(u, "PRESCRIPTION") || strings.Contains(u, "HEALTH_PLAN") || strings.Contains(u, "NPI") {
+		add("phi")
 	}
 	return tags
 }

@@ -200,10 +200,10 @@ const CATALOG = [
     framework: 'HIPAA',
     control: 'HIPAA §164.308(a)(4)',
     controlName: 'Access authorization & management',
-    name: 'Access authorization changes (DDL / GRANT)',
-    description: 'Schema and privilege changes (DDL, GRANT/REVOKE) on systems holding ePHI — the §164.308(a)(4) record that access to ePHI is granted, modified, and reviewed under authorization.',
+    name: 'Access authorization changes on ePHI (DDL / GRANT)',
+    description: 'Schema and privilege changes (DDL, GRANT/REVOKE) against ePHI-classified objects — the §164.308(a)(4) record that access to ePHI specifically is granted, modified, and reviewed under authorization. (Object-scoped: a GRANT on a non-PHI object is not a HIPAA event.)',
     kind: 'activity',
-    where: () => `operation IN ('DDL','GRANT')`,
+    where: () => `operation IN ('DDL','GRANT') AND ${phiAny}`,
   },
   {
     id: 'hipaa-login-monitoring',
