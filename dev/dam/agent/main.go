@@ -60,8 +60,9 @@ type Config struct {
 	VaScan       bool // VA Scanner: run read-only CIS-style security checks (mysql|postgresql)
 	DBUser       string
 	DBPass       string
-	DBName       string // postgres: the database to classify (information_schema is per-DB in PG)
-	Region       string // classification: agent's data region (IN|US|EU|UK) — filters the detector pack
+	DBName       string          // postgres: the database to classify (information_schema is per-DB in PG)
+	ExemptUsers  map[string]bool // DB principals never forwarded — the DAM's own monitoring/classification accounts (e.g. dam_svc)
+	Region       string          // classification: agent's data region (IN|US|EU|UK) — filters the detector pack
 	ClassifyMins int
 	// classify: also sample a few stored values per sensitive column to detect data that is
 	// ALREADY masked/redacted at rest (so it isn't reported as a masking gap). Values are
@@ -123,6 +124,29 @@ func tagAgentQuery(q string) string { return agentQueryTag + " " + q }
 // isAgentOwnQuery reports whether this statement was issued by this agent process.
 func isAgentOwnQuery(sql string) bool { return strings.Contains(sql, agentQueryTag) }
 
+// principalUser normalizes a captured principal to a bare, lowercased username for exemption
+// matching — it strips a Windows domain prefix ("DOMAIN\\user") and a host suffix ("user@host"),
+// so "WINSQL\\dam_svc", "dam_svc@localhost" and "dam_svc" all compare equal.
+func principalUser(p string) string {
+	p = strings.TrimSpace(p)
+	if i := strings.LastIndex(p, "\\"); i >= 0 {
+		p = p[i+1:]
+	}
+	if i := strings.IndexByte(p, '@'); i >= 0 {
+		p = p[:i]
+	}
+	return strings.ToLower(strings.TrimSpace(p))
+}
+
+// isExemptPrincipal reports whether a captured event's principal is one of the DAM's own
+// monitoring/classification accounts (see Config.ExemptUsers). Their activity is never forwarded.
+func isExemptPrincipal(cfg Config, principal string) bool {
+	if len(cfg.ExemptUsers) == 0 {
+		return false
+	}
+	return cfg.ExemptUsers[principalUser(principal)]
+}
+
 func loadConfig() Config {
 	c := Config{
 		Mode:         env("MODE", "proxy"),
@@ -163,6 +187,21 @@ func loadConfig() Config {
 			c.BlockPatterns = append(c.BlockPatterns, strings.ToUpper(p))
 		}
 	}
+	// Monitoring-account exemption. The DAM's own DB login (dam_svc) — used for classification
+	// value-sampling, VA and audit polls — is the tool watching the DB, not user activity, so its
+	// events must never reach the trail, alerts or compliance. The agent's own DB_USER is exempt by
+	// default (opt out with AUDIT_EXEMPT_SELF=false); AUDIT_EXEMPT_USERS adds more principals.
+	c.ExemptUsers = map[string]bool{}
+	if env("AUDIT_EXEMPT_SELF", "true") != "false" {
+		if u := principalUser(c.DBUser); u != "" {
+			c.ExemptUsers[u] = true
+		}
+	}
+	for _, u := range strings.Split(env("AUDIT_EXEMPT_USERS", ""), ",") {
+		if u = principalUser(u); u != "" {
+			c.ExemptUsers[u] = true
+		}
+	}
 	return c
 }
 
@@ -179,6 +218,13 @@ func runAgent() {
 	cfg := loadConfig()
 	log.SetFlags(log.Ltime)
 	log.Printf("=== TooVix DAM Agent v%s · mode=%s engine=%s target=%s:%s ===", cfg.Version, cfg.Mode, cfg.Engine, cfg.TargetHost, cfg.TargetPort)
+	if len(cfg.ExemptUsers) > 0 {
+		exempt := make([]string, 0, len(cfg.ExemptUsers))
+		for u := range cfg.ExemptUsers {
+			exempt = append(exempt, u)
+		}
+		log.Printf("audit exemption: activity by monitoring principal(s) %v is not forwarded (kept out of trail / alerts / compliance)", exempt)
+	}
 
 	agentID, tenantID := enrollWithRetry(cfg)
 	cfg.TenantID = tenantID
@@ -2075,6 +2121,13 @@ func forwardEventOp(cfg Config, principal, clientIP, sql, op string, rowCount in
 	// Drop the agent's own database traffic. Checked HERE because every capture mode
 	// (network, host, proxy, audit-forward) funnels through this one function.
 	if isAgentOwnQuery(sql) {
+		return
+	}
+	// Drop the DAM's own monitoring/classification accounts (e.g. dam_svc) by PRINCIPAL — a stronger
+	// guarantee than the query-tag filter above: even an untagged read by dam_svc (classification
+	// value-sampling of sensitive columns, VA, audit polls) stays out of the trail, alerts and
+	// compliance, because the event is never sent to the control plane.
+	if isExemptPrincipal(cfg, principal) {
 		return
 	}
 	tags := detectTags(sql)
