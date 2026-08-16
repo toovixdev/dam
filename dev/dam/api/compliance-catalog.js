@@ -19,9 +19,15 @@
 const SENSITIVE = ['pii', 'pci', 'phi', 'aadhaar', 'pan', 'gstin', 'ssn', 'dob'];
 const PERSONAL = ['pii', 'aadhaar', 'pan', 'ssn', 'dob', 'email', 'name', 'address', 'phone'];
 
+// ePHI — electronic protected health information. HIPAA controls scope to the
+// `phi` classification tag specifically (not all SENSITIVE), which is the correct
+// mapping for the Security Rule's ePHI requirements.
+const PHI = ['phi'];
+
 const chList = (arr) => '[' + arr.map((t) => `'${t}'`).join(',') + ']';
 const sensAny = `hasAny(tags, ${chList(SENSITIVE)})`;
 const personalAny = `hasAny(tags, ${chList(PERSONAL)})`;
+const phiAny = `hasAny(tags, ${chList(PHI)})`;
 
 // kind:
 //   'activity'  — an evidence log the reviewer confirms was reviewed (PCI 10.6 style).
@@ -116,6 +122,73 @@ const CATALOG = [
     description: 'Reads of objects tagged as personal data — the processing record for GDPR Article 30 accountability.',
     kind: 'activity',
     where: () => `operation = 'SELECT' AND ${personalAny}`,
+  },
+
+  // ── HIPAA Security Rule — ePHI activity evidence ────────────────────────────
+  // Runnable evidence reports backing the HIPAA posture controls already surfaced
+  // by complianceFrameworks() in main.js: audit controls §164.312(b), integrity
+  // §164.312(c)(1), and information-system-activity review §164.308(a)(1)(ii)(D).
+  // All ePHI-scoped via the `phi` tag so a health-data tenant gets HIPAA-specific
+  // evidence, not the generic sensitive-data reports.
+  {
+    id: 'hipaa-ephi-access',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.312(b)',
+    controlName: 'Audit controls — access to ePHI',
+    name: 'Access to ePHI (HIPAA audit controls)',
+    description: 'Every read of an object classified PHI — the §164.312(b) audit-controls record of who accessed electronic protected health information and when.',
+    kind: 'activity',
+    where: () => `operation = 'SELECT' AND ${phiAny}`,
+  },
+  {
+    id: 'hipaa-ephi-modification',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.312(c)(1)',
+    controlName: 'Integrity — alteration / destruction of ePHI',
+    name: 'Modifications to ePHI (HIPAA integrity)',
+    description: 'INSERT/UPDATE/DELETE against PHI-classified objects — integrity evidence that ePHI was not improperly altered or destroyed.',
+    kind: 'activity',
+    where: () => `operation IN ('INSERT','UPDATE','DELETE') AND ${phiAny}`,
+  },
+  {
+    id: 'hipaa-ephi-bulk-export',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.308(a)(1)(ii)(D)',
+    controlName: 'Bulk ePHI extraction (minimum necessary)',
+    name: 'Bulk ePHI extraction',
+    description: 'Reads of PHI objects returning 10,000+ rows — the mass-export signature reviewed against the minimum-necessary standard.',
+    kind: 'exception',
+    where: () => `operation = 'SELECT' AND ${phiAny} AND row_count >= 10000`,
+  },
+  {
+    id: 'hipaa-ephi-after-hours',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.308(a)(1)(ii)(D)',
+    controlName: 'Off-hours access to ePHI',
+    name: 'After-hours access to ePHI',
+    description: 'Access to PHI objects outside 07:00–20:00 UTC — surfaced for the information-system-activity review.',
+    kind: 'exception',
+    where: () => `${phiAny} AND (toHour(timestamp) < 7 OR toHour(timestamp) >= 20)`,
+  },
+  {
+    id: 'hipaa-ephi-high-risk',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.308(a)(1)(ii)(D)',
+    controlName: 'Anomalous ePHI activity review',
+    name: 'High-risk activity touching ePHI',
+    description: 'Statements scored anomaly ≥ 70 that touched PHI-classified objects — the ePHI high-risk review queue.',
+    kind: 'exception',
+    where: () => `anomaly_score >= 70 AND ${phiAny}`,
+  },
+  {
+    id: 'hipaa-auth-activity',
+    framework: 'HIPAA',
+    control: 'HIPAA §164.312(d)',
+    controlName: 'Person or entity authentication',
+    name: 'Authentication & session activity (HIPAA)',
+    description: 'LOGIN/LOGOUT and auth-class events on systems holding ePHI — the account-usage record for §164.312(d) authentication review.',
+    kind: 'activity',
+    where: () => `(operation IN ('LOGIN','LOGOUT') OR event_class = 'auth')`,
   },
 ];
 
