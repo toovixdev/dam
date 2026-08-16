@@ -648,11 +648,14 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     ? (xe ? 'xevents' : 'sql_server_audit')
     : ({ oracle: 'unified_audit_trail', postgresql: 'pgaudit', mysql: 'general_log', mariadb: 'general_log', mongodb: 'profiler' }[eng] || 'native_audit');
   // AgentLite reads this native source. MySQL/PG tail a local file; SQL Server / MongoDB /
-  // Oracle poll over the wire and take no AUDIT_LOG (Mongo/Oracle: none; Azure SQL XEvents:
-  // MSSQL_XE_SESSION instead — see below).
+  // Oracle poll over the wire and take no AUDIT_LOG (Mongo/Oracle: none; SQL Server XEvents:
+  // MSSQL_XE_SESSION instead — see below). NB: XEvents must NOT use a wildcard AUDIT_LOG —
+  // fn_xe_file_target_read_file seeds MAX(file_offset) across every matching .xel, so stale
+  // rollover/recreated files (whose per-file offsets are higher) poison the resume point and
+  // silently drop all new events. MSSQL_XE_SESSION reads only the live file + follows recreates.
   const fileEngines = ['mysql', 'mariadb', 'postgresql'];
   const auditLog = eng === 'mssql'
-    ? (xe ? 'C:\\SQLAudit\\ToovixXE*.xel' : 'C:\\SQLAudit\\*.sqlaudit')
+    ? (xe ? '' : 'C:\\SQLAudit\\*.sqlaudit')
     : ({ mysql: '/var/log/mysql/general.log', mariadb: '/var/log/mysql/general.log', postgresql: '/var/log/postgresql/pgaudit.log' }[eng] || '');
   // AgentLite audit-forward now supports mysql/mariadb/postgresql/mssql/mongodb/oracle. No warning
   // for those; only genuinely unimplemented engines idle after enroll.
@@ -684,10 +687,11 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
     // path change. MySQL/PG tail a local file (so it runs ON the DB host); SQL Server / MongoDB /
     // Oracle POLL over the wire, so they can run on any Linux host that reaches the DB.
     env.push(`AUDIT_SOURCE=${auditSrc}`);
-    // AUDIT_LOG only applies to the file/blob-path engines. MongoDB and Oracle have no path;
-    // Azure SQL XEvents uses MSSQL_XE_SESSION instead (auto-discovers the blob + follows rollover).
+    // AUDIT_LOG only applies to the file-path engines. MongoDB and Oracle have no path; SQL Server
+    // XEvents uses MSSQL_XE_SESSION instead — it discovers the live .xel + follows rollover/recreate,
+    // avoiding the stale-file offset-poisoning that a wildcard AUDIT_LOG causes (see note above).
     if (auditLog) env.push(`AUDIT_LOG=${auditLog}`);
-    else if (eng === 'mssql' && xe) env.push('MSSQL_XE_SESSION=ToovixXE  # Azure SQL: auto-discovers the .xel blob');
+    else if (eng === 'mssql' && xe) env.push('MSSQL_XE_SESSION=ToovixXE  # discovers the live .xel + follows rollover/recreate — do NOT set a wildcard AUDIT_LOG');
     // The polling engines read telemetry over the wire, so a login is required even without
     // classification: SQL Server (CONTROL SERVER / VIEW [DATABASE] STATE), MongoDB (read +
     // clusterMonitor), Oracle (AUDIT_VIEWER + SELECT_CATALOG_ROLE).
