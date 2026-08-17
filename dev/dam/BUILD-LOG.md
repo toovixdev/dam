@@ -2900,3 +2900,17 @@ Verified on prod: signed ISO pack (7 controls), matrix (posture 7 + catalog 7), 
 frameworks (PCI 13, HIPAA 9, SOX 8, GDPR 6, ISO 27001 7 = 43 citations across 27 canonical controls).
 Commit a416b9c. The crosswalk + signer + registry + matrix + binder all generalize — NIST / SOC 2 /
 HITRUST are now the same content exercise.
+
+## SOC 2 added as 6th framework (2026-08-17)
+
+SOC 2 (AICPA Trust Services Criteria). Unlike ISO, SOC 2 had no posture model, so added both:
+- **Crosswalk**: 8 SOC 2 citations onto existing canonical controls (CC6.1 logical access, CC6.2
+  unique IDs, CC6.3 access review, CC6.6 auth, CC7.2 anomaly detection, CC7.3 incident, CC8.1 change
+  mgmt, C1.1 confidentiality) — zero new queries. shared-account-activity now spans 5 frameworks.
+- **Posture def**: new soc2 framework in buildFrameworks (8 controls; references aligned to the catalog
+  SOC citations so the matrix posture<->catalog join links 7/8). soc.cc6_7/soc.cc7_3 attestable.
+- **Pack**: registry + META entry (AICPA SOC 2 TSC, effective 2017-04-15).
+
+Verified on prod: signed SOC 2 pack (8 controls), matrix (posture 8 + catalog 8, 7/8 linked), catalog
+now spans 6 frameworks = 51 citations across 27 canonical controls. Commit 8593c7d. frameworkForKey's
+punctuation-insensitive match handles 'soc2' -> 'SOC 2'.
