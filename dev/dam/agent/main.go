@@ -68,6 +68,10 @@ type Config struct {
 	// ALREADY masked/redacted at rest (so it isn't reported as a masking gap). Values are
 	// analysed locally — only the derived boolean+method are sent, never the sampled data.
 	SampleAtRest bool
+	// MASK_SQL_LITERALS: redact string/numeric literals (bind-variable values) from the stored
+	// statement text before it leaves the host — so the trail keeps the query shape but not the
+	// sensitive values (e.g. WHERE email='a@b.com' → WHERE email='?'). Off by default.
+	MaskLiterals bool
 	// host mode: tag a read 'large-result' when the total response exceeds this many bytes.
 	// Tunable without a rebuild; 0 disables the tag. Independent of the eBPF capture window.
 	LargeResultBytes int64
@@ -173,6 +177,7 @@ func loadConfig() Config {
 		Region:           env("DB_REGION", ""),
 		ClassifyMins:     atoiDefault(env("CLASSIFY_INTERVAL_MIN", "30"), 30),
 		SampleAtRest:     env("CLASSIFY_SAMPLE", "true") == "true",
+		MaskLiterals:     env("MASK_SQL_LITERALS", "false") == "true",
 		LargeResultBytes: int64(atoiDefault(env("LARGE_RESULT_BYTES", "1048576"), 1048576)), // 1 MiB default
 		AuditLog:         env("AUDIT_LOG", ""),
 		AuditSource:      env("AUDIT_SOURCE", ""),
@@ -2105,6 +2110,18 @@ func readLenencInt(b []byte) (uint64, int) {
 }
 
 // ── Event forwarding to the control plane ────────────────────────────
+// SQL-literal masking (MASK_SQL_LITERALS). Redacts quoted string literals and standalone numeric
+// literals so the stored statement keeps its shape but not the bind-variable values. RE2-safe
+// (no look-behind): the numeric pattern uses word boundaries, so an identifier like "table1" is
+// left intact — only free-standing numbers are masked.
+var reStrLiteral = regexp.MustCompile(`'(?:[^']|'')*'`)
+var reNumLiteral = regexp.MustCompile(`\b\d+(?:\.\d+)?\b`)
+
+func maskLiterals(sql string) string {
+	sql = reStrLiteral.ReplaceAllString(sql, "'?'")
+	return reNumLiteral.ReplaceAllString(sql, "?")
+}
+
 func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, large bool) {
 	forwardEventOp(cfg, principal, clientIP, sql, detectOp(sql), rowCount, large)
 }
@@ -2129,6 +2146,11 @@ func forwardEventOp(cfg Config, principal, clientIP, sql, op string, rowCount in
 	// compliance, because the event is never sent to the control plane.
 	if isExemptPrincipal(cfg, principal) {
 		return
+	}
+	// Optionally redact literal/bind-variable values from the stored statement (MASK_SQL_LITERALS),
+	// keeping the query shape but not the sensitive values. detectOp already ran on the raw text.
+	if cfg.MaskLiterals {
+		sql = maskLiterals(sql)
 	}
 	tags := detectTags(sql)
 	tags = append(tags, classifyTags(sql)...) // tags from the agent's own classification scan
