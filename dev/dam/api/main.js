@@ -8638,6 +8638,11 @@ function ddlCsv(rows) {
 app.get('/api/ddl-changes/export', authRequired, async (req, res) => {
   await syncDdlChanges(req.user.tenantId, 90).catch(() => {});
   const rows = (await pgPool.query(`SELECT id, event_ts, principal, database_name, object_name, operation, in_window, cr_number, status, statement FROM ddl_changes WHERE tenant_id = $1 ORDER BY event_ts DESC LIMIT 5000`, [req.user.tenantId])).rows;
+  if (String(req.query.format || '').toLowerCase() === 'xlsx') {
+    const headers = ['ID', 'Timestamp', 'Principal', 'Database', 'Object', 'Operation', 'In window', 'CR number', 'Status', 'Statement'];
+    const data = rows.map((r) => [r.id, r.event_ts, r.principal, r.database_name, r.object_name, r.operation, r.in_window ? 'yes' : 'no', r.cr_number, r.status, r.statement]);
+    return sendXlsx(res, 'ddl-change-log.xlsx', 'DDL Changes', headers, data);
+  }
   res.setHeader('Content-Type', 'text/csv');
   res.setHeader('Content-Disposition', 'attachment; filename="ddl-change-log.csv"');
   res.send(ddlCsv(rows));
@@ -8659,6 +8664,55 @@ function parseCsvRows(text) {
   }
   if (field.length || row.length) { row.push(field); rows.push(row); }
   return rows;
+}
+
+// ── Native .xlsx export (Excel) — dependency-free. An .xlsx is a ZIP of XML parts; we write a
+// minimal, valid single-sheet workbook with inline strings (no styles/sharedStrings needed).
+const _crcTable = (() => { const t = new Array(256); for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; } return t; })();
+function crc32(buf) { let c = 0xffffffff; for (let i = 0; i < buf.length; i++) c = _crcTable[(c ^ buf[i]) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; }
+// zipStore: build a ZIP (stored / no compression) from [{name, data}] — Excel reads stored entries.
+function zipStore(files) {
+  const u16 = (n) => { const b = Buffer.alloc(2); b.writeUInt16LE(n >>> 0, 0); return b; };
+  const u32 = (n) => { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0, 0); return b; };
+  const parts = []; const central = []; let offset = 0;
+  for (const f of files) {
+    const name = Buffer.from(f.name); const data = Buffer.isBuffer(f.data) ? f.data : Buffer.from(f.data);
+    const crc = crc32(data);
+    const local = Buffer.concat([u32(0x04034b50), u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), name]);
+    parts.push(local, data);
+    central.push(Buffer.concat([u32(0x02014b50), u16(20), u16(20), u16(0), u16(0), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset), name]));
+    offset += local.length + data.length;
+  }
+  const cd = Buffer.concat(central);
+  const eocd = Buffer.concat([u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length), u32(cd.length), u32(offset), u16(0)]);
+  return Buffer.concat([...parts, cd, eocd]);
+}
+function _xEsc(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+// buildXlsx(sheetName, headers[], rows[][]) → Buffer of a valid .xlsx.
+function buildXlsx(sheetName, headers, rows) {
+  const colRef = (i) => { let s = ''; i++; while (i > 0) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
+  const cell = (r, c, v) => {
+    const ref = colRef(c) + (r + 1);
+    if (v instanceof Date) v = v.toISOString();
+    if (typeof v === 'number' && isFinite(v)) return `<c r="${ref}"><v>${v}</v></c>`;
+    return `<c r="${ref}" t="inlineStr"><is><t xml:space="preserve">${_xEsc(v)}</t></is></c>`;
+  };
+  const body = [headers, ...rows].map((row, r) => `<row r="${r + 1}">${row.map((v, c) => cell(r, c, v)).join('')}</row>`).join('');
+  const P = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  const NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  const REL = 'http://schemas.openxmlformats.org/package/2006/relationships';
+  return zipStore([
+    { name: '[Content_Types].xml', data: `${P}<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>` },
+    { name: '_rels/.rels', data: `${P}<Relationships xmlns="${REL}"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: 'xl/workbook.xml', data: `${P}<workbook xmlns="${NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${_xEsc(sheetName).slice(0, 31) || 'Sheet1'}" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: 'xl/_rels/workbook.xml.rels', data: `${P}<Relationships xmlns="${REL}"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>` },
+    { name: 'xl/worksheets/sheet1.xml', data: `${P}<worksheet xmlns="${NS}"><sheetData>${body}</sheetData></worksheet>` },
+  ]);
+}
+function sendXlsx(res, filename, sheetName, headers, rows) {
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.send(buildXlsx(sheetName, headers, rows));
 }
 
 // Bulk-apply CR#s from a returned CSV (matched on the "Change ID" column).
