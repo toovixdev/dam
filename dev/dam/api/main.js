@@ -6465,7 +6465,40 @@ async function postEmailAlert(cfg, a) {
   return { ok: true, status: 'sent' };
 }
 
+// Syslog (RFC 5424) forwarder — UDP or TCP, no external dependency (node dgram/net). Emits one
+// structured line per alert to a syslog server or SIEM collector. facility·severity → PRI.
+function postSyslog(cfg, a) {
+  return new Promise((resolve, reject) => {
+    const host = cfg.host;
+    if (!host) return reject(new Error('syslog host required'));
+    const port = parseInt(cfg.port || '514', 10);
+    const facility = parseInt(cfg.facility ?? '13', 10);          // 13 = log audit
+    const sevMap = { critical: 2, high: 3, medium: 4, low: 6 };   // → syslog severities
+    const pri = facility * 8 + (sevMap[String(a.severity || 'medium').toLowerCase()] ?? 5);
+    const clean = (s) => String(s || '').replace(/[\]"\\]/g, '').replace(/[\r\n]+/g, ' ');
+    const sd = `[dam@52111 severity="${clean(a.severity)}" principal="${clean(a.principal)}" db="${clean(a.database_name)}" rule="${clean(a.rule_name || a.summary)}"]`;
+    const line = `<${pri}>1 ${new Date().toISOString()} toovix-dam TooVixDAM - - ${sd} ${clean(a.summary || 'Security alert').slice(0, 900)}`;
+    if (String(cfg.protocol || 'udp').toLowerCase() === 'tcp') {
+      const net = require('net');
+      const sock = net.createConnection({ host, port, timeout: 6000 }, () => sock.end(line + '\n'));
+      sock.on('error', reject);
+      sock.on('close', () => resolve({ ok: true, status: 'sent' }));
+    } else {
+      const sock = require('dgram').createSocket('udp4');
+      const buf = Buffer.from(line);
+      sock.send(buf, 0, buf.length, port, host, (err) => { sock.close(); err ? reject(err) : resolve({ ok: true, status: 'sent' }); });
+    }
+  });
+}
+
 const CONNECTORS = {
+  syslog: { name: 'Syslog / SIEM', kind: 'alert', help: 'Forwards each alert as an RFC 5424 syslog message (UDP or TCP) to a syslog server or any SIEM collector that ingests syslog.',
+    fields: [
+      { key: 'host', label: 'Syslog host', type: 'text', required: true, placeholder: 'siem.company.internal' },
+      { key: 'port', label: 'Port', type: 'text', default: '514', placeholder: '514' },
+      { key: 'protocol', label: 'Protocol', type: 'select', default: 'udp', options: ['udp', 'tcp'] },
+      { key: 'facility', label: 'Facility (0–23)', type: 'text', default: '13', placeholder: '13 = log audit' },
+    ], send: postSyslog },
   email_alerts: { name: 'Email', kind: 'alert', help: 'Emails alerts to a recipient list using your configured SMTP (set up Settings → Email first). Comma-separate multiple addresses.',
     fields: [{ key: 'recipients', label: 'Recipients', type: 'text', required: true, placeholder: 'soc@company.com, oncall@company.com' }],
     send: (c, a) => postEmailAlert(c, a) },
