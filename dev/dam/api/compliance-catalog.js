@@ -295,6 +295,50 @@ const CATALOG = [
     kind: 'activity',
     where: () => `operation = 'DDL'`,
   },
+
+  // ── GDPR — personal-data processing & data-subject rights ───────────────────────────
+  // Scoped to the personal-data tags (personalAny); special-category health data → the `phi`
+  // tag (Art.9). Deepens GDPR from the two base reports to the processing-accountability set.
+  {
+    id: 'gdpr-personal-modification',
+    framework: 'GDPR',
+    control: 'GDPR Art.5(1)(d) / Art.30',
+    controlName: 'Modification of personal data',
+    name: 'Modifications to personal data (GDPR)',
+    description: 'INSERT/UPDATE/DELETE against personal-data objects — the accuracy (Art.5(1)(d)) and records-of-processing (Art.30) evidence for changes to personal data.',
+    kind: 'activity',
+    where: () => `operation IN ('INSERT','UPDATE','DELETE') AND ${personalAny}`,
+  },
+  {
+    id: 'gdpr-bulk-personal-export',
+    framework: 'GDPR',
+    control: 'GDPR Art.33 / Art.5(1)(c)',
+    controlName: 'Bulk personal-data extraction',
+    name: 'Bulk personal-data extraction (GDPR)',
+    description: 'Reads of personal-data objects returning 10,000+ rows — the data-minimisation (Art.5(1)(c)) exception and a personal-data-breach (Art.33) indicator.',
+    kind: 'exception',
+    where: () => `operation = 'SELECT' AND ${personalAny} AND row_count >= 10000`,
+  },
+  {
+    id: 'gdpr-special-category',
+    framework: 'GDPR',
+    control: 'GDPR Art.9',
+    controlName: 'Special-category data access',
+    name: 'Access to special-category data (GDPR Art.9)',
+    description: 'Reads of special-category data (health / ePHI) — the Art.9 record of access to data warranting heightened protection.',
+    kind: 'activity',
+    where: () => `operation = 'SELECT' AND ${phiAny}`,
+  },
+  {
+    id: 'gdpr-after-hours-personal',
+    framework: 'GDPR',
+    control: 'GDPR Art.32',
+    controlName: 'Off-hours access to personal data',
+    name: 'After-hours access to personal data (GDPR)',
+    description: 'Access to personal-data objects outside 07:00–20:00 UTC — reviewed under the security-of-processing (Art.32) obligation for anomalous access.',
+    kind: 'exception',
+    where: () => `${personalAny} AND (toHour(timestamp) < 7 OR toHour(timestamp) >= 20)`,
+  },
 ];
 
 const catalogById = (id) => CATALOG.find((c) => c.id === id) || null;
