@@ -139,7 +139,7 @@ const RAW = [
     name: 'Access to sensitive objects',
     description: 'All reads of objects classified PII/PCI/PHI — establishes who touched regulated data and when.',
     where: () => `operation = 'SELECT' AND ${sensAny}`,
-    mappings: [m('PCI-DSS', 'PCI 10.2.1', 'Access to cardholder / sensitive data'), m('ISO 27001', 'ISO A.12.4.1', 'Event logging')],
+    mappings: [m('PCI-DSS', 'PCI 10.2.1', 'Access to cardholder / sensitive data'), m('ISO 27001', 'ISO A.12.4.1', 'Event logging'), m('SOC 2', 'SOC 2 CC6.1', 'Logical access controls')],
   },
   {
     id: 'mass-sensitive-read', kind: 'exception',
@@ -160,7 +160,7 @@ const RAW = [
     name: 'Modifications to sensitive data',
     description: 'INSERT/UPDATE/DELETE against classified objects — integrity evidence for financially-relevant / regulated data.',
     where: () => `operation IN ('INSERT','UPDATE','DELETE') AND ${sensAny}`,
-    mappings: [m('SOX', 'SOX 802 / PCI 10.2.2', 'Modification of sensitive data')],
+    mappings: [m('SOX', 'SOX 802 / PCI 10.2.2', 'Modification of sensitive data'), m('SOC 2', 'SOC 2 C1.1', 'Confidential data protection')],
   },
 
   // ── Cross-framework subject / operation controls (one control → many regs) ──
@@ -174,6 +174,7 @@ const RAW = [
       m('HIPAA', 'HIPAA §164.312(a)(2)(i)', 'Unique user identification'),
       m('SOX', 'SOX 404 / ITGC Access', 'Privileged / administrative activity'),
       m('ISO 27001', 'ISO A.9.2.3', 'Management of privileged access rights'),
+      m('SOC 2', 'SOC 2 CC6.2', 'User registration & unique IDs'),
     ],
   },
   {
@@ -185,6 +186,7 @@ const RAW = [
       m('PCI-DSS', 'PCI 10.2.5', 'Authentication & session activity'),
       m('HIPAA', 'HIPAA §164.312(d)', 'Person or entity authentication'),
       m('ISO 27001', 'ISO A.12.4.1', 'Event logging (authentication)'),
+      m('SOC 2', 'SOC 2 CC6.6', 'Authentication'),
     ],
   },
   {
@@ -196,6 +198,7 @@ const RAW = [
       m('PCI-DSS', 'PCI 10.2.1.4', 'Invalid logical access attempts'),
       m('HIPAA', 'HIPAA §164.308(a)(5)(ii)(C)', 'Log-in monitoring'),
       m('ISO 27001', 'ISO A.9.4.2', 'Secure log-on procedures'),
+      m('SOC 2', 'SOC 2 CC7.2', 'Anomaly detection'),
     ],
   },
   {
@@ -206,6 +209,7 @@ const RAW = [
     mappings: [
       m('PCI-DSS', 'PCI 10.2.1.7', 'Creation / deletion of system objects'),
       m('SOX', 'SOX 404 / ITGC Change Mgmt', 'Change management — schema changes'),
+      m('SOC 2', 'SOC 2 CC8.1', 'Change management'),
     ],
   },
   {
@@ -217,6 +221,7 @@ const RAW = [
       m('PCI-DSS', 'PCI 7.2', 'Least-privilege / access provisioning'),
       m('SOX', 'SOX 404 / ITGC Access', 'Access provisioning changes'),
       m('ISO 27001', 'ISO A.9.2.5', 'Review of user access rights'),
+      m('SOC 2', 'SOC 2 CC6.3', 'Access modification & review'),
     ],
   },
   {
@@ -244,7 +249,7 @@ const RAW = [
     name: 'High-risk (anomalous) activity',
     description: 'Statements scored anomaly ≥ 70 by the detection engine — the daily high-risk review queue.',
     where: () => `anomaly_score >= 70`,
-    mappings: [m('PCI-DSS', 'PCI 10.6', 'Review of high-risk activity'), m('ISO 27001', 'ISO A.16.1.4', 'Assessment of information security events')],
+    mappings: [m('PCI-DSS', 'PCI 10.6', 'Review of high-risk activity'), m('ISO 27001', 'ISO A.16.1.4', 'Assessment of information security events'), m('SOC 2', 'SOC 2 CC7.3', 'Security incident detection')],
   },
 
   // ── SOX segregation of duties & change-window controls ──────────────────────

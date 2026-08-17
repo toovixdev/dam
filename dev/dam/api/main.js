@@ -1628,6 +1628,7 @@ async function runAdminMigration() {
       ['sox', 'SOX', 'Sarbanes-Oxley — ITGC', '2004-11-15', '1.0.0'],
       ['gdpr', 'GDPR', 'EU GDPR 2016/679', '2018-05-25', '1.0.0'],
       ['iso-27001', 'ISO 27001', 'ISO/IEC 27001:2022 — Annex A', '2022-10-25', '1.0.0'],
+      ['soc-2', 'SOC 2', 'AICPA SOC 2 — Trust Services Criteria', '2017-04-15', '1.0.0'],
     ];
     for (const [fw, nm, rule, eff, rev] of packSeed) {
       if (!(await client.query('SELECT 1 FROM compliance_packs WHERE framework=$1', [fw])).rows.length) {
@@ -10122,6 +10123,15 @@ function buildFrameworks(m, states = {}) {
       att('iso.crypto', 'Cryptographic controls applied to sensitive data', 'A.10.1.1', null),
       att('iso.incident', 'Incident management within SLA', 'A.16.1.4', null),
       meas('iso.supplier', logging, 'Supplier relationships — third-party access logged', 'A.15.1.1', evLog) ] },
+    { key: 'soc2', name: 'SOC 2', controls: [
+      meas('soc.cc6_1', logging, 'CC6.1 — logical access to data logged', 'SOC 2 CC6.1', evLog),
+      meas('soc.cc6_2', uniqueIds, 'CC6.2 — user registration & unique IDs (no shared accounts)', 'SOC 2 CC6.2', evUnique),
+      meas('soc.cc6_3', jitGov, 'CC6.3 — access modification reviewed (brokered access)', 'SOC 2 CC6.3', evJit),
+      meas('soc.cc7_2', chainOk, 'CC7.2 — anomaly detection + tamper-evident logs', 'SOC 2 CC7.2', evChain),
+      meas('soc.cc8_1', privMon, 'CC8.1 — change management (DDL / privilege) logged', 'SOC 2 CC8.1', evPriv),
+      meas('soc.c1_1', !(m.unmaskedSensitive > 0), m.unmaskedSensitive > 0 ? `C1.1 — ${m.unmaskedSensitive} confidential column(s) unmasked` : 'C1.1 — confidential data masked for non-privileged roles', 'SOC 2 C1.1', m.unmaskedSensitive > 0 ? gapMask(sensItems, m.unmaskedSensitive) : evClass),
+      att('soc.cc6_7', 'CC6.7 — data-in-transit encryption (TLS)', 'SOC 2 CC6.7', null),
+      att('soc.cc7_3', 'CC7.3 — security incident response process', 'SOC 2 CC7.3', null) ] },
   ];
   return defs.map((f) => {
     const controls = f.controls;
@@ -10262,6 +10272,7 @@ const COMPLIANCE_PACK_META = {
   sox:       { name: 'SOX',     rule: 'Sarbanes-Oxley — ITGC',                 effective: '2004-11-15', revision: '1.0.0' },
   gdpr:      { name: 'GDPR',    rule: 'EU GDPR 2016/679',                      effective: '2018-05-25', revision: '1.0.0' },
   'iso-27001': { name: 'ISO 27001', rule: 'ISO/IEC 27001:2022 — Annex A',      effective: '2022-10-25', revision: '1.0.0' },
+  'soc-2':     { name: 'SOC 2',     rule: 'AICPA SOC 2 — Trust Services Criteria', effective: '2017-04-15', revision: '1.0.0' },
 };
 // The pack-signing public key — consumers fetch it (over TLS) to verify a pulled pack.
 app.get('/api/compliance/pack/pubkey', authRequired, async (req, res) => {
@@ -10345,7 +10356,7 @@ app.post('/api/admin/compliance/packs/:framework', async (req, res) => {
 });
 // The policy/process controls that carry no telemetry — the only ones an operator can attest.
 // Measured controls reject attestation: their status comes from live data, not sign-off.
-const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'pci.req4', 'gdpr.dsar', 'gdpr.art17', 'gdpr.art33', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'hipaa.risk', 'hipaa.contingency', 'hipaa.baa', 'hipaa.physical', 'hipaa.rest', 'sox.svcacct', 'sox.terminated', 'iso.crypto', 'iso.incident']);
+const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'pci.req4', 'gdpr.dsar', 'gdpr.art17', 'gdpr.art33', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'hipaa.risk', 'hipaa.contingency', 'hipaa.baa', 'hipaa.physical', 'hipaa.rest', 'sox.svcacct', 'sox.terminated', 'iso.crypto', 'iso.incident', 'soc.cc6_7', 'soc.cc7_3']);
 app.post('/api/compliance/controls/:key', authRequired, async (req, res) => {
   if (!EVIDENCE_ATTEST_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Only Compliance, Auditor, or Admin roles may attest controls' });
   const key = req.params.key;
