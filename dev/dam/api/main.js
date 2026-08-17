@@ -10184,7 +10184,7 @@ async function frameworkMatrix(tenantId, key) {
   const fw = (await complianceFrameworks(tenantId)).find((f) => f.key === key);
   if (!fw) return null;
   // normalize a citation to its bare code: 'HIPAA §164.312(b)' & '164.312(b)' → '164.312(b)'
-  const norm = (s) => String(s || '').replace(/hipaa|pci-dss|pci|sox|gdpr|§/gi, '').replace(/\s+/g, '').toLowerCase();
+  const norm = (s) => String(s || '').replace(/hipaa|pci-dss|pci|gdpr|sox|iso\s*27001|iso|soc\s*2|soc|aicpa|§/gi, '').replace(/[\s/]+/g, '').toLowerCase();
   // Crosswalk-aware: a control belongs to this framework if ANY of its mappings match the key.
   // The citation shown + joined-on is the framework-specific one (controlFor), and `frameworks`
   // exposes every regulation this same evidence satisfies (the "one control, many regs" story).
