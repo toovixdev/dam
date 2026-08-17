@@ -18,7 +18,11 @@ const STATUS = {
   exception: { label: 'Exception',       clr: 'var(--danger)' },
   escalated: { label: 'Escalated',       clr: 'var(--info)' },
 };
-const FRAMEWORK_CLR = { 'PCI-DSS': 'var(--danger)', SOX: 'var(--info)', GDPR: 'var(--green)', HIPAA: 'var(--amber)' };
+const FRAMEWORK_CLR = { 'PCI-DSS': 'var(--danger)', SOX: 'var(--info)', GDPR: 'var(--green)', HIPAA: 'var(--amber)', 'ISO 27001': '#8b5cf6', 'SOC 2': '#0d9488' };
+const FW_ORDER = ['PCI-DSS', 'SOX', 'HIPAA', 'GDPR', 'ISO 27001', 'SOC 2'];
+// Framework NAME → the keys the pack + matrix/binder endpoints use (two schemes).
+const FW_PACK_KEY = { 'PCI-DSS': 'pci-dss', HIPAA: 'hipaa', SOX: 'sox', GDPR: 'gdpr', 'ISO 27001': 'iso-27001', 'SOC 2': 'soc-2' };
+const FW_MATRIX_KEY = { 'PCI-DSS': 'pci', HIPAA: 'hipaa', SOX: 'sox', GDPR: 'gdpr', 'ISO 27001': 'iso27001', 'SOC 2': 'soc2' };
 
 function StatusPill({ s }) {
   const st = STATUS[s] || { label: s, clr: 'var(--muted)' };
@@ -37,16 +41,48 @@ export default function Attestations() {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
+  const [binderFw, setBinderFw] = useState('');
+  const [changelog, setChangelog] = useState(null);   // { fw, revisions } for the changelog modal
+
   const { data: cat } = useApiData('/compliance/catalog');
   const { data: ev, refetch: refetchEv } = useApiData('/compliance/evidence');
+  const { data: packsData } = useApiData('/compliance/packs');
 
   const items = cat?.items || [];
   const evidence = ev?.evidence || [];
+  const packs = packsData?.packs || {};
   const sum = ev?.summary || { open: 0, attested: 0, exception: 0, escalated: 0 };
   const fmt = (ts) => (ts ? fmtTs(ts, getTimezone(), { dateStyle: 'medium', timeStyle: 'short' }) : '—');
 
-  // Group catalog by framework for the library view.
-  const grouped = items.reduce((m, it) => { (m[it.framework] = m[it.framework] || []).push(it); return m; }, {});
+  // Group catalog by EVERY framework each control satisfies (the crosswalk), so ISO 27001 and
+  // SOC 2 — which are entirely cross-mapped citations — get their own groups too. The citation
+  // shown per group is that framework's citation (from mappings), not the primary.
+  const citationFor = (it, fw) => (it.mappings || []).find((x) => x.framework === fw)?.control || it.control;
+  const grouped = items.reduce((m, it) => {
+    const fws = (it.frameworks && it.frameworks.length) ? it.frameworks : [it.framework];
+    for (const fw of fws) (m[fw] = m[fw] || []).push(it);
+    return m;
+  }, {});
+  const orderedFws = Object.keys(grouped).sort((a, b) => ((FW_ORDER.indexOf(a) + 1 || 99) - (FW_ORDER.indexOf(b) + 1 || 99)));
+
+  const downloadBinder = async (fw) => {
+    const key = FW_MATRIX_KEY[fw]; if (!key) return;
+    setBinderFw(fw);
+    try {
+      const res = await fetch(`/api/compliance/framework/${key}/binder.pdf`, { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!res.ok) throw new Error();
+      const blob = await res.blob(); const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = `audit-binder-${key}.pdf`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      toast('Downloaded audit binder', 'ok');
+    } catch { toast('Could not generate the binder', 'err'); }
+    setBinderFw('');
+  };
+  const openChangelog = async (fw) => {
+    const key = FW_PACK_KEY[fw]; if (!key) return;
+    const r = await apiFetch(`/compliance/pack/${key}/history`);
+    setChangelog({ fw, revisions: r?.revisions || [] });
+  };
 
   const run = async (id) => {
     setRunning(id);
@@ -136,23 +172,34 @@ export default function Attestations() {
             </label>
           </div>
           <div className="card-body">
-            {Object.entries(grouped).map(([fw, list]) => (
+            {orderedFws.map((fw) => {
+              const list = grouped[fw];
+              const pk = packs[FW_PACK_KEY[fw]];
+              const clr = FRAMEWORK_CLR[fw] || 'var(--muted)';
+              return (
               <div key={fw} style={{ marginBottom: 22 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 12px' }}>
-                  <span style={{ width: 4, height: 15, borderRadius: 2, background: FRAMEWORK_CLR[fw] || 'var(--muted)' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 12px', flexWrap: 'wrap' }}>
+                  <span style={{ width: 4, height: 15, borderRadius: 2, background: clr }} />
                   <b style={{ fontSize: 13.5 }}>{fw}</b>
                   <span className="muted" style={{ fontSize: 12 }}>{list.length} report{list.length === 1 ? '' : 's'}</span>
+                  {pk && <span className="muted" style={{ fontSize: 11 }}>· pack v{pk.revision} · eff {pk.effective_date}{pk.validated_by ? ` · ✓ ${pk.validated_by}` : ''}</span>}
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                    <button className="btn-secondary btn-sm" disabled={binderFw === fw} onClick={() => downloadBinder(fw)}>{binderFw === fw ? 'Generating…' : '⤓ Audit binder'}</button>
+                    <button className="btn-secondary btn-sm" onClick={() => openChangelog(fw)}>Pack changelog</button>
+                  </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 12 }}>
                   {list.map((it) => {
                     const total = Object.values(it.runs).reduce((a, b) => a + b, 0);
+                    const others = (it.frameworks || []).filter((f) => f !== fw);
                     return (
-                      <div key={it.id} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px 15px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <div key={it.id + '|' + fw} style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '14px 15px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                           <b style={{ fontSize: 13.3, lineHeight: 1.3 }}>{it.name}</b>
-                          <span style={{ flex: 'none', fontFamily: 'var(--mono, monospace)', fontSize: 10, fontWeight: 700, color: FRAMEWORK_CLR[fw] || 'var(--muted)', border: `1px solid ${FRAMEWORK_CLR[fw] || 'var(--line)'}`, borderRadius: 5, padding: '2px 6px', whiteSpace: 'nowrap' }}>{it.control}</span>
+                          <span style={{ flex: 'none', fontFamily: 'var(--mono, monospace)', fontSize: 10, fontWeight: 700, color: clr, border: `1px solid ${clr}`, borderRadius: 5, padding: '2px 6px', whiteSpace: 'nowrap' }}>{citationFor(it, fw)}</span>
                         </div>
                         <div className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>{it.description}</div>
+                        {others.length > 0 && <div className="muted" style={{ fontSize: 10.5 }}>also satisfies: {others.join(' · ')}</div>}
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
                           <span className="muted" style={{ fontSize: 11.5 }}>
                             {it.runs.open ? <span style={{ color: 'var(--amber)' }}>{it.runs.open} open</span> : (total ? `${total} run${total === 1 ? '' : 's'}` : 'never run')}
@@ -166,7 +213,8 @@ export default function Attestations() {
                   })}
                 </div>
               </div>
-            ))}
+              );
+            })}
             {!items.length && <div className="muted" style={{ fontSize: 12.5, padding: 12 }}>Loading catalog…</div>}
           </div>
         </div>
@@ -265,6 +313,25 @@ export default function Attestations() {
                 Sign-off is restricted to Compliance, Auditor, and Admin roles.
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!changelog} onClose={() => setChangelog(null)} title={changelog ? `${changelog.fw} — pack changelog` : 'Changelog'} width={640}>
+        {changelog && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {changelog.revisions.length === 0 && <div className="muted" style={{ fontSize: 12.5 }}>No revision history.</div>}
+            {changelog.revisions.map((r, i) => (
+              <div key={i} style={{ borderLeft: `3px solid ${i === 0 ? 'var(--green)' : 'var(--line)'}`, paddingLeft: 12 }}>
+                <div style={{ display: 'flex', gap: 10, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                  <b style={{ fontSize: 13 }}>v{r.revision}</b>
+                  <span className="muted" style={{ fontSize: 11.5 }}>effective {String(r.effective_date || '').slice(0, 10)}</span>
+                  <span className="muted" style={{ fontSize: 11.5 }}>· by {r.published_by}</span>
+                  <span className="muted" style={{ fontSize: 11.5 }}>· {fmt(r.published_at)}</span>
+                </div>
+                <div style={{ fontSize: 12.3, marginTop: 3 }}>{r.changelog}</div>
+              </div>
+            ))}
           </div>
         )}
       </Modal>

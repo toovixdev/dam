@@ -10333,6 +10333,19 @@ app.get('/api/compliance/pack/:framework/history', authRequired, async (req, res
   } catch (e) { console.error('[Compliance] pack history failed:', e.message); res.status(500).json({ error: 'History failed' }); }
 });
 
+// All pack identities in one call (for the catalog UI's per-framework toolbar). Keyed by pack id.
+app.get('/api/compliance/packs', authRequired, async (req, res) => {
+  try {
+    const rows = (await pgPool.query('SELECT framework, name, rule, effective_date, revision, reviewed_by, reviewed_at FROM compliance_packs ORDER BY framework')).rows;
+    const packs = {};
+    for (const r of rows) {
+      const eff = r.effective_date instanceof Date ? r.effective_date.toISOString().slice(0, 10) : (r.effective_date ? String(r.effective_date).slice(0, 10) : null);
+      packs[r.framework] = { name: r.name, rule: r.rule, effective_date: eff, revision: r.revision, validated_by: r.reviewed_by, validated_at: r.reviewed_at };
+    }
+    res.json({ packs });
+  } catch (e) { console.error('[Compliance] packs list failed:', e.message); res.status(500).json({ error: 'Failed to load packs' }); }
+});
+
 // Publish a new pack revision (platform admin) — re-version / re-date / attach a QSA validator,
 // WITHOUT a code deploy. Appends a changelog entry to the revision history. This is what makes the
 // packs a *maintained* program rather than hardcoded content.
