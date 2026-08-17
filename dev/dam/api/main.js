@@ -1627,6 +1627,7 @@ async function runAdminMigration() {
       ['pci-dss', 'PCI-DSS', 'PCI-DSS v4.0', '2024-03-31', '1.0.0'],
       ['sox', 'SOX', 'Sarbanes-Oxley — ITGC', '2004-11-15', '1.0.0'],
       ['gdpr', 'GDPR', 'EU GDPR 2016/679', '2018-05-25', '1.0.0'],
+      ['iso-27001', 'ISO 27001', 'ISO/IEC 27001:2022 — Annex A', '2022-10-25', '1.0.0'],
     ];
     for (const [fw, nm, rule, eff, rev] of packSeed) {
       if (!(await client.query('SELECT 1 FROM compliance_packs WHERE framework=$1', [fw])).rows.length) {
@@ -10260,6 +10261,7 @@ const COMPLIANCE_PACK_META = {
   'pci-dss': { name: 'PCI-DSS', rule: 'PCI-DSS v4.0',                          effective: '2024-03-31', revision: '1.0.0' },
   sox:       { name: 'SOX',     rule: 'Sarbanes-Oxley — ITGC',                 effective: '2004-11-15', revision: '1.0.0' },
   gdpr:      { name: 'GDPR',    rule: 'EU GDPR 2016/679',                      effective: '2018-05-25', revision: '1.0.0' },
+  'iso-27001': { name: 'ISO 27001', rule: 'ISO/IEC 27001:2022 — Annex A',      effective: '2022-10-25', revision: '1.0.0' },
 };
 // The pack-signing public key — consumers fetch it (over TLS) to verify a pulled pack.
 app.get('/api/compliance/pack/pubkey', authRequired, async (req, res) => {

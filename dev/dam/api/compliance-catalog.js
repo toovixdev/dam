@@ -109,7 +109,7 @@ const RAW = [
     name: 'Access to personal data (GDPR)',
     description: 'Reads of objects tagged as personal data — the processing record for GDPR Article 30 accountability.',
     where: () => `operation = 'SELECT' AND ${personalAny}`,
-    mappings: [m('GDPR', 'GDPR Art.30', 'Records of processing (personal data)')],
+    mappings: [m('GDPR', 'GDPR Art.30', 'Records of processing (personal data)'), m('ISO 27001', 'ISO A.18.1.4', 'Privacy and protection of PII')],
   },
   {
     id: 'gdpr-personal-modification', kind: 'activity',
@@ -139,7 +139,7 @@ const RAW = [
     name: 'Access to sensitive objects',
     description: 'All reads of objects classified PII/PCI/PHI — establishes who touched regulated data and when.',
     where: () => `operation = 'SELECT' AND ${sensAny}`,
-    mappings: [m('PCI-DSS', 'PCI 10.2.1', 'Access to cardholder / sensitive data')],
+    mappings: [m('PCI-DSS', 'PCI 10.2.1', 'Access to cardholder / sensitive data'), m('ISO 27001', 'ISO A.12.4.1', 'Event logging')],
   },
   {
     id: 'mass-sensitive-read', kind: 'exception',
@@ -173,6 +173,7 @@ const RAW = [
       m('PCI-DSS', 'PCI 10.2.1.2 / 8.2.1', 'Administrative actions & unique-ID enforcement'),
       m('HIPAA', 'HIPAA §164.312(a)(2)(i)', 'Unique user identification'),
       m('SOX', 'SOX 404 / ITGC Access', 'Privileged / administrative activity'),
+      m('ISO 27001', 'ISO A.9.2.3', 'Management of privileged access rights'),
     ],
   },
   {
@@ -183,6 +184,7 @@ const RAW = [
     mappings: [
       m('PCI-DSS', 'PCI 10.2.5', 'Authentication & session activity'),
       m('HIPAA', 'HIPAA §164.312(d)', 'Person or entity authentication'),
+      m('ISO 27001', 'ISO A.12.4.1', 'Event logging (authentication)'),
     ],
   },
   {
@@ -193,6 +195,7 @@ const RAW = [
     mappings: [
       m('PCI-DSS', 'PCI 10.2.1.4', 'Invalid logical access attempts'),
       m('HIPAA', 'HIPAA §164.308(a)(5)(ii)(C)', 'Log-in monitoring'),
+      m('ISO 27001', 'ISO A.9.4.2', 'Secure log-on procedures'),
     ],
   },
   {
@@ -213,6 +216,7 @@ const RAW = [
     mappings: [
       m('PCI-DSS', 'PCI 7.2', 'Least-privilege / access provisioning'),
       m('SOX', 'SOX 404 / ITGC Access', 'Access provisioning changes'),
+      m('ISO 27001', 'ISO A.9.2.5', 'Review of user access rights'),
     ],
   },
   {
@@ -240,7 +244,7 @@ const RAW = [
     name: 'High-risk (anomalous) activity',
     description: 'Statements scored anomaly ≥ 70 by the detection engine — the daily high-risk review queue.',
     where: () => `anomaly_score >= 70`,
-    mappings: [m('PCI-DSS', 'PCI 10.6', 'Review of high-risk activity')],
+    mappings: [m('PCI-DSS', 'PCI 10.6', 'Review of high-risk activity'), m('ISO 27001', 'ISO A.16.1.4', 'Assessment of information security events')],
   },
 
   // ── SOX segregation of duties & change-window controls ──────────────────────
@@ -273,7 +277,9 @@ const frameworksOf = (c) => [...new Set((c.mappings || [{ framework: c.framework
 const mappingFor = (c, framework) => (c.mappings || []).find((x) => x.framework === framework) || { framework, control: c.control, controlName: c.controlName };
 const controlFor = (c, framework) => mappingFor(c, framework).control;
 const controlNameFor = (c, framework) => mappingFor(c, framework).controlName;
-// Resolve a loose key ('pci', 'pci-dss', 'hipaa') to the catalog framework name a control is mapped to.
-const frameworkForKey = (c, key) => frameworksOf(c).find((f) => f.toUpperCase().startsWith(String(key).toUpperCase())) || null;
+// Resolve a loose key ('pci', 'pci-dss', 'iso27001') to the catalog framework name a control maps to.
+// Punctuation/space-insensitive so 'iso27001' matches 'ISO 27001' and 'pci' matches 'PCI-DSS'.
+const _fwNorm = (s) => String(s).replace(/[^a-z0-9]/gi, '').toUpperCase();
+const frameworkForKey = (c, key) => frameworksOf(c).find((f) => _fwNorm(f).startsWith(_fwNorm(key))) || null;
 
 module.exports = { CATALOG, catalogById, SENSITIVE, PERSONAL, frameworksOf, controlFor, controlNameFor, frameworkForKey };
