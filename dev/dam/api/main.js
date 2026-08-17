@@ -1596,6 +1596,45 @@ async function runAdminMigration() {
       console.log(`[VA] generated Ed25519 pack-signing key ${keyId}`);
     }
 
+    // ── Compliance pack registry (vendor-maintained, versioned, QSA-validatable) ───────
+    // Pack IDENTITY (rule citation, effective date, semver revision, validator) lives in the DB,
+    // not the code, so a pack can be re-versioned / re-dated / externally validated WITHOUT a code
+    // deploy — the same central-content model as the VA check + classification detector libraries.
+    // The catalog control queries stay in code; this table governs the "certified pack" metadata +
+    // its revision history (changelog). Seeded once from the built-in defaults.
+    await client.query(`CREATE TABLE IF NOT EXISTS compliance_packs (
+      framework      VARCHAR(40) PRIMARY KEY,
+      name           VARCHAR(80),
+      rule           VARCHAR(200),
+      effective_date DATE,
+      revision       VARCHAR(20),
+      reviewed_by    VARCHAR(160),
+      reviewed_at    TIMESTAMPTZ,
+      updated_at     TIMESTAMPTZ DEFAULT now()
+    )`);
+    await client.query(`CREATE TABLE IF NOT EXISTS compliance_pack_revisions (
+      id              SERIAL PRIMARY KEY,
+      framework       VARCHAR(40),
+      revision        VARCHAR(20),
+      effective_date  DATE,
+      changelog       TEXT,
+      content_version VARCHAR(32),
+      published_by    VARCHAR(160),
+      published_at    TIMESTAMPTZ DEFAULT now()
+    )`);
+    const packSeed = [
+      ['hipaa', 'HIPAA', 'HIPAA Security Rule — 45 CFR Part 164', '2013-03-26', '1.0.0'],
+      ['pci-dss', 'PCI-DSS', 'PCI-DSS v4.0', '2024-03-31', '1.0.0'],
+      ['sox', 'SOX', 'Sarbanes-Oxley — ITGC', '2004-11-15', '1.0.0'],
+      ['gdpr', 'GDPR', 'EU GDPR 2016/679', '2018-05-25', '1.0.0'],
+    ];
+    for (const [fw, nm, rule, eff, rev] of packSeed) {
+      if (!(await client.query('SELECT 1 FROM compliance_packs WHERE framework=$1', [fw])).rows.length) {
+        await client.query('INSERT INTO compliance_packs (framework, name, rule, effective_date, revision) VALUES ($1,$2,$3,$4,$5)', [fw, nm, rule, eff, rev]);
+        await client.query('INSERT INTO compliance_pack_revisions (framework, revision, effective_date, changelog, published_by) VALUES ($1,$2,$3,$4,$5)', [fw, rev, eff, 'Initial pack revision (seeded from built-in defaults).', 'system']);
+      }
+    }
+
     // ── Classification detector content platform ──────────────────────────────────────
     // The sensitive-data detector library (PII/PCI/PHI/financial/secret patterns) lives centrally
     // here, not baked into the agent — same model as the VA check library. Each detector carries a
@@ -10231,7 +10270,7 @@ app.get('/api/compliance/pack/pubkey', authRequired, async (req, res) => {
 app.get('/api/compliance/pack/:framework', authRequired, async (req, res) => {
   try {
     const fwKey = String(req.params.framework || '').toLowerCase();
-    const meta = COMPLIANCE_PACK_META[fwKey];
+    const meta = await compliancePackMeta(fwKey);
     if (!meta) return res.status(404).json({ error: 'Unknown compliance pack' });
     // Crosswalk-aware membership: a control is in this pack if any mapping names this framework.
     // The citation is the framework-specific one; `frameworks` lists every regulation it satisfies.
@@ -10241,13 +10280,66 @@ app.get('/api/compliance/pack/:framework', authRequired, async (req, res) => {
     // Content version: hash of the control set + revision (changes only when the pack changes).
     const basis = controls.map((c) => `${c.id}:${c.control}`).sort().join('|') + `|${meta.revision}`;
     const version = crypto.createHash('sha256').update(basis).digest('hex').slice(0, 16);
-    const pack = { pack_id: fwKey, name: meta.name, rule: meta.rule, effective_date: meta.effective, pack_revision: meta.revision, version, control_count: controls.length, controls };
+    const pack = { pack_id: fwKey, name: meta.name, rule: meta.rule, effective_date: meta.effective, pack_revision: meta.revision, validated_by: meta.reviewed_by || null, validated_at: meta.reviewed_at || null, version, control_count: controls.length, controls };
     // Sign the exact payload string a verifier will parse (avoids re-serialization drift).
     const key = await vaSigningKey();
     const payload = JSON.stringify(pack);
     const signature = key ? vaSign(key.privatePem, payload) : null;
     res.json({ ...pack, payload, signature, key_id: key ? key.keyId : null });
   } catch (e) { console.error('[Compliance] pack failed:', e.message); res.status(500).json({ error: 'Pack build failed' }); }
+});
+
+// Pack identity from the registry (DB) — vendor-maintainable without a code deploy. Falls back to
+// the built-in default if the registry isn't seeded yet. Normalizes the DATE to YYYY-MM-DD.
+async function compliancePackMeta(fwKey) {
+  try {
+    const r = (await pgPool.query('SELECT name, rule, effective_date, revision, reviewed_by, reviewed_at FROM compliance_packs WHERE framework=$1', [fwKey])).rows[0];
+    if (r) {
+      const eff = r.effective_date instanceof Date ? r.effective_date.toISOString().slice(0, 10) : (r.effective_date ? String(r.effective_date).slice(0, 10) : null);
+      return { name: r.name, rule: r.rule, effective: eff, revision: r.revision, reviewed_by: r.reviewed_by, reviewed_at: r.reviewed_at };
+    }
+  } catch (e) { /* registry not ready — fall back to built-in defaults */ }
+  return COMPLIANCE_PACK_META[fwKey] || null;
+}
+
+// Pack revision history / changelog — the "maintained, versioned" audit trail.
+app.get('/api/compliance/pack/:framework/history', authRequired, async (req, res) => {
+  try {
+    const fwKey = String(req.params.framework || '').toLowerCase();
+    const rows = (await pgPool.query('SELECT revision, effective_date, changelog, content_version, published_by, published_at FROM compliance_pack_revisions WHERE framework=$1 ORDER BY published_at DESC', [fwKey])).rows;
+    res.json({ framework: fwKey, revisions: rows });
+  } catch (e) { console.error('[Compliance] pack history failed:', e.message); res.status(500).json({ error: 'History failed' }); }
+});
+
+// Publish a new pack revision (platform admin) — re-version / re-date / attach a QSA validator,
+// WITHOUT a code deploy. Appends a changelog entry to the revision history. This is what makes the
+// packs a *maintained* program rather than hardcoded content.
+app.post('/api/admin/compliance/packs/:framework', async (req, res) => {
+  const op = verifyPlatformToken(req);
+  if (!op) return res.status(401).json({ error: 'Platform admin authentication required' });
+  try {
+    const fwKey = String(req.params.framework || '').toLowerCase();
+    const cur = (await pgPool.query('SELECT name FROM compliance_packs WHERE framework=$1', [fwKey])).rows[0];
+    if (!cur) return res.status(404).json({ error: 'Unknown compliance pack' });
+    const b = req.body || {};
+    const revision = String(b.revision || '').trim();
+    if (!/^\d+\.\d+\.\d+$/.test(revision)) return res.status(400).json({ error: 'revision must be semver, e.g. 1.1.0' });
+    const effective = b.effective_date || null;
+    if (effective && !/^\d{4}-\d{2}-\d{2}$/.test(effective)) return res.status(400).json({ error: 'effective_date must be YYYY-MM-DD' });
+    const changelog = String(b.changelog || '').trim() || 'Revision published.';
+    // content version at publish time (same hash the pack endpoint computes).
+    const meta = await compliancePackMeta(fwKey);
+    const ctls = COMPLIANCE_CATALOG.filter((c) => complianceFrameworksOf(c).includes(meta.name)).map((c) => `${c.id}:${complianceControlFor(c, meta.name)}`);
+    const cv = crypto.createHash('sha256').update(ctls.sort().join('|') + `|${revision}`).digest('hex').slice(0, 16);
+    await pgPool.query(
+      `UPDATE compliance_packs SET revision=$2, effective_date=COALESCE($3::date, effective_date), rule=COALESCE($4, rule),
+         reviewed_by = CASE WHEN $5::text IS NOT NULL THEN $5 ELSE reviewed_by END,
+         reviewed_at = CASE WHEN $5::text IS NOT NULL THEN now() ELSE reviewed_at END, updated_at = now() WHERE framework=$1`,
+      [fwKey, revision, effective, b.rule || null, b.reviewed_by || null]);
+    await pgPool.query('INSERT INTO compliance_pack_revisions (framework, revision, effective_date, changelog, content_version, published_by) VALUES ($1,$2,$3::date,$4,$5,$6)',
+      [fwKey, revision, effective, changelog, cv, op.email || 'platform-admin']);
+    res.json({ ok: true, framework: fwKey, revision, content_version: cv, reviewed_by: b.reviewed_by || null });
+  } catch (e) { console.error('[Compliance] pack publish failed:', e.message); res.status(500).json({ error: 'Publish failed' }); }
 });
 // The policy/process controls that carry no telemetry — the only ones an operator can attest.
 // Measured controls reject attestation: their status comes from live data, not sign-off.
