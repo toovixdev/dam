@@ -45,6 +45,8 @@ function mapCandidate(c) {
     src: c.source === 'cloud_api' ? `${c.cloud_provider || 'Cloud'} API` : c.source === 'manual' ? 'Manual' : 'Network',
     loc: c.region || (c.deployment_type === 'onprem' ? 'on-prem' : c.deployment_type) || '—',
     sig: c.signal === 'sensitive' ? 'sensitive' : 'ok',
+    os: c.os || null,
+    osConf: c.os_confidence || null,
     mode: isPaas ? 'paas' : 'agent',
     cloud: c.cloud_provider || 'On-prem',
     reachable: c.reachable !== false,
@@ -192,19 +194,20 @@ export default function Discovery() {
         <div className="card-header"><span className="card-title">Discovery candidates</span><span className="card-sub">approve to register · deploy agents from Agent Fleet</span></div>
         <div className="card-body no-pad">
           <table className="data-table">
-            <thead><tr><th>Endpoint</th><th>Engine</th><th>Source</th><th>Location</th><th>Reachability</th><th>Signal</th><th /></tr></thead>
+            <thead><tr><th>Endpoint</th><th>Engine</th><th>OS</th><th>Source</th><th>Location</th><th>Reachability</th><th>Signal</th><th /></tr></thead>
             <tbody>
               {candidates.map((c) => (
                 <tr key={c.ep} style={c.reachable ? undefined : { opacity: 0.6 }}>
                   <td className="mono" style={{ fontSize: 12 }}>{c.ep}</td>
                   <td><span className="badge">{c.eng}</span>{c.mode === 'paas' && <span className="badge blue" style={{ marginLeft: 4 }}>PaaS</span>}</td>
+                  <td>{c.os ? <span title={c.osConf === 'high' ? 'From service banner' : 'From TTL (low confidence)'}>{c.os}{c.osConf === 'low' && <span style={{ color: 'var(--muted)', fontSize: 11 }}> ?</span>}</span> : <span style={{ color: 'var(--muted)' }}>unknown</span>}</td>
                   <td>{c.src}</td><td>{c.loc}</td>
                   <td>{c.reachable ? <span className="badge green dot">reachable</span> : <span className="badge red dot">unreachable</span>}</td>
                   <td>{c.sig === 'sensitive' ? <span className="badge red">sensitive ports open</span> : <span className="badge">clean</span>}</td>
                   <td style={{ textAlign: 'right' }}><button className="btn-secondary" style={{ padding: '6px 14px' }} onClick={() => approve(c)}>Approve</button></td>
                 </tr>
               ))}
-              {candidates.length === 0 && <tr><td colSpan={7} className="chart-empty">No candidates awaiting review</td></tr>}
+              {candidates.length === 0 && <tr><td colSpan={8} className="chart-empty">No candidates awaiting review</td></tr>}
             </tbody>
           </table>
         </div>

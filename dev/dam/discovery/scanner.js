@@ -136,6 +136,51 @@ function buildIsMasterQuery() {
 }
 function int32(n) { const b = Buffer.alloc(4); b.writeInt32LE(n, 0); return b; }
 
+// ── OS inference ────────────────────────────────────────────
+// Two honest, dependency-free signals, strongest first:
+//   1. Banner tokens — DB server-version strings frequently name the build OS
+//      (MySQL "8.0.35-0ubuntu0.22.04.1", MariaDB "…+maria~ubu2004", "…-1.el8").
+//      When a token is present it names the OS outright → high confidence.
+//   2. TTL family — one ICMP echo; the reply's IP TTL narrows the OS family
+//      (≤64 Linux/Unix, ≤128 Windows, else Solaris/appliance). Coarse and
+//      ICMP-dependent → low confidence, used only when the banner is silent.
+// Neither is ever fabricated: no signal ⇒ os:null, so the row reads "unknown".
+const OS_BANNER_TOKENS = [
+  [/\.el\d/i,                    'RHEL / CentOS Linux'],
+  [/ubuntu|ubu\d/i,              'Ubuntu Linux'],
+  [/[-+~]deb\d|debian/i,         'Debian Linux'],
+  [/amzn|amazon/i,              'Amazon Linux'],
+  [/\.fc\d/i,                    'Fedora Linux'],
+  [/sles|suse/i,                 'SUSE Linux'],
+  [/win(?:64|x64|dows|32|nt)/i,  'Windows'],
+  [/darwin|mac ?os|osx/i,        'macOS'],
+  [/freebsd/i,                   'FreeBSD'],
+  [/solaris|sunos/i,             'Solaris'],
+];
+function osFromBanner(version) {
+  if (!version) return null;
+  for (const [re, os] of OS_BANNER_TOKENS) if (re.test(version)) return { os, confidence: 'high' };
+  return null;
+}
+function osFromTTL(ttl) {
+  if (ttl == null) return null;
+  if (ttl <= 64)  return { os: 'Linux / Unix', confidence: 'low' };
+  if (ttl <= 128) return { os: 'Windows', confidence: 'low' };
+  return { os: 'Solaris / network appliance', confidence: 'low' };
+}
+// One ICMP echo, parse the reply's TTL. Linux-first (the scanner VM is Linux);
+// fails closed (→ null) when ICMP is filtered or ping is unavailable.
+function pingTTL(host, timeout) {
+  return new Promise((resolve) => {
+    const secs = String(Math.max(1, Math.ceil(timeout / 1000)));
+    const args = process.platform === 'darwin' ? ['-c', '1', '-t', secs, host] : ['-c', '1', '-w', secs, host];
+    require('child_process').execFile('ping', args, { timeout: timeout + 800 }, (_err, stdout) => {
+      const m = /ttl[=:\s]+(\d+)/i.exec(stdout || '');
+      resolve(m ? parseInt(m[1], 10) : null);
+    });
+  });
+}
+
 const FINGERPRINTERS = [fingerprintMySQL, fingerprintPostgres, fingerprintMongo];
 
 async function fingerprint(host, port, timeout) {
@@ -180,10 +225,25 @@ async function scan(config) {
   const fingerprints = await pool(open, ({ host, port }) => fingerprint(host, port, opts.fingerprintTimeout), opts.concurrency);
   const candidates = fingerprints.filter((c) => c.engine !== 'unknown');
 
+  // OS enrichment: banner first, then at most one TTL ping per unique host (not per
+  // port). The guess is applied to every candidate on that host. Disable with
+  // osProbe:false; skip the ping step alone with ttlProbe:false.
+  if (opts.osProbe !== false) {
+    const byHost = new Map();
+    for (const c of candidates) { if (!byHost.has(c.host)) byHost.set(c.host, []); byHost.get(c.host).push(c); }
+    await pool([...byHost.keys()], async (host) => {
+      const group = byHost.get(host);
+      let best = null;
+      for (const c of group) { best = osFromBanner(c.version); if (best) break; }
+      if (!best && opts.ttlProbe !== false) best = osFromTTL(await pingTTL(host, opts.connectTimeout));
+      for (const c of group) { c.os = best ? best.os : null; c.os_confidence = best ? best.confidence : 'low'; }
+    }, Math.min(opts.concurrency, 32));
+  }
+
   return { ports, hosts: hosts.length, scanned: hosts.length * ports.length, openPorts: open.length, candidates, warnings };
 }
 
-module.exports = { scan, probePort, fingerprint, expandPortSet, expandTargets };
+module.exports = { scan, probePort, fingerprint, osFromBanner, osFromTTL, expandPortSet, expandTargets };
 
 // ── CLI: node scanner.js --targets 10.40.0.0/24,db-vm-a --preset common [--ports "5432,3300-3400"] ──
 if (require.main === module) {
@@ -199,7 +259,7 @@ if (require.main === module) {
   scan({ targets, preset, customPorts, maxHosts }).then((res) => {
     console.log(`[discovery] expanded to ${res.hosts} host(s); ${res.openPorts} open / ${res.scanned} probed → ${res.candidates.length} database(s):`);
     for (const c of res.candidates) {
-      console.log(`  ${c.host}:${c.port}\t${c.engine}${c.version ? ' ' + c.version : ''}\t(${c.confidence})`);
+      console.log(`  ${c.host}:${c.port}\t${c.engine}${c.version ? ' ' + c.version : ''}\tos=${c.os || 'unknown'} (${c.os_confidence || '-'})\t(${c.confidence})`);
     }
   }).catch((e) => { console.error('[discovery] scan failed:', e.message); process.exit(1); });
 }

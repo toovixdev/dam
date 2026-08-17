@@ -598,6 +598,9 @@ async function runAuthMigration() {
     // it unreachable rather than re-discovering or silently keeping it as "new".
     await client.query(`ALTER TABLE discovery_candidates ADD COLUMN IF NOT EXISTS last_seen TIMESTAMPTZ`);
     await client.query(`ALTER TABLE discovery_candidates ADD COLUMN IF NOT EXISTS reachable BOOLEAN DEFAULT true`);
+    // OS fingerprint from the scanner (Sl.63): best-effort, banner-derived (high) or TTL-derived (low).
+    await client.query(`ALTER TABLE discovery_candidates ADD COLUMN IF NOT EXISTS os VARCHAR(40)`);
+    await client.query(`ALTER TABLE discovery_candidates ADD COLUMN IF NOT EXISTS os_confidence VARCHAR(10)`);
     await client.query(`UPDATE discovery_candidates SET last_seen = discovered_at WHERE last_seen IS NULL`);
     await client.query(`CREATE TABLE IF NOT EXISTS discovery_jobs (
       id          VARCHAR(40) PRIMARY KEY,
@@ -7627,12 +7630,13 @@ app.post('/api/discovery/candidates', async (req, res) => {
     if (known.rows.length) continue;
     // discovered_at = first seen (unchanged on update); last_seen = this scan.
     const r = await pgPool.query(
-      `INSERT INTO discovery_candidates (tenant_id, endpoint, host, port, engine, version, source, deployment_type, cloud_provider, region, signal, confidence, job_id, last_seen, reachable)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, now(), true)
-       ON CONFLICT (tenant_id, endpoint) DO UPDATE SET engine = EXCLUDED.engine, version = EXCLUDED.version, confidence = EXCLUDED.confidence, last_seen = now(), reachable = true
+      `INSERT INTO discovery_candidates (tenant_id, endpoint, host, port, engine, version, source, deployment_type, cloud_provider, region, signal, confidence, job_id, os, os_confidence, last_seen, reachable)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15, now(), true)
+       ON CONFLICT (tenant_id, endpoint) DO UPDATE SET engine = EXCLUDED.engine, version = EXCLUDED.version, confidence = EXCLUDED.confidence, os = EXCLUDED.os, os_confidence = EXCLUDED.os_confidence, last_seen = now(), reachable = true
        RETURNING (xmax = 0) AS created`,
       [tenantId, endpoint, host, port, c.engine || null, c.version || null, c.source || 'network',
-       c.deployment_type || 'onprem', c.cloud_provider || null, c.region || null, c.signal || 'clean', c.confidence || 'high', job || null]
+       c.deployment_type || 'onprem', c.cloud_provider || null, c.region || null, c.signal || 'clean', c.confidence || 'high', job || null,
+       c.os || null, c.os_confidence || null]
     );
     if (r.rows[0].created) inserted++;
   }
