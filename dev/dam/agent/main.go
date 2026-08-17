@@ -168,7 +168,7 @@ func loadConfig() Config {
 		// Stable identity across restarts (env(...) used directly, not the container hostname),
 		// so re-enrollment reuses the same agent row instead of creating duplicates.
 		AgentHost:        "dam-agent-" + env("MODE", "proxy") + "-" + env("TARGET_HOST", "client-mysql") + "-" + env("TARGET_PORT", "3306"),
-		Version:          "0.1.0",
+		Version:          "0.1.1",
 		Classify:         env("CLASSIFY", "false") == "true",
 		VaScan:           env("VA_SCAN", "false") == "true",
 		DBUser:           env("DB_USER", ""),

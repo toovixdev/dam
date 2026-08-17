@@ -3,7 +3,7 @@
 name: dam-agent
 arch: amd64
 platform: linux
-version: "0.1.0"
+version: "0.1.1"
 maintainer: TooVix Security <support@toovix.security>
 description: |
   TooVix DAM Agent — database activity capture (network / host-eBPF / inline-proxy).
