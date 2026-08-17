@@ -10181,14 +10181,17 @@ app.get('/api/compliance/framework/:key/binder.pdf', authRequired, async (req, r
     const m = await frameworkMatrix(req.user.tenantId, req.params.key);
     if (!m) return res.status(404).json({ error: 'Unknown framework' });
     const h12 = (h) => h ? String(h).slice(0, 12) : '';
-    // Fold each control's backing sealed-evidence record into its evidence line.
+    // Cross-framework crosswalk: for a control mapped to several regulations, note the others so the
+    // auditor sees one evidence item satisfying many frameworks.
+    const xref = (r) => { const fs = (r.frameworks || []).filter((f) => !f.toUpperCase().startsWith(String(m.key).toUpperCase())); return fs.length ? ` · also satisfies ${fs.join(', ')}` : ''; };
+    // Fold each control's backing sealed-evidence record + crosswalk into its evidence line.
     const enrichCtl = (c) => {
       let sfx = '';
-      const withEv = c.catalogReports.find((r) => r.latestEvidence);
-      if (withEv) { const e = withEv.latestEvidence;
-        sfx = ` | Report ${withEv.control}: ${e.status}${e.reviewer ? ' by ' + e.reviewer : ''} (sha256:${h12(e.content_hash)})`;
-      } else if (c.catalogReports.length) {
-        sfx = ` | Backing report ${c.catalogReports[0].control} — no evidence generated yet`;
+      const withEv = c.catalogReports.find((r) => r.latestEvidence) || c.catalogReports[0];
+      if (withEv) {
+        const e = withEv.latestEvidence;
+        sfx = (e ? ` | Report ${withEv.control}: ${e.status}${e.reviewer ? ' by ' + e.reviewer : ''} (sha256:${h12(e.content_hash)})`
+                 : ` | Backing report ${withEv.control} — no evidence generated yet`) + xref(withEv);
       }
       const base = (c.evidence && c.evidence.summary) || '';
       return { control: c.control, status: c.status, reference: c.reference, evidence: { summary: (base + sfx).trim() } };
@@ -10197,7 +10200,7 @@ app.get('/api/compliance/framework/:key/binder.pdf', authRequired, async (req, r
     const evRows = m.evidenceOnly.map((r) => {
       const e = r.latestEvidence;
       return { control: r.name, status: e && e.status === 'attested' ? 'ok' : 'warn', reference: r.control,
-        evidence: { summary: e ? `Sealed evidence: ${e.status}${e.reviewer ? ' by ' + e.reviewer : ''} (sha256:${h12(e.content_hash)}, ${e.rows} rows)` : 'Evidence report available — not yet generated' } };
+        evidence: { summary: (e ? `Sealed evidence: ${e.status}${e.reviewer ? ' by ' + e.reviewer : ''} (sha256:${h12(e.content_hash)}, ${e.rows} rows)` : 'Evidence report available — not yet generated') + xref(r) } };
     });
     const enriched = { name: m.name, score: m.score, status: m.status, controls: m.controls.map(enrichCtl).concat(evRows) };
     const pdf = buildCompliancePackPdf(enriched, req.user.tenantName || 'Workspace', req.user.email || 'system');
@@ -10909,6 +10912,34 @@ app.get('/api/compliance/evidence/:id', authRequired, async (req, res) => {
     const recomputed = crypto.createHash('sha256').update(stableStr(r.result_json)).digest('hex');
     res.json({ ...r, content_ok: recomputed === r.content_hash });
   } catch (e) { console.error('[Compliance] evidence get failed:', e.message); res.status(500).json({ error: 'Failed to load evidence' }); }
+});
+
+// Evidence rows as CSV — the format auditors sample in. A chain-of-custody header block carries
+// the report, control, period, and the SHA-256 seal so the extract is self-describing + verifiable.
+app.get('/api/compliance/evidence/:id/csv', authRequired, async (req, res) => {
+  try {
+    const r = (await pgPool.query(`SELECT * FROM compliance_evidence WHERE id = $1 AND tenant_id = $2`, [req.params.id, req.user.tenantId])).rows[0];
+    if (!r) return res.status(404).json({ error: 'Not found' });
+    const snap = r.result_json || {};
+    const rows = Array.isArray(snap.rows) ? snap.rows : [];
+    const cols = ['ts', 'principal', 'database_name', 'object', 'operation', 'rows', 'client_ip', 'tags', 'sql_preview'];
+    const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    const recomputed = crypto.createHash('sha256').update(stableStr(r.result_json)).digest('hex');
+    const meta = [
+      ['# TooVix DAM — Compliance Evidence Export'],
+      ['# report', r.report_name, 'framework', r.framework, 'control', r.control],
+      ['# period_from', (snap.period && snap.period.from) || '', 'period_to', (snap.period && snap.period.to) || ''],
+      ['# total_matched', r.row_total, 'rows_in_extract', rows.length],
+      ['# content_sha256', r.content_hash, 'seal_intact', String(recomputed === r.content_hash)],
+      ['# status', r.status || 'open', 'reviewer', r.reviewer || '', 'reviewed_at', r.reviewed_at || ''],
+      [''],
+    ].map((a) => a.map(esc).join(','));
+    const body = meta.concat([cols.join(',')], rows.map((row) => cols.map((c) => esc(row[c])).join(','))).join('\n');
+    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.evidence.export.csv', resourceType: 'evidence', resourceId: r.id, details: { rows: rows.length } });
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="evidence-${r.catalog_id}-${String(r.id).slice(0, 8)}.csv"`);
+    res.send(body);
+  } catch (e) { console.error('[Compliance] evidence CSV failed:', e.message); res.status(500).json({ error: 'CSV export failed' }); }
 });
 
 // Reviewer sign-off: attest / flag exception / escalate. Role-gated (segregation of
@@ -11827,6 +11858,26 @@ function buildCompliancePackPdf(fw, tenantName, generatedBy) {
     if (evLines.length) { fill(0.45, 0.5, 0.58); evLines.forEach((ln, i) => T(ML + 62, ry + i * 10, ln, 'F1', 8)); ry += evLines.length * 10; }
     y = ry + 9; stroke(0.92, 0.93, 0.95); line(ML, y - 6, MR, y - 6, 0.5);
   }
+
+  // ── Verification & methodology (workpaper attestation page) ──
+  if (y > H - 190) startPage();
+  y += 10; fill(0.35, 0.4, 0.5); T(ML, y, 'VERIFICATION & METHODOLOGY', 'F2', 9); y += 16;
+  const vlines = [
+    'Scope: database activity captured by TooVix DAM for the workspace above, over the stated period. Each',
+    'control resolves from live telemetry (measured) or a signed reviewer attestation (attested) - never a',
+    'hardcoded value.',
+    '',
+    'Evidence integrity: every evidence snapshot is sealed with a SHA-256 content hash; reviewer sign-off is',
+    'chained (sign_hash) so the attestation record is tamper-evident; periodic audit checkpoints are',
+    'merkle-rooted and signed. Row-level evidence is exportable as CSV for independent sampling.',
+    '',
+    'To verify: recompute the SHA-256 over the evidence snapshot and compare to its content hash; validate the',
+    'pack signature with the public key at /api/compliance/pack/pubkey.',
+    '',
+    'Cross-framework: a control annotated "also satisfies ..." provides the same sealed evidence for multiple',
+    'regulations from a single run - one control, many citations.',
+  ];
+  fill(0.3, 0.34, 0.42); for (const ln of vlines) { if (y > H - 58) { startPage(); } T(ML, y, ln, 'F1', 8.5); y += 12; }
   pages.push(content);
 
   const M = pages.length;
