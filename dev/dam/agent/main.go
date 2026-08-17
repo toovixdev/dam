@@ -935,7 +935,7 @@ var (
 // SSN/IP/phone formats). Ordered most-specific first so a card number isn't shadowed by phone.
 var contentValidators = []contentValidator{
 	{"pci", "critical", luhnValid},
-	{"aadhaar", "critical", func(v string) bool { return reAadhaar.MatchString(v) }},
+	{"aadhaar", "critical", func(v string) bool { return reAadhaar.MatchString(strings.TrimSpace(v)) && aadhaarValid(v) }},
 	{"pan", "high", func(v string) bool { return rePAN.MatchString(strings.TrimSpace(v)) }},
 	{"gstin", "high", func(v string) bool { return reGSTIN.MatchString(strings.TrimSpace(v)) }},
 	{"email", "high", func(v string) bool { return reEmail.MatchString(v) }},

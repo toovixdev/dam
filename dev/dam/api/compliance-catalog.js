@@ -269,6 +269,26 @@ const RAW = [
   },
 ];
 
+// ── CERT-In & NCIIPC crosswalk (India) ──────────────────────────────────────
+// These national guidelines (CERT-In Directions 2022 + NCIIPC guidance for Critical Information
+// Infrastructure) don't publish DAM-specific clause numbers, so each maps to the DAM control area
+// it depends on. One sealed evidence run therefore also counts toward CERT-In / NCIIPC — the same
+// crosswalk model as PCI/HIPAA/GDPR/SOX — and both frameworks surface automatically in the
+// catalog, matrix and pack.
+const CROSSWALK_IN = {
+  'authentication-activity': [m('CERT-In', 'CERT-In · Log Maintenance', 'Maintenance of database access/audit logs (retention & synchronised logging)'), m('NCIIPC', 'NCIIPC · Audit Trail', 'Audit-trail generation for the database CII')],
+  'auth-anomaly':            [m('CERT-In', 'CERT-In · Incident Detection', 'Detection of anomalous authentication for cyber-incident identification'), m('NCIIPC', 'NCIIPC · Threat Detection', 'Anomalous-authentication threat detection')],
+  'shared-account-activity': [m('CERT-In', 'CERT-In · Privileged Access', 'Monitoring of privileged / generic-account database access'), m('NCIIPC', 'NCIIPC · Privileged Access', 'Privileged access monitoring & control')],
+  'privilege-grants':        [m('CERT-In', 'CERT-In · Access Control', 'Review of privilege grants / revocations'), m('NCIIPC', 'NCIIPC · Access Review', 'Privilege grant/revocation review')],
+  'sensitive-object-access': [m('CERT-In', 'CERT-In · Sensitive Data', 'Logging of access to sensitive / personal data'), m('NCIIPC', 'NCIIPC · Continuous Monitoring', 'Continuous monitoring of sensitive-data access')],
+  'mass-sensitive-read':     [m('CERT-In', 'CERT-In · Data Exfiltration', 'Detection of bulk sensitive-data extraction')],
+  'ddl-changes':             [m('CERT-In', 'CERT-In · Change Control', 'Monitoring of configuration / schema (DDL) changes'), m('NCIIPC', 'NCIIPC · Change Control', 'Configuration & schema change monitoring')],
+  'high-risk-activity':      [m('CERT-In', 'CERT-In · Incident Detection', 'Anomaly detection for cyber-incident identification'), m('NCIIPC', 'NCIIPC · Threat Detection', 'High-risk / anomalous activity detection')],
+};
+for (const c of RAW) {
+  if (CROSSWALK_IN[c.id]) c.mappings.push(...CROSSWALK_IN[c.id]);
+}
+
 // Derive the backward-compatible primary fields from the first mapping.
 const CATALOG = RAW.map((c) => ({
   ...c,
