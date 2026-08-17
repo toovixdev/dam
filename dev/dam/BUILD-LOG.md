@@ -2884,3 +2884,19 @@ Residual (non-code): an actual QSA validation on file + an ongoing update cadenc
 engineering. All three weak rows now addressed: cross-framework (Full), report format (workpaper +
 CSV), vendor-maintained/versioned (registry). Remaining differentiators: framework COUNT (ISO/NIST/
 SOC 2), auditor familiarity, and running the QSA/maintenance program.
+
+## ISO 27001 added as 5th framework — via the crosswalk (2026-08-17)
+
+Proof that adding a framework is now content, not engineering. ISO 27001 posture already existed
+(iso27001 key, 7 controls) with no catalog reports — same situation HIPAA was in. Added 7 ISO Annex A
+citations to EXISTING canonical controls with ZERO new queries: A.12.4.1 event logging
+(sensitive-object-access, authentication-activity), A.9.2.3 privileged access (shared-account-activity,
+now PCI+HIPAA+SOX+ISO), A.9.2.5 access review (privilege-grants), A.9.4.2 secure log-on (auth-anomaly),
+A.18.1.4 PII (personal-data-access), A.16.1.4 event assessment (high-risk-activity). Made
+frameworkForKey punctuation-insensitive so 'iso27001' resolves 'ISO 27001'. Added the ISO pack to the
+registry + META (ISO/IEC 27001:2022, effective 2022-10-25).
+
+Verified on prod: signed ISO pack (7 controls), matrix (posture 7 + catalog 7), catalog now spans 5
+frameworks (PCI 13, HIPAA 9, SOX 8, GDPR 6, ISO 27001 7 = 43 citations across 27 canonical controls).
+Commit a416b9c. The crosswalk + signer + registry + matrix + binder all generalize — NIST / SOC 2 /
+HITRUST are now the same content exercise.
