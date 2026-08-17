@@ -2929,3 +2929,19 @@ Result (evidence-only / unnested reports): SOX 0, GDPR 0, PCI 1, SOC 2 1, ISO 4,
 remaining HIPAA/ISO ones are catalog reports more granular than their posture models have controls
 for (the two-lens design; they still show as "evidence reports"). Added ISO 27001 + SOC 2 report
 lists to the gap-matrix artifact Section 3. Commit cdb885e.
+
+## Compliance-report UI: crosswalk grouping + per-framework binder/pack/changelog (2026-08-17)
+
+Made the new compliance surfaces reachable from the product (they were API-only). The reports
+live on the **Attestations** page (sidebar ✍) → "Report catalog" tab.
+- **#1 Grouping by crosswalk**: the catalog grouped reports by primary framework only, so ISO 27001
+  and SOC 2 (all cross-mapped citations) never appeared as groups. Now groups by every framework a
+  control satisfies (frameworks[]), each report showing that framework's citation (from mappings) +
+  an "also satisfies" crosswalk line. All 6 frameworks now show as groups.
+- **#2 Per-framework toolbar**: pack revision/effective-date/QSA-validator (new GET
+  /api/compliance/packs), an "⤓ Audit binder" PDF download (/framework/:key/binder.pdf), and a "Pack
+  changelog" modal (/pack/:key/history).
+
+Deploy: main.js -> dam-api (docker cp+restart); Attestations.jsx -> prod frontend bind-mount (Vite
+HMR). Verified: HMR compiled clean, /compliance/packs returns 6 packs, catalog exposes frameworks[].
+Commit 34ea5ed. Still API-only: the full interactive matrix view + the platform-admin pack-publish UI.
