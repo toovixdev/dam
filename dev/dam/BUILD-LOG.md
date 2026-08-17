@@ -2945,3 +2945,21 @@ live on the **Attestations** page (sidebar ✍) → "Report catalog" tab.
 Deploy: main.js -> dam-api (docker cp+restart); Attestations.jsx -> prod frontend bind-mount (Vite
 HMR). Verified: HMR compiled clean, /compliance/packs returns 6 packs, catalog exposes frameworks[].
 Commit 34ea5ed. Still API-only: the full interactive matrix view + the platform-admin pack-publish UI.
+
+## Reports↔Attestations cross-link + real scheduled evidence (2026-08-17)
+
+Clarified the two report surfaces and gave Attestations the one capability Reports had (scheduling).
+- **#1 Cross-link**: the Reports "Library" tab now banners a link to Attestations for sealed/attestable
+  evidence ("summary reports" vs "evidence binder"). Reports keeps its unique types (exec/va/llm/dpdpa/
+  audit/sensitive/privileged) + scheduling; Attestations is the audit-grade sealed/attestable one.
+- **#2 Real scheduled evidence**: unlike Reports' stored-only schedules (no executor), Attestations now
+  actually runs on a cadence. compliance_schedules table + CRUD endpoints (/api/compliance/schedules)
+  + a worker (fireComplianceSchedules, setInterval 60s) that auto-runs+seals a control's evidence when
+  due and advances next_run. Factored runComplianceEvidence() shared by the run endpoint + worker. UI:
+  per-report "Schedule" button, a "Scheduled" tab (pause/resume/remove), a schedule modal (frequency +
+  recipients). Also added GET /api/compliance/packs for the per-framework toolbar.
+
+Verified on prod: created a schedule, forced it due, the worker sealed evidence within ~70s
+(shared-account-activity · 17 rows · open) and advanced next_run; CRUD + toggle + delete all work;
+both frontends HMR-compiled clean. Commits 0eeac59, d09202c. Note: recipients are stored but email
+delivery isn't wired (no SMTP path) — the value is auto-generated sealed evidence awaiting sign-off.
