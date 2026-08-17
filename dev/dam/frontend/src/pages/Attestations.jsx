@@ -151,6 +151,20 @@ export default function Attestations() {
     } catch { toast('Could not generate the signed PDF', 'err'); }
   };
 
+  // Native .xlsx workbook (Summary + Evidence sheets) — authed binary download.
+  const downloadXlsx = async () => {
+    try {
+      const res = await fetch(`/api/compliance/evidence/${detail.id}/xlsx`, { headers: { Authorization: `Bearer ${getToken()}` } });
+      if (!res.ok) return toast('Could not generate the Excel file', 'err');
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `evidence-${detail.catalog_id}-${detail.id.slice(0, 8)}.xlsx`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+      toast('Downloaded Excel workbook', 'ok');
+    } catch { toast('Could not generate the Excel file', 'err'); }
+  };
+
   const rj = detail?.result_json || {};
   const detailRows = rj.rows || [];
 
@@ -310,6 +324,7 @@ export default function Attestations() {
               <span style={{ color: detail.content_ok ? 'var(--green)' : 'var(--danger)' }}>{detail.content_ok ? '⛓ Seal intact' : '⚠ Seal broken'}</span>
               <code style={{ fontFamily: 'var(--mono, monospace)', color: 'var(--muted)', fontSize: 10.5 }}>sha256:{String(detail.content_hash).slice(0, 24)}…</code>
               <button className="btn-secondary btn-sm" style={{ marginLeft: 'auto' }} onClick={exportRows}>Export CSV</button>
+              <button className="btn-secondary btn-sm" onClick={downloadXlsx}>⤓ Excel</button>
               <button className="btn-primary btn-sm" onClick={downloadPdf}>⤓ Signed PDF</button>
             </div>
 
