@@ -2837,3 +2837,31 @@ HIPAA 9 reports/13 posture · PCI-DSS 11/8 · SOX 7/8 · GDPR 6/8 = **33 evidenc
 §-cited audit-binder PDF. Remaining differentiators vs Guardium/Imperva sit outside per-framework
 depth: framework count (ISO/NIST/SOC 2), the parked auth-failure capture (turns PCI 10.2.1.4 /
 GDPR / HIPAA login-monitoring from proxied to real), and auditor familiarity.
+
+## Cross-framework crosswalk + workpaper report format (2026-08-17)
+
+Closed two of the three weak capability rows vs Guardium/Imperva.
+
+**Cross-framework crosswalk (Gap -> Full).** Refactored compliance-catalog.js from framework-siloed
+reports to CANONICAL controls, each carrying a mappings[] crosswalk of {framework, control,
+controlName}. 33 siloed reports -> 27 canonical controls covering 36 citations; 8 controls now
+satisfy multiple frameworks (shared-account-activity -> PCI+HIPAA+SOX, authentication-activity ->
+PCI+HIPAA, auth-anomaly -> PCI+HIPAA, ddl-changes/privilege-grants -> PCI+SOX, data-deletion ->
+GDPR+SOX, ephi-access -> HIPAA+GDPR Art.9). framework/control/controlName stay derived from the
+primary (first) mapping for backward compat. New helpers frameworksOf / controlFor / controlNameFor
+/ frameworkForKey; pack + matrix + catalog endpoints resolve membership and per-framework citation
+via mappings and expose the crosswalk. One sealed evidence run now counts toward every mapped
+framework. Verified on prod: shared-account-activity appears in the PCI/HIPAA/SOX packs each with
+its own citation + an "also=" crosswalk.
+
+**Workpaper report format (Partial, upgraded).** GET /evidence/:id/csv exports row-level evidence
+as CSV with a chain-of-custody header (report/control/period/SHA-256 seal/seal_intact) — the format
+auditors sample in. The audit binder now folds each control's cross-framework citations
+("also satisfies PCI, SOX") into its line and appends a Verification & Methodology page (integrity
+model + how-to-verify + pubkey). Verified: CSV seal_intact=true; binder is a valid PDF containing
+the VERIFICATION section and 7 crosswalk annotations.
+
+Bug fixed en route: a NUL byte in sql_text failed the compliance_evidence JSONB insert (scrub added).
+Commits 41b34df (crosswalk), a51feb6 (report format). Remaining weak row: vendor-maintained/versioned
+(needs a pack registry decoupled from code + external QSA validation). Note: consolidation orphaned
+9 old report IDs' evidence records (recent test data) — harmless.
