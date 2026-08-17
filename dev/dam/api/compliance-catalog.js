@@ -339,6 +339,61 @@ const CATALOG = [
     kind: 'exception',
     where: () => `${personalAny} AND (toHour(timestamp) < 7 OR toHour(timestamp) >= 20)`,
   },
+
+  // ── SOX — IT General Controls (ITGC): change management, logical access, SoD ─────────
+  // SOX evidences financial-reporting integrity. There is no "financial" data tag, so these are
+  // scoped by operation + account (change management + access are about actions/accounts, not
+  // data sensitivity). Reconcile change reports against approved tickets; review privileged access.
+  {
+    id: 'sox-schema-change',
+    framework: 'SOX',
+    control: 'SOX 404 / ITGC Change Mgmt',
+    controlName: 'Change management — schema changes',
+    name: 'Schema changes (DDL) for change-ticket reconciliation',
+    description: 'All DDL (CREATE/ALTER/DROP) — the ITGC change-management record auditors reconcile against approved change tickets under SOX §404.',
+    kind: 'activity',
+    where: () => `operation = 'DDL'`,
+  },
+  {
+    id: 'sox-privilege-grants',
+    framework: 'SOX',
+    control: 'SOX 404 / ITGC Access',
+    controlName: 'Access provisioning changes (GRANT/REVOKE)',
+    name: 'Privilege grants & revocations (SOX access control)',
+    description: 'GRANT/REVOKE of database privileges — the access-provisioning record for segregation-of-duties and least-privilege review under SOX §404.',
+    kind: 'activity',
+    where: () => `operation IN ('GRANT')`,
+  },
+  {
+    id: 'sox-privileged-activity',
+    framework: 'SOX',
+    control: 'SOX 404 / ITGC Access',
+    controlName: 'Privileged / administrative activity',
+    name: 'Administrative & privileged-account activity (SOX)',
+    description: 'Activity by administrative/generic accounts (root/admin/sa/postgres/system/mysql) — the privileged-access-review evidence for SOX §404 logical access controls.',
+    kind: 'activity',
+    where: () => `${sharedAcct}`,
+  },
+  {
+    id: 'sox-direct-data-change',
+    framework: 'SOX',
+    control: 'SOX 404 / SoD',
+    controlName: 'Direct back-end data changes',
+    name: 'Direct data changes by privileged accounts (SOX SoD)',
+    description: 'INSERT/UPDATE/DELETE performed by administrative/generic accounts — back-end changes that bypass the application, the classic unapproved-direct-change red flag for SOX segregation of duties.',
+    kind: 'exception',
+    where: () => `operation IN ('INSERT','UPDATE','DELETE') AND ${sharedAcct}`,
+  },
+  {
+    id: 'sox-off-hours-change',
+    framework: 'SOX',
+    control: 'SOX 404 / ITGC',
+    controlName: 'Off-hours change activity',
+    name: 'After-hours changes (DML / DDL / GRANT)',
+    description: 'Data or schema changes outside 07:00–20:00 UTC — anomalous change activity reviewed under SOX §404 change-management controls.',
+    kind: 'exception',
+    where: () => `operation IN ('INSERT','UPDATE','DELETE','DDL','GRANT') AND (toHour(timestamp) < 7 OR toHour(timestamp) >= 20)`,
+  },
 ];
 
 const catalogById = (id) => CATALOG.find((c) => c.id === id) || null;

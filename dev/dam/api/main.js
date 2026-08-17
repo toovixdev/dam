@@ -10068,8 +10068,11 @@ function buildFrameworks(m, states = {}) {
     { key: 'sox', name: 'SOX', controls: [
       meas('sox.302', logging, 'All financial DB changes logged with user identity', 'SOX 302', evLog),
       meas('sox.sod', sod, 'Separation of duties enforced on financial systems', 'SOX 404', evSod),
+      meas('sox.change', privMon, 'ITGC change management — schema & privilege changes logged', 'SOX 404', evPriv),
+      meas('sox.access', uniqueIds, 'Logical access — unique user IDs, no shared/generic accounts', 'SOX 404', evUnique),
       meas('sox.802', chainOk, 'Tamper-evident audit trail for financial data', 'SOX 802', evChain),
       meas('sox.review', jitGov, 'Privileged access reviews (brokered access)', 'SOX 404', evJit),
+      att('sox.terminated', 'Terminated-user access review on financial systems', 'SOX 404', null),
       att('sox.svcacct', 'Service-account privilege review on the GL', 'SOX 404', null) ] },
     { key: 'iso27001', name: 'ISO 27001', controls: [
       meas('iso.inventory', m.classifiedObjects > 0 || m.dbTotal > 0, 'Information asset inventory maintained', 'A.8.1.1', evInv),
@@ -10239,7 +10242,7 @@ app.get('/api/compliance/pack/:framework', authRequired, async (req, res) => {
 });
 // The policy/process controls that carry no telemetry — the only ones an operator can attest.
 // Measured controls reject attestation: their status comes from live data, not sign-off.
-const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'pci.req4', 'gdpr.dsar', 'gdpr.art17', 'gdpr.art33', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'hipaa.risk', 'hipaa.contingency', 'hipaa.baa', 'hipaa.physical', 'hipaa.rest', 'sox.svcacct', 'iso.crypto', 'iso.incident']);
+const ATTESTABLE_CONTROLS = new Set(['pci.req7', 'pci.req4', 'gdpr.dsar', 'gdpr.art17', 'gdpr.art33', 'dpdpa.consent', 'dpdpa.dsar', 'dpdpa.retention', 'dpdpa.breach', 'certin.retention', 'certin.ntp', 'certin.incident', 'hipaa.logoff', 'hipaa.tls', 'hipaa.risk', 'hipaa.contingency', 'hipaa.baa', 'hipaa.physical', 'hipaa.rest', 'sox.svcacct', 'sox.terminated', 'iso.crypto', 'iso.incident']);
 app.post('/api/compliance/controls/:key', authRequired, async (req, res) => {
   if (!EVIDENCE_ATTEST_ROLES.includes(req.user.role)) return res.status(403).json({ error: 'Only Compliance, Auditor, or Admin roles may attest controls' });
   const key = req.params.key;
