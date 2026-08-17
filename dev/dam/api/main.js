@@ -10135,9 +10135,13 @@ async function frameworkMatrix(tenantId, key) {
   if (!fw) return null;
   // normalize a citation to its bare code: 'HIPAA §164.312(b)' & '164.312(b)' → '164.312(b)'
   const norm = (s) => String(s || '').replace(/hipaa|pci-dss|pci|sox|gdpr|§/gi, '').replace(/\s+/g, '').toLowerCase();
-  const reports = COMPLIANCE_CATALOG.filter((c) => c.framework.toUpperCase().startsWith(key.toUpperCase()));
+  // Crosswalk-aware: a control belongs to this framework if ANY of its mappings match the key.
+  // The citation shown + joined-on is the framework-specific one (controlFor), and `frameworks`
+  // exposes every regulation this same evidence satisfies (the "one control, many regs" story).
+  const reports = COMPLIANCE_CATALOG.filter((c) => !!complianceFrameworkForKey(c, key));
+  const fwNameOf = (r) => complianceFrameworkForKey(r, key);
   const byCode = {};
-  for (const r of reports) (byCode[norm(r.control)] || (byCode[norm(r.control)] = [])).push(r);
+  for (const r of reports) { const code = norm(complianceControlFor(r, fwNameOf(r))); (byCode[code] || (byCode[code] = [])).push(r); }
   const ev = reports.length ? (await pgPool.query(
     `SELECT DISTINCT ON (catalog_id) catalog_id, id, status, reviewer, reviewed_at, generated_at, content_hash, row_total
        FROM compliance_evidence WHERE tenant_id=$1 AND catalog_id = ANY($2)
@@ -10147,7 +10151,7 @@ async function frameworkMatrix(tenantId, key) {
   const used = new Set();
   const mapReport = (r) => {
     used.add(r.id); const e = evByCat[r.id];
-    return { catalogId: r.id, name: r.name, control: r.control, kind: r.kind,
+    return { catalogId: r.id, name: r.name, control: complianceControlFor(r, fwNameOf(r)), frameworks: complianceFrameworksOf(r), kind: r.kind,
       latestEvidence: e ? { id: e.id, status: e.status, reviewer: e.reviewer, reviewed_at: e.reviewed_at, generated_at: e.generated_at, content_hash: e.content_hash, rows: e.row_total } : null };
   };
   const controls = fw.controls.map((c) => ({ ...c, catalogReports: (byCode[norm(c.reference)] || []).map(mapReport) }));
@@ -10226,9 +10230,11 @@ app.get('/api/compliance/pack/:framework', authRequired, async (req, res) => {
     const fwKey = String(req.params.framework || '').toLowerCase();
     const meta = COMPLIANCE_PACK_META[fwKey];
     if (!meta) return res.status(404).json({ error: 'Unknown compliance pack' });
+    // Crosswalk-aware membership: a control is in this pack if any mapping names this framework.
+    // The citation is the framework-specific one; `frameworks` lists every regulation it satisfies.
     const controls = COMPLIANCE_CATALOG
-      .filter((c) => c.framework.toLowerCase() === fwKey || c.framework.toLowerCase() === meta.name.toLowerCase())
-      .map((c) => ({ id: c.id, control: c.control, controlName: c.controlName, kind: c.kind, description: c.description }));
+      .filter((c) => complianceFrameworksOf(c).includes(meta.name))
+      .map((c) => ({ id: c.id, control: complianceControlFor(c, meta.name), controlName: complianceControlNameFor(c, meta.name), kind: c.kind, description: c.description, frameworks: complianceFrameworksOf(c) }));
     // Content version: hash of the control set + revision (changes only when the pack changes).
     const basis = controls.map((c) => `${c.id}:${c.control}`).sort().join('|') + `|${meta.revision}`;
     const version = crypto.createHash('sha256').update(basis).digest('hex').slice(0, 16);
@@ -10780,7 +10786,7 @@ app.get('/api/reports/:type', authRequired, async (req, res) => {
 // Closes the "compliance reporting depth" gap vs. incumbents: named reports mapped
 // to specific control requirements, each producing a tamper-evident, attestable
 // evidence artifact (content_hash seals the snapshot; sign_hash chains the sign-off).
-const { CATALOG: COMPLIANCE_CATALOG, catalogById: complianceCatalogById } = require('./compliance-catalog');
+const { CATALOG: COMPLIANCE_CATALOG, catalogById: complianceCatalogById, frameworksOf: complianceFrameworksOf, controlFor: complianceControlFor, controlNameFor: complianceControlNameFor, frameworkForKey: complianceFrameworkForKey } = require('./compliance-catalog');
 // Separation of duties: only these roles may sign off on evidence (server-enforced,
 // not merely hidden client-side). Mirrors the auditor/compliance segregation model.
 const EVIDENCE_ATTEST_ROLES = ['tenant_admin', 'compliance', 'auditor'];
@@ -10796,8 +10802,10 @@ app.get('/api/compliance/catalog', authRequired, async (req, res) => {
     const items = COMPLIANCE_CATALOG.map((c) => ({
       id: c.id, framework: c.framework, control: c.control, controlName: c.controlName,
       name: c.name, description: c.description, kind: c.kind, runs: byId[c.id] || {},
+      mappings: c.mappings, frameworks: complianceFrameworksOf(c),
     }));
-    res.json({ frameworks: [...new Set(COMPLIANCE_CATALOG.map((c) => c.framework))], items });
+    // Frameworks the catalog covers = the UNION of all crosswalk mappings (not just primaries).
+    res.json({ frameworks: [...new Set(COMPLIANCE_CATALOG.flatMap((c) => complianceFrameworksOf(c)))], items });
   } catch (e) { console.error('[Compliance] catalog failed:', e.message); res.status(500).json({ error: 'Failed to load catalog' }); }
 });
 
