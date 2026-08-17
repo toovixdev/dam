@@ -2865,3 +2865,22 @@ Bug fixed en route: a NUL byte in sql_text failed the compliance_evidence JSONB 
 Commits 41b34df (crosswalk), a51feb6 (report format). Remaining weak row: vendor-maintained/versioned
 (needs a pack registry decoupled from code + external QSA validation). Note: consolidation orphaned
 9 old report IDs' evidence records (recent test data) — harmless.
+
+## Compliance pack registry — vendor-maintained & versioned (2026-08-17)
+
+Closed the third weak capability row vs Guardium/Imperva (the code half).
+- **DB registry**: compliance_packs (framework, name, rule, effective_date, revision, reviewed_by,
+  reviewed_at) + compliance_pack_revisions (changelog history). Seeded from the built-in defaults on
+  boot. Pack IDENTITY now lives in the DB, not code — re-version / re-date / attach a QSA validator
+  WITHOUT a code deploy (same model as the VA check + classification detector libraries).
+- **Endpoints**: pack endpoint reads identity from the registry via compliancePackMeta() (fallback to
+  built-in) and surfaces validated_by/validated_at; GET /pack/:framework/history (changelog); POST
+  /api/admin/compliance/packs/:framework (platform-admin, verifyPlatformToken) publishes a semver
+  revision + effective date + changelog + optional QSA validator, recomputing the content_version.
+- Verified on prod: published PCI 1.0.0 -> 1.1.0 with a QSA validator with no deploy; pack + history
+  reflected it; no-token publish = 401. Reverted the test data to seeded 1.0.0. Commit 0d9e85b.
+
+Residual (non-code): an actual QSA validation on file + an ongoing update cadence — operational, not
+engineering. All three weak rows now addressed: cross-framework (Full), report format (workpaper +
+CSV), vendor-maintained/versioned (registry). Remaining differentiators: framework COUNT (ISO/NIST/
+SOC 2), auditor familiarity, and running the QSA/maintenance program.
