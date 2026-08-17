@@ -10092,7 +10092,7 @@ function buildFrameworks(m, states = {}) {
       att('certin.incident', '6h incident reporting hook to ITSM', 'CERT-In 2022', null) ] },
     { key: 'hipaa', name: 'HIPAA', controls: [
       meas('hipaa.audit', covered, 'Audit controls on all ePHI databases', '164.312(b)', evCovered),
-      meas('hipaa.uniqueids', uniqueIds, 'Access controls — unique user IDs enforced', '164.312(a)(1)', evUnique),
+      meas('hipaa.uniqueids', uniqueIds, 'Access controls — unique user IDs enforced', '164.312(a)(2)(i)', evUnique),
       meas('hipaa.trail', chainOk, 'Integrity of the audit trail on all databases', '164.312(b)', evChain),
       att('hipaa.logoff', 'Automatic log-off configured (15m idle)', '164.312(a)(2)(iii)', null),
       att('hipaa.tls', 'Encryption in transit (TLS 1.3)', '164.312(e)(1)', null),
@@ -10190,8 +10190,12 @@ async function frameworkMatrix(tenantId, key) {
   // exposes every regulation this same evidence satisfies (the "one control, many regs" story).
   const reports = COMPLIANCE_CATALOG.filter((c) => !!complianceFrameworkForKey(c, key));
   const fwNameOf = (r) => complianceFrameworkForKey(r, key);
-  const byCode = {};
-  for (const r of reports) { const code = norm(complianceControlFor(r, fwNameOf(r))); (byCode[code] || (byCode[code] = [])).push(r); }
+  // Split compound citations ("10.2.1.2 / 8.2.1") so a report can cover several clauses.
+  const codesOf = (s) => String(s || '').split('/').map((x) => norm(x)).filter(Boolean);
+  const reportCodes = reports.map((r) => ({ r, codes: codesOf(complianceControlFor(r, fwNameOf(r))) }));
+  // A report nests under a posture control when its §-code IS the control's code or a more-specific
+  // child of it (hierarchical), so a parent control shows all its sub-clause evidence.
+  const codeMatch = (pc, rc) => rc === pc || (rc.startsWith(pc) && '.('.includes(rc[pc.length] || ''));
   const ev = reports.length ? (await pgPool.query(
     `SELECT DISTINCT ON (catalog_id) catalog_id, id, status, reviewer, reviewed_at, generated_at, content_hash, row_total
        FROM compliance_evidence WHERE tenant_id=$1 AND catalog_id = ANY($2)
@@ -10204,7 +10208,12 @@ async function frameworkMatrix(tenantId, key) {
     return { catalogId: r.id, name: r.name, control: complianceControlFor(r, fwNameOf(r)), frameworks: complianceFrameworksOf(r), kind: r.kind,
       latestEvidence: e ? { id: e.id, status: e.status, reviewer: e.reviewer, reviewed_at: e.reviewed_at, generated_at: e.generated_at, content_hash: e.content_hash, rows: e.row_total } : null };
   };
-  const controls = fw.controls.map((c) => ({ ...c, catalogReports: (byCode[norm(c.reference)] || []).map(mapReport) }));
+  const controls = fw.controls.map((c) => {
+    const pcodes = codesOf(c.reference);
+    const seen = new Set(); const rs = [];
+    for (const { r, codes } of reportCodes) if (!seen.has(r.id) && codes.some((rc) => pcodes.some((pc) => codeMatch(pc, rc)))) { seen.add(r.id); rs.push(mapReport(r)); }
+    return { ...c, catalogReports: rs };
+  });
   const evidenceOnly = reports.filter((r) => !used.has(r.id)).map(mapReport);
   const coverage = {
     postureControls: fw.controls.length,
