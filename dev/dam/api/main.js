@@ -6393,7 +6393,9 @@ async function postDatadog(cfg, a) {
 async function postCustomWebhook(cfg, a) {
   const headers = { 'Content-Type': 'application/json' };
   if (cfg.auth_header) headers.Authorization = cfg.auth_header;
-  const res = await fetch(cfg.url, { method: 'POST', headers, body: JSON.stringify({ type: 'alert', ...alertEvent(a) }), signal: TIMEOUT(6000) });
+  const payload = { type: 'alert', ...alertEvent(a) };
+  if (cfg.message_template) payload.message = renderAlertTemplate(cfg.message_template, a);
+  const res = await fetch(cfg.url, { method: 'POST', headers, body: JSON.stringify(payload), signal: TIMEOUT(6000) });
   return { ok: res.ok, status: res.status };
 }
 
@@ -6465,6 +6467,26 @@ async function postEmailAlert(cfg, a) {
   return { ok: true, status: 'sent' };
 }
 
+// Custom log-message templating — ${Alert.username}-style placeholders resolved from alert fields,
+// so an integration can emit a bespoke message (e.g. "DAM: ${Alert.username} ran ${Alert.operation}
+// on ${Alert.database}"). Accepts both ${Alert.<field>} and the bare ${<field>} form.
+function alertVars(a) {
+  return {
+    username: a.principal, principal: a.principal, severity: a.severity,
+    database: a.database_name, db: a.database_name, schema: a.schema_name, table: a.table_name,
+    operation: a.operation, rule: a.rule_name || a.summary, summary: a.summary,
+    client_ip: a.client_ip, source_ip: a.client_ip, rows: a.row_count,
+    sql: a.raw_sql, time: a.timestamp || new Date().toISOString(),
+  };
+}
+function renderAlertTemplate(tmpl, a) {
+  const v = alertVars(a);
+  return String(tmpl).replace(/\$\{(?:Alert\.)?([a-z_]+)\}/gi, (_m, k) => {
+    const val = v[String(k).toLowerCase()];
+    return val == null ? '' : String(val);
+  });
+}
+
 // Syslog (RFC 5424) forwarder — UDP or TCP, no external dependency (node dgram/net). Emits one
 // structured line per alert to a syslog server or SIEM collector. facility·severity → PRI.
 function postSyslog(cfg, a) {
@@ -6477,7 +6499,8 @@ function postSyslog(cfg, a) {
     const pri = facility * 8 + (sevMap[String(a.severity || 'medium').toLowerCase()] ?? 5);
     const clean = (s) => String(s || '').replace(/[\]"\\]/g, '').replace(/[\r\n]+/g, ' ');
     const sd = `[dam@52111 severity="${clean(a.severity)}" principal="${clean(a.principal)}" db="${clean(a.database_name)}" rule="${clean(a.rule_name || a.summary)}"]`;
-    const line = `<${pri}>1 ${new Date().toISOString()} toovix-dam TooVixDAM - - ${sd} ${clean(a.summary || 'Security alert').slice(0, 900)}`;
+    const body = cfg.message ? renderAlertTemplate(cfg.message, a) : (a.summary || 'Security alert');
+    const line = `<${pri}>1 ${new Date().toISOString()} toovix-dam TooVixDAM - - ${sd} ${clean(body).slice(0, 900)}`;
     if (String(cfg.protocol || 'udp').toLowerCase() === 'tcp') {
       const net = require('net');
       const sock = net.createConnection({ host, port, timeout: 6000 }, () => sock.end(line + '\n'));
@@ -6498,6 +6521,7 @@ const CONNECTORS = {
       { key: 'port', label: 'Port', type: 'text', default: '514', placeholder: '514' },
       { key: 'protocol', label: 'Protocol', type: 'select', default: 'udp', options: ['udp', 'tcp'] },
       { key: 'facility', label: 'Facility (0–23)', type: 'text', default: '13', placeholder: '13 = log audit' },
+      { key: 'message', label: 'Custom message template (optional)', type: 'text', placeholder: '${Alert.username} ran ${Alert.operation} on ${Alert.database} — ${Alert.summary}' },
     ], send: postSyslog },
   email_alerts: { name: 'Email', kind: 'alert', help: 'Emails alerts to a recipient list using your configured SMTP (set up Settings → Email first). Comma-separate multiple addresses.',
     fields: [{ key: 'recipients', label: 'Recipients', type: 'text', required: true, placeholder: 'soc@company.com, oncall@company.com' }],
@@ -6526,6 +6550,7 @@ const CONNECTORS = {
     fields: [
       { key: 'url', label: 'Endpoint URL', type: 'url', required: true, placeholder: 'https://example.com/hooks/dam' },
       { key: 'auth_header', label: 'Authorization header (optional)', type: 'password', secret: true, placeholder: 'Bearer …' },
+      { key: 'message_template', label: 'Custom message template (optional)', type: 'text', placeholder: '${Alert.username} — ${Alert.summary}' },
     ], send: postCustomWebhook },
   servicenow: { name: 'ServiceNow', kind: 'alert', help: 'Creates an incident per alert via the Table API. Use a user with itil/incident write access.',
     fields: [
