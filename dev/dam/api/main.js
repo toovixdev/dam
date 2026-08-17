@@ -1637,6 +1637,24 @@ async function runAdminMigration() {
       }
     }
 
+    // Scheduled compliance evidence — auto-generate + seal a control's evidence on a cadence (the
+    // scheduling the Reports page has, but for sealed/attestable evidence). Fired by the worker below.
+    await client.query(`CREATE TABLE IF NOT EXISTS compliance_schedules (
+      id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      tenant_id   UUID REFERENCES tenants(id),
+      catalog_id  VARCHAR(60),
+      report_name VARCHAR(160),
+      framework   VARCHAR(40),
+      frequency   VARCHAR(20),
+      days        INT DEFAULT 90,
+      recipients  VARCHAR(400),
+      status      VARCHAR(15) DEFAULT 'on',
+      next_run    TIMESTAMPTZ,
+      last_run_at TIMESTAMPTZ,
+      created_by  VARCHAR(160),
+      created_at  TIMESTAMPTZ DEFAULT now()
+    )`);
+
     // ── Classification detector content platform ──────────────────────────────────────
     // The sensitive-data detector library (PII/PCI/PHI/financial/secret patterns) lives centrally
     // here, not baked into the agent — same model as the VA check library. Each detector carries a
@@ -10939,57 +10957,116 @@ app.get('/api/compliance/catalog', authRequired, async (req, res) => {
   } catch (e) { console.error('[Compliance] catalog failed:', e.message); res.status(500).json({ error: 'Failed to load catalog' }); }
 });
 
-// Run a catalog report over the last N days, snapshot the rows, seal them as an
-// immutable evidence record (status 'open', awaiting reviewer sign-off).
+// Generate + seal ONE evidence record for a control over the last N days. Shared by the run
+// endpoint and the scheduler (below). Returns the inserted row + tallies; throws on failure.
+async function runComplianceEvidence(tenantId, def, days, generatedBy, actorId = null) {
+  const evDb = await eventsDbFor(tenantId);
+  const esc = chEsc(tenantId);
+  const base = `FROM ${evDb}.events WHERE tenant_id = '${esc}' AND timestamp >= now() - INTERVAL ${days} DAY AND (${def.where()})`;
+  const total = parseInt(await chSafe(`SELECT count() ${base}`, 'TabSeparated')) || 0;
+  const rows = await chSafe(
+    `SELECT toString(timestamp) AS ts, principal, database_name,
+      coalesce(
+        nullIf(multiIf(schema_name != '' AND table_name != '', concat(schema_name, '.', table_name),
+                       table_name != '', table_name, schema_name != '', schema_name, ''), ''),
+        nullIf(extract(sql_text, '(?i)db[.]([A-Za-z_][A-Za-z0-9_]*)'), ''),
+        nullIf(extract(sql_text, '(?i)(?:from|into|update|join|table)[ \\t\\n\\r]+([A-Za-z_][A-Za-z0-9_.]*)'), ''),
+        database_name
+      ) AS object,
+      operation, toString(row_count) AS rows, client_ip,
+      arrayStringConcat(arraySort(tags), ',') AS tags, substring(sql_text, 1, 240) AS sql_preview
+     FROM (SELECT * ${base}) ORDER BY timestamp DESC LIMIT 1000`);
+  if (total > 0 && (!Array.isArray(rows) || rows.length === 0)) console.warn(`[Compliance] ${def.id}: count=${total} but 0 rows snapshotted`);
+  const now = new Date();
+  const from = new Date(now.getTime() - days * 86400000);
+  const scrub = (v) => (typeof v === 'string' ? v.replace(/\u0000/g, '') : v);
+  const cleanRows = (Array.isArray(rows) ? rows : []).map((row) => { const o = {}; for (const k in row) o[k] = scrub(row[k]); return o; });
+  const snapshot = {
+    def: { id: def.id, name: def.name, framework: def.framework, control: def.control, kind: def.kind },
+    period: { from: from.toISOString(), to: now.toISOString(), days },
+    total, returned: cleanRows.length, rows: cleanRows,
+  };
+  const contentHash = crypto.createHash('sha256').update(stableStr(snapshot)).digest('hex');
+  const r = (await pgPool.query(
+    `INSERT INTO compliance_evidence
+      (tenant_id, catalog_id, framework, control, report_name, period_from, period_to, generated_by, row_total, row_returned, result_json, content_hash, status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open') RETURNING id, generated_at`,
+    [tenantId, def.id, def.framework, def.control, def.name, from.toISOString(), now.toISOString(),
+     generatedBy, total, snapshot.returned, JSON.stringify(snapshot), contentHash])).rows[0];
+  await writeAudit({ tenantId, actorId, actorEmail: generatedBy, action: 'compliance.evidence.generate', resourceType: 'evidence', resourceId: r.id, details: { report: def.id, control: def.control, total, contentHash } });
+  return { id: r.id, generated_at: r.generated_at, total, returned: snapshot.returned, content_hash: contentHash };
+}
+// Run a catalog report now, snapshot + seal the rows (status 'open', awaiting reviewer sign-off).
 app.post('/api/compliance/catalog/:id/run', authRequired, async (req, res) => {
   const def = complianceCatalogById(req.params.id);
   if (!def) return res.status(404).json({ error: 'Unknown report' });
   const days = Math.min(365, Math.max(1, parseInt(req.body && req.body.days) || 90));
   try {
-    const evDb = await eventsDbFor(req.user.tenantId);
-    const esc = chEsc(req.user.tenantId);
-    const base = `FROM ${evDb}.events WHERE tenant_id = '${esc}' AND timestamp >= now() - INTERVAL ${days} DAY AND (${def.where()})`;
-    const total = parseInt(await chSafe(`SELECT count() ${base}`, 'TabSeparated')) || 0;
-    // Filter in an INNER query, then derive display columns in the outer. Projecting
-    // `arrayStringConcat(arraySort(tags), ',') AS tags` in the same SELECT as a WHERE on
-    // `hasAny(tags, …)` lets the String alias SHADOW the Array `tags` column under ClickHouse's
-    // analyzer → "hasAny must be an array" → the whole row query errors → chSafe silently returns
-    // [] → the report showed a count but zero rows. The subquery keeps the WHERE on the real column.
-    const rows = await chSafe(
-      `SELECT toString(timestamp) AS ts, principal, database_name,
-        coalesce(
-          nullIf(multiIf(schema_name != '' AND table_name != '', concat(schema_name, '.', table_name),
-                         table_name != '', table_name, schema_name != '', schema_name, ''), ''),
-          nullIf(extract(sql_text, '(?i)db[.]([A-Za-z_][A-Za-z0-9_]*)'), ''),
-          nullIf(extract(sql_text, '(?i)(?:from|into|update|join|table)[ \\t\\n\\r]+([A-Za-z_][A-Za-z0-9_.]*)'), ''),
-          database_name
-        ) AS object,
-        operation, toString(row_count) AS rows, client_ip,
-        arrayStringConcat(arraySort(tags), ',') AS tags, substring(sql_text, 1, 240) AS sql_preview
-       FROM (SELECT * ${base}) ORDER BY timestamp DESC LIMIT 1000`);
-    if (total > 0 && (!Array.isArray(rows) || rows.length === 0)) console.warn(`[Compliance] ${def.id}: count=${total} but 0 rows snapshotted — the row query may have failed silently`);
-    const now = new Date();
-    const from = new Date(now.getTime() - days * 86400000);
-    // Postgres JSONB rejects \u0000 — scrub null bytes from snapshot string fields so a captured
-    // query text with an embedded NUL can't fail the evidence insert (surfaced by PCI CHD reports).
-    const scrub = (v) => (typeof v === 'string' ? v.replace(/\u0000/g, '') : v);
-    const cleanRows = (Array.isArray(rows) ? rows : []).map((row) => { const o = {}; for (const k in row) o[k] = scrub(row[k]); return o; });
-    const snapshot = {
-      def: { id: def.id, name: def.name, framework: def.framework, control: def.control, kind: def.kind },
-      period: { from: from.toISOString(), to: now.toISOString(), days },
-      total, returned: cleanRows.length, rows: cleanRows,
-    };
-    const contentHash = crypto.createHash('sha256').update(stableStr(snapshot)).digest('hex');
-    const r = (await pgPool.query(
-      `INSERT INTO compliance_evidence
-        (tenant_id, catalog_id, framework, control, report_name, period_from, period_to, generated_by, row_total, row_returned, result_json, content_hash, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open') RETURNING id, generated_at`,
-      [req.user.tenantId, def.id, def.framework, def.control, def.name, from.toISOString(), now.toISOString(),
-       req.user.email, total, snapshot.returned, JSON.stringify(snapshot), contentHash])).rows[0];
-    await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'compliance.evidence.generate', resourceType: 'evidence', resourceId: r.id, details: { report: def.id, control: def.control, total, contentHash } });
-    res.status(201).json({ ok: true, id: r.id, generated_at: r.generated_at, total, returned: snapshot.returned, content_hash: contentHash });
+    const out = await runComplianceEvidence(req.user.tenantId, def, days, req.user.email, req.user.userId);
+    res.status(201).json({ ok: true, ...out });
   } catch (e) { console.error('[Compliance] run failed:', e.message); res.status(500).json({ error: 'Evidence run failed' }); }
 });
+
+// ── Scheduled compliance evidence — recurring auto-seal of a control's evidence ──────────────
+const SCHED_FREQ_DAYS = { daily: 1, weekly: 7, monthly: 30 };
+const nextRunFrom = (freq, base = new Date()) => new Date(base.getTime() + (SCHED_FREQ_DAYS[freq] || 7) * 86400000);
+app.get('/api/compliance/schedules', authRequired, async (req, res) => {
+  try {
+    const rows = (await pgPool.query('SELECT id, catalog_id, report_name, framework, frequency, days, recipients, status, next_run, last_run_at, created_by FROM compliance_schedules WHERE tenant_id=$1 ORDER BY created_at DESC', [req.user.tenantId])).rows;
+    res.json({ schedules: rows });
+  } catch (e) { console.error('[Compliance] schedules list failed:', e.message); res.status(500).json({ error: 'Failed to load schedules' }); }
+});
+app.post('/api/compliance/schedules', authRequired, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const def = complianceCatalogById(b.catalog_id);
+    if (!def) return res.status(400).json({ error: 'Unknown report' });
+    const frequency = ['daily', 'weekly', 'monthly'].includes(b.frequency) ? b.frequency : 'weekly';
+    const days = Math.min(365, Math.max(1, parseInt(b.days) || 90));
+    const recipients = String(b.recipients || '').slice(0, 400);
+    const nr = nextRunFrom(frequency);
+    const r = (await pgPool.query(
+      `INSERT INTO compliance_schedules (tenant_id, catalog_id, report_name, framework, frequency, days, recipients, next_run, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [req.user.tenantId, def.id, def.name, def.framework, frequency, days, recipients, nr.toISOString(), req.user.email])).rows[0];
+    res.status(201).json({ ok: true, id: r.id, next_run: nr.toISOString() });
+  } catch (e) { console.error('[Compliance] schedule create failed:', e.message); res.status(500).json({ error: 'Could not schedule' }); }
+});
+app.post('/api/compliance/schedules/:id/toggle', authRequired, async (req, res) => {
+  try {
+    const r = await pgPool.query(`UPDATE compliance_schedules SET status = CASE WHEN status='on' THEN 'off' ELSE 'on' END WHERE id=$1 AND tenant_id=$2 RETURNING status`, [req.params.id, req.user.tenantId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true, status: r.rows[0].status });
+  } catch (e) { res.status(500).json({ error: 'Toggle failed' }); }
+});
+app.delete('/api/compliance/schedules/:id', authRequired, async (req, res) => {
+  try {
+    const r = await pgPool.query('DELETE FROM compliance_schedules WHERE id=$1 AND tenant_id=$2', [req.params.id, req.user.tenantId]);
+    if (!r.rowCount) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: 'Delete failed' }); }
+});
+// Worker: fire due schedules → run + seal evidence, advance next_run. Best-effort per row.
+async function fireComplianceSchedules() {
+  try {
+    const due = (await pgPool.query(`SELECT * FROM compliance_schedules WHERE status='on' AND next_run IS NOT NULL AND next_run <= now() LIMIT 50`)).rows;
+    for (const s of due) {
+      const def = complianceCatalogById(s.catalog_id);
+      const nr = nextRunFrom(s.frequency).toISOString();
+      if (!def) { await pgPool.query('UPDATE compliance_schedules SET status=$2, next_run=NULL WHERE id=$1', [s.id, 'off']); continue; }
+      try {
+        await runComplianceEvidence(s.tenant_id, def, s.days || 90, `schedule:${s.created_by || 'system'}`, null);
+        await pgPool.query('UPDATE compliance_schedules SET last_run_at=now(), next_run=$2 WHERE id=$1', [s.id, nr]);
+        console.log(`[Compliance] scheduled evidence sealed: ${def.id} (tenant ${s.tenant_id})`);
+      } catch (e) {
+        console.error(`[Compliance] scheduled run failed (${def.id}, ${s.tenant_id}):`, e.message);
+        await pgPool.query('UPDATE compliance_schedules SET next_run=$2 WHERE id=$1', [s.id, nr]);
+      }
+    }
+  } catch (e) { console.error('[Compliance] scheduler tick failed:', e.message); }
+}
+setInterval(fireComplianceSchedules, 5 * 60 * 1000);   // every 5 minutes
+setTimeout(fireComplianceSchedules, 30 * 1000);        // once, shortly after boot
 
 // List evidence records (summary + metadata only; result rows fetched per-record).
 app.get('/api/compliance/evidence', authRequired, async (req, res) => {

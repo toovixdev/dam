@@ -123,6 +123,12 @@ export default function Reports() {
       <TabNav tabs={[{ id: 'lib', label: 'Library' }, { id: 'sched', label: 'Scheduled', count: schedules.length }]} active={tab} onChange={setTab} />
 
       {tab === 'lib' && (
+        <>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', margin: '0 0 14px', borderRadius: 10, background: 'var(--surface)', border: '1px solid var(--line)', fontSize: 12.5 }}>
+          <span style={{ fontSize: 15 }}>✍</span>
+          <span className="muted">These are <b>summary</b> reports (schedulable · PDF/CSV). For <b>sealed, attestable audit evidence</b> — per-control, tamper-evident, with reviewer sign-off across PCI · SOX · HIPAA · GDPR · ISO 27001 · SOC 2 — use </span>
+          <a href="/attestations" style={{ color: 'var(--primary)', fontWeight: 600 }}>Attestations →</a>
+        </div>
         <div className="report-grid">
           {LIBRARY.map((r) => (
             <div className="card report-card" key={r.id}>
@@ -138,6 +144,7 @@ export default function Reports() {
             </div>
           ))}
         </div>
+        </>
       )}
 
       {tab === 'sched' && (

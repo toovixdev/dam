@@ -6,7 +6,7 @@ import KpiCard from '../components/KpiCard';
 import TabNav from '../components/shared/TabNav';
 import Modal from '../components/shared/Modal';
 import useApiData from '../hooks/useApiData';
-import { apiFetch, apiPost, getUser, getToken } from '../api/client';
+import { apiFetch, apiPost, apiDelete, getUser, getToken } from '../api/client';
 import { exportCsv } from '../exportCsv';
 import { toast } from '../components/shared/Toast';
 
@@ -43,13 +43,18 @@ export default function Attestations() {
 
   const [binderFw, setBinderFw] = useState('');
   const [changelog, setChangelog] = useState(null);   // { fw, revisions } for the changelog modal
+  const [scheduleFor, setScheduleFor] = useState(null); // the report being scheduled
+  const [schedFreq, setSchedFreq] = useState('weekly');
+  const [schedRecipients, setSchedRecipients] = useState('');
 
   const { data: cat } = useApiData('/compliance/catalog');
   const { data: ev, refetch: refetchEv } = useApiData('/compliance/evidence');
   const { data: packsData } = useApiData('/compliance/packs');
+  const { data: schedData, refetch: refetchSched } = useApiData('/compliance/schedules');
 
   const items = cat?.items || [];
   const evidence = ev?.evidence || [];
+  const schedules = schedData?.schedules || [];
   const packs = packsData?.packs || {};
   const sum = ev?.summary || { open: 0, attested: 0, exception: 0, escalated: 0 };
   const fmt = (ts) => (ts ? fmtTs(ts, getTimezone(), { dateStyle: 'medium', timeStyle: 'short' }) : '—');
@@ -83,6 +88,14 @@ export default function Attestations() {
     const r = await apiFetch(`/compliance/pack/${key}/history`);
     setChangelog({ fw, revisions: r?.revisions || [] });
   };
+  const createSchedule = async () => {
+    if (!scheduleFor) return;
+    const res = await apiPost('/compliance/schedules', { catalog_id: scheduleFor.id, frequency: schedFreq, days, recipients: schedRecipients });
+    if (res?.ok) { toast(`Scheduled "${scheduleFor.name}" · ${schedFreq}`, 'ok'); setScheduleFor(null); setSchedRecipients(''); refetchSched(); setTab('scheduled'); }
+    else toast(res?.data?.error || 'Could not schedule', 'err');
+  };
+  const toggleSchedule = async (s) => { const res = await apiPost(`/compliance/schedules/${s.id}/toggle`); if (res?.ok) refetchSched(); };
+  const removeSchedule = async (s) => { const res = await apiDelete(`/compliance/schedules/${s.id}`); if (res?.ok) { toast('Schedule removed', 'ok'); refetchSched(); } };
 
   const run = async (id) => {
     setRunning(id);
@@ -155,7 +168,7 @@ export default function Attestations() {
       </section>
 
       <TabNav
-        tabs={[{ id: 'catalog', label: 'Report catalog', count: items.length }, { id: 'evidence', label: 'Evidence & sign-off', count: evidence.length }]}
+        tabs={[{ id: 'catalog', label: 'Report catalog', count: items.length }, { id: 'evidence', label: 'Evidence & sign-off', count: evidence.length }, { id: 'scheduled', label: 'Scheduled', count: schedules.length }]}
         active={tab} onChange={setTab} />
 
       {tab === 'catalog' && (
@@ -200,13 +213,16 @@ export default function Attestations() {
                         </div>
                         <div className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>{it.description}</div>
                         {others.length > 0 && <div className="muted" style={{ fontSize: 10.5 }}>also satisfies: {others.join(' · ')}</div>}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 2, gap: 6 }}>
                           <span className="muted" style={{ fontSize: 11.5 }}>
                             {it.runs.open ? <span style={{ color: 'var(--amber)' }}>{it.runs.open} open</span> : (total ? `${total} run${total === 1 ? '' : 's'}` : 'never run')}
                           </span>
-                          <button className="btn-primary btn-sm" disabled={running === it.id} onClick={() => run(it.id)}>
-                            {running === it.id ? 'Sealing…' : 'Generate evidence'}
-                          </button>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button className="btn-secondary btn-sm" onClick={() => { setScheduleFor(it); setSchedFreq('weekly'); }}>Schedule</button>
+                            <button className="btn-primary btn-sm" disabled={running === it.id} onClick={() => run(it.id)}>
+                              {running === it.id ? 'Sealing…' : 'Generate'}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -245,6 +261,35 @@ export default function Attestations() {
                   </tr>
                 ))}
                 {!evidence.length && <tr><td colSpan={8} className="muted" style={{ fontSize: 12.5, padding: 14 }}>No evidence yet — generate a report from the catalog.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {tab === 'scheduled' && (
+        <div className="card">
+          <div className="card-header"><span className="card-title">Scheduled evidence runs</span><span className="card-sub">auto-generated + sealed on a cadence</span></div>
+          <div className="card-body" style={{ overflowX: 'auto' }}>
+            <table className="data-table" style={{ minWidth: 780 }}>
+              <thead><tr><th>Report</th><th>Framework</th><th>Cadence</th><th>Recipients</th><th>Next run</th><th>Last run</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {schedules.map((s) => (
+                  <tr key={s.id}>
+                    <td><b style={{ fontSize: 12.8 }}>{s.report_name}</b></td>
+                    <td className="muted" style={{ fontSize: 11.5 }}>{s.framework}</td>
+                    <td style={{ fontSize: 12 }}>{s.frequency} · {s.days}d window</td>
+                    <td className="muted" style={{ fontSize: 11.5 }}>{s.recipients || '—'}</td>
+                    <td className="muted" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>{fmt(s.next_run)}</td>
+                    <td className="muted" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>{s.last_run_at ? fmt(s.last_run_at) : 'never'}</td>
+                    <td><span style={{ color: s.status === 'on' ? 'var(--green)' : 'var(--muted)', fontWeight: 650, fontSize: 12 }}>{s.status === 'on' ? '● Active' : '❙❙ Paused'}</span></td>
+                    <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button className="btn-secondary btn-sm" onClick={() => toggleSchedule(s)}>{s.status === 'on' ? 'Pause' : 'Resume'}</button>{' '}
+                      <button className="btn-secondary btn-sm" onClick={() => removeSchedule(s)}>Remove</button>
+                    </td>
+                  </tr>
+                ))}
+                {!schedules.length && <tr><td colSpan={8} className="muted" style={{ fontSize: 12.5, padding: 14 }}>No schedules — click “Schedule” on any report to auto-generate sealed evidence on a cadence.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -313,6 +358,28 @@ export default function Attestations() {
                 Sign-off is restricted to Compliance, Auditor, and Admin roles.
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!scheduleFor} onClose={() => setScheduleFor(null)} title={scheduleFor ? `Schedule — ${scheduleFor.name}` : 'Schedule'} width={480}>
+        {scheduleFor && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div className="muted" style={{ fontSize: 12.5 }}>Auto-generate + seal this control's evidence on a cadence. Each run creates a sealed record awaiting reviewer sign-off in the Evidence tab.</div>
+            <label style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>Frequency
+              <select value={schedFreq} onChange={(e) => setSchedFreq(e.target.value)} className="input-sm">
+                <option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option>
+              </select>
+            </label>
+            <div className="muted" style={{ fontSize: 12 }}>Lookback window: <b>last {days} days</b> (from the catalog Period selector).</div>
+            <label style={{ fontSize: 12.5 }}>Recipients (optional)
+              <input value={schedRecipients} onChange={(e) => setSchedRecipients(e.target.value)} placeholder="compliance@acme.com, ciso@acme.com"
+                style={{ width: '100%', marginTop: 5, fontSize: 12.5, padding: 9, borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', color: 'var(--ink)' }} />
+            </label>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button className="btn-secondary" onClick={() => setScheduleFor(null)}>Cancel</button>
+              <button className="btn-primary" onClick={createSchedule}>Schedule</button>
+            </div>
           </div>
         )}
       </Modal>
