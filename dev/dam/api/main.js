@@ -11065,8 +11065,8 @@ async function fireComplianceSchedules() {
     }
   } catch (e) { console.error('[Compliance] scheduler tick failed:', e.message); }
 }
-setInterval(fireComplianceSchedules, 5 * 60 * 1000);   // every 5 minutes
-setTimeout(fireComplianceSchedules, 30 * 1000);        // once, shortly after boot
+setInterval(fireComplianceSchedules, 60 * 1000);       // every 60s (cheap indexed due-check)
+setTimeout(fireComplianceSchedules, 20 * 1000);        // once, shortly after boot
 
 // List evidence records (summary + metadata only; result rows fetched per-record).
 app.get('/api/compliance/evidence', authRequired, async (req, res) => {
