@@ -2818,3 +2818,22 @@ Closed the GDPR depth gap, same pattern as HIPAA/PCI.
 Verified on prod (awstest): reports run faithfully (personal-modification 3, off-hours 12,
 special-category 0 — consistent with no phi data). Commit 4a96460. Catalog now 28 reports across
 4 frameworks; HIPAA + PCI-DSS + GDPR at full DB-relevant parity — only SOX ITGC remains to deepen.
+
+## SOX deepened to ITGC — 4-framework compliance hardening complete (2026-08-17)
+
+Closed the last framework depth gap.
+- **Catalog 2 -> 7 SOX reports**: schema-change DDL for change-ticket reconciliation, privilege
+  grants/revokes, privileged/admin activity, direct back-end data changes by privileged accounts
+  (SoD red flag), off-hours change activity. Scoped by operation + account (no financial data tag).
+- **Posture 5 -> 8 controls**: ITGC change management logged (404), logical access / unique IDs
+  (404), terminated-user review (404, attestable). Signed pack now 7 controls, sig-verified.
+
+Verified on prod (awstest): schema-change 8, privileged-activity 17, direct-data-change 3,
+off-hours-change 268. Commit 45a5db7.
+
+**Milestone — all 4 named frameworks now at full DB-relevant parity:**
+HIPAA 9 reports/13 posture · PCI-DSS 11/8 · SOX 7/8 · GDPR 6/8 = **33 evidence reports** across
+4 frameworks, each with a signed versioned pack, a unified catalog<->posture control matrix, and a
+§-cited audit-binder PDF. Remaining differentiators vs Guardium/Imperva sit outside per-framework
+depth: framework count (ISO/NIST/SOC 2), the parked auth-failure capture (turns PCI 10.2.1.4 /
+GDPR / HIPAA login-monitoring from proxied to real), and auditor familiarity.
