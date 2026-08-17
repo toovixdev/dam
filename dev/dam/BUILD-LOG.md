@@ -2914,3 +2914,18 @@ SOC 2 (AICPA Trust Services Criteria). Unlike ISO, SOC 2 had no posture model, s
 Verified on prod: signed SOC 2 pack (8 controls), matrix (posture 8 + catalog 8, 7/8 linked), catalog
 now spans 6 frameworks = 51 citations across 27 canonical controls. Commit 8593c7d. frameworkForKey's
 punctuation-insensitive match handles 'soc2' -> 'SOC 2'.
+
+## Matrix nesting fix — reports attach to posture controls (2026-08-17)
+
+Fixed "ISO/HIPAA appear to have no reports": the matrix joined posture controls to catalog reports
+by normalized §-code but (a) norm() only stripped HIPAA/PCI/SOX/GDPR prefixes (not ISO/SOC), so ISO
+reports never attached, and (b) it required an exact single-code match, so compound citations
+('10.2.1.2 / 8.2.1') and parent/child clauses never linked. Fixes: strip ISO/SOC/AICPA prefixes;
+split compound citations on '/'; hierarchical codeMatch (a report nests under a control when its
+code IS the control's code or a more-specific child) so a parent control shows all sub-clause
+evidence. Corrected hipaa.uniqueids citation to §164.312(a)(2)(i) (the Unique-User-ID spec).
+
+Result (evidence-only / unnested reports): SOX 0, GDPR 0, PCI 1, SOC 2 1, ISO 4, HIPAA 6 — the
+remaining HIPAA/ISO ones are catalog reports more granular than their posture models have controls
+for (the two-lens design; they still show as "evidence reports"). Added ISO 27001 + SOC 2 report
+lists to the gap-matrix artifact Section 3. Commit cdb885e.
