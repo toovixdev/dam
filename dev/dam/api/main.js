@@ -6514,6 +6514,70 @@ function postSyslog(cfg, a) {
   });
 }
 
+// --- SNMPv2c trap sender — dependency-free BER encoder over UDP (node dgram). Emits an
+// SNMPv2-Trap-PDU (RFC 3416) with the two mandatory varbinds (sysUpTime.0, snmpTrapOID.0)
+// followed by the alert fields as OCTET STRING varbinds under a configurable enterprise OID.
+function _berLen(n) {
+  if (n < 0x80) return Buffer.from([n]);
+  const b = []; let x = n; while (x > 0) { b.unshift(x & 0xff); x = Math.floor(x / 256); }
+  return Buffer.from([0x80 | b.length, ...b]);
+}
+function _berTlv(tag, content) { return Buffer.concat([Buffer.from([tag]), _berLen(content.length), content]); }
+function _berInt(n) {                         // signed, non-negative — minimal two's-complement
+  n = Math.floor(Number(n) || 0);
+  const b = []; if (n === 0) b.push(0); else { let x = n; while (x > 0) { b.unshift(x & 0xff); x = Math.floor(x / 256); } if (b[0] & 0x80) b.unshift(0); }
+  return Buffer.from(b);
+}
+function _berOid(oid) {                        // dotted string → BER OID content bytes
+  const a = String(oid).split('.').map(Number).filter(n => !isNaN(n));
+  if (a.length < 2) return Buffer.from([0]);
+  const out = [40 * a[0] + a[1]];
+  for (let i = 2; i < a.length; i++) {
+    let v = a[i];
+    if (v < 0x80) { out.push(v); continue; }
+    const stack = [v & 0x7f]; v = Math.floor(v / 128);
+    while (v > 0) { stack.push((v & 0x7f) | 0x80); v = Math.floor(v / 128); }
+    out.push(...stack.reverse());
+  }
+  return Buffer.from(out);
+}
+function _snmpVarStr(oid, str) {               // varbind with an OCTET STRING value
+  const s = String(str == null ? '' : str).replace(/[\r\n]+/g, ' ').slice(0, 255);
+  return _berTlv(0x30, Buffer.concat([_berTlv(0x06, _berOid(oid)), _berTlv(0x04, Buffer.from(s, 'utf8'))]));
+}
+function postSnmpTrap(cfg, a) {
+  return new Promise((resolve, reject) => {
+    const host = cfg.host;
+    if (!host) return reject(new Error('SNMP trap host required'));
+    const port = parseInt(cfg.port || '162', 10);
+    const community = cfg.community || 'public';
+    const base = (cfg.enterprise_oid || '1.3.6.1.4.1.54321.1').replace(/\.+$/, '');  // set to your PEN
+    const trapOid = cfg.trap_oid || (base + '.1');
+    const uptime = Math.floor(process.uptime() * 100);                                // TimeTicks (1/100 s)
+    const reqId = Math.floor(Math.random() * 0x7fffffff);
+    const varbinds = [
+      _berTlv(0x30, Buffer.concat([_berTlv(0x06, _berOid('1.3.6.1.2.1.1.3.0')), _berTlv(0x43, _berInt(uptime))])),        // sysUpTime.0 (TimeTicks)
+      _berTlv(0x30, Buffer.concat([_berTlv(0x06, _berOid('1.3.6.1.6.3.1.1.4.1.0')), _berTlv(0x06, _berOid(trapOid))])),   // snmpTrapOID.0 (OID)
+      _snmpVarStr(base + '.2.1', a.severity),
+      _snmpVarStr(base + '.2.2', a.principal),
+      _snmpVarStr(base + '.2.3', a.database_name),
+      _snmpVarStr(base + '.2.4', a.rule_name || a.summary),
+      _snmpVarStr(base + '.2.5', a.operation),
+      _snmpVarStr(base + '.2.6', a.client_ip),
+      _snmpVarStr(base + '.2.7', cfg.message ? renderAlertTemplate(cfg.message, a) : (a.summary || 'Security alert')),
+    ];
+    const pdu = _berTlv(0xA7, Buffer.concat([                    // SNMPv2-Trap-PDU (context tag 7)
+      _berTlv(0x02, _berInt(reqId)), _berTlv(0x02, _berInt(0)), _berTlv(0x02, _berInt(0)),
+      _berTlv(0x30, Buffer.concat(varbinds)),
+    ]));
+    const msg = _berTlv(0x30, Buffer.concat([                    // SNMP message: version=1 (v2c) + community + PDU
+      _berTlv(0x02, _berInt(1)), _berTlv(0x04, Buffer.from(community, 'utf8')), pdu,
+    ]));
+    const sock = require('dgram').createSocket('udp4');
+    sock.send(msg, 0, msg.length, port, host, (err) => { sock.close(); err ? reject(err) : resolve({ ok: true, status: 'sent' }); });
+  });
+}
+
 const CONNECTORS = {
   syslog: { name: 'Syslog / SIEM', kind: 'alert', help: 'Forwards each alert as an RFC 5424 syslog message (UDP or TCP) to a syslog server or any SIEM collector that ingests syslog.',
     fields: [
@@ -6523,6 +6587,15 @@ const CONNECTORS = {
       { key: 'facility', label: 'Facility (0–23)', type: 'text', default: '13', placeholder: '13 = log audit' },
       { key: 'message', label: 'Custom message template (optional)', type: 'text', placeholder: '${Alert.username} ran ${Alert.operation} on ${Alert.database} — ${Alert.summary}' },
     ], send: postSyslog },
+  snmptrap: { name: 'SNMP Trap', kind: 'alert', help: 'Sends each alert as an SNMPv2c trap (UDP) to an NMS / manager (e.g. SolarWinds, Nagios, Zabbix, PRTG). Alert fields ship as varbinds under your enterprise OID. Set enterprise OID to your registered PEN and load the DAM MIB on the manager for named varbinds.',
+    fields: [
+      { key: 'host', label: 'Trap destination host', type: 'text', required: true, placeholder: 'nms.company.internal' },
+      { key: 'port', label: 'Port', type: 'text', default: '162', placeholder: '162' },
+      { key: 'community', label: 'Community string', type: 'password', default: 'public', secret: true, placeholder: 'public' },
+      { key: 'enterprise_oid', label: 'Enterprise OID (your PEN)', type: 'text', default: '1.3.6.1.4.1.54321.1', placeholder: '1.3.6.1.4.1.<your-PEN>.1' },
+      { key: 'trap_oid', label: 'Trap OID (optional)', type: 'text', placeholder: 'defaults to <enterprise OID>.1' },
+      { key: 'message', label: 'Custom message varbind (optional)', type: 'text', placeholder: '${Alert.username} ran ${Alert.operation} on ${Alert.database}' },
+    ], send: postSnmpTrap },
   email_alerts: { name: 'Email', kind: 'alert', help: 'Emails alerts to a recipient list using your configured SMTP (set up Settings → Email first). Comma-separate multiple addresses.',
     fields: [{ key: 'recipients', label: 'Recipients', type: 'text', required: true, placeholder: 'soc@company.com, oncall@company.com' }],
     send: (c, a) => postEmailAlert(c, a) },
