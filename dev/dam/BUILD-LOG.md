@@ -2805,3 +2805,16 @@ Verified on prod (awstest): all 6 new PCI reports run; totals faithful to raw pr
 (chd-access 16, chd-modification 49, admin-actions 17 = posture shared-acct metric, DDL 8).
 Commits ba88286, a8fbf8c. Catalog now 24 reports across 4 frameworks; HIPAA + PCI-DSS at parity,
 SOX + GDPR remain the depth gap.
+
+## GDPR deepened — processing accountability + data-subject rights (2026-08-17)
+
+Closed the GDPR depth gap, same pattern as HIPAA/PCI.
+- **Catalog 2 -> 6 GDPR reports**: personal-data modification (Art.5(1)(d)/Art.30), bulk personal
+  extraction (Art.33 breach + Art.5(1)(c) minimisation), special-category health access (Art.9,
+  phi-scoped), off-hours personal access (Art.32). Personal-data-scoped via personalAny.
+- **Posture 5 -> 8 controls**: right to erasure (Art.17, attestable), special-category logged
+  (Art.9), breach notification 72h (Art.33, attestable). Signed pack now 6 controls, sig-verified.
+
+Verified on prod (awstest): reports run faithfully (personal-modification 3, off-hours 12,
+special-category 0 — consistent with no phi data). Commit 4a96460. Catalog now 28 reports across
+4 frameworks; HIPAA + PCI-DSS + GDPR at full DB-relevant parity — only SOX ITGC remains to deepen.
