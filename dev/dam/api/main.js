@@ -5491,17 +5491,23 @@ app.post('/api/agents/enroll', async (req, res) => {
   }
 
   const existing = await pgPool.query(
-    `SELECT id FROM agents WHERE instance_id = $1 AND agent_type = $2 AND host IS NOT DISTINCT FROM $3`,
+    `SELECT id, status FROM agents WHERE instance_id = $1 AND agent_type = $2 AND host IS NOT DISTINCT FROM $3`,
     [instanceId, agent_type, agent_host || null]
   );
   let agentId;
   if (existing.rows.length) {
     agentId = existing.rows[0].id;
+    const wasOffline = existing.rows[0].status === 'offline';
     await pgPool.query(
       `UPDATE agents SET status='online', last_heartbeat=now(), version=$2,
               config = coalesce(config,'{}'::jsonb) || $3::jsonb WHERE id=$1`,
       [agentId, version || '0.1.0', enrollCfg]
     );
+    // Recovery: clear the open agent-offline alert for this agent (Sl.55 close-the-loop).
+    if (wasOffline) {
+      const label = agent_host || (agent_type ? `${agent_type} agent` : String(agentId).slice(0, 8));
+      try { await pgPool.query(`UPDATE alerts SET status='resolved' WHERE tenant_id=$1 AND rule='agent-offline' AND status='open' AND object_name=$2`, [tenantId, label]); } catch (e) { /* best-effort */ }
+    }
   } else {
     const created = await pgPool.query(
       `INSERT INTO agents (tenant_id, instance_id, agent_type, host, version, config, status, last_heartbeat)
@@ -7089,10 +7095,32 @@ app.delete('/api/integrations/:type', authRequired, async (req, res) => {
   }
 });
 
-// Reaper: agents that miss heartbeats for 60s are marked offline.
+// Reaper: agents that miss heartbeats for 60s are marked offline. The online→offline
+// transition raises a critical alert (Sl.55 — agent malfunction / uninstall / disable →
+// immediate alert) and fans it out to the tenant's alert connectors. The status='online'
+// guard means RETURNING yields each agent exactly once per outage, so the alert fires once
+// (not every sweep while it stays down); it's auto-resolved when the agent heartbeats again.
+const agentLabel = (host, agentType, id) => host || (agentType ? `${agentType} agent` : String(id || '').slice(0, 8));
 setInterval(async () => {
   try {
-    await pgPool.query(`UPDATE agents SET status='offline' WHERE status='online' AND last_heartbeat < now() - interval '60 seconds'`);
+    const downed = await pgPool.query(
+      `UPDATE agents SET status='offline'
+        WHERE status='online' AND last_heartbeat < now() - interval '60 seconds'
+        RETURNING id, tenant_id, host, agent_type, instance_id`);
+    for (const a of downed.rows) {
+      const label = agentLabel(a.host, a.agent_type, a.id);
+      const summary = `Monitoring agent on ${label} stopped reporting — possible malfunction, disable, or uninstall. Activity on this host is no longer being captured.`;
+      let ins;
+      try {
+        ins = await pgPool.query(
+          `INSERT INTO alerts (tenant_id, database_id, severity, principal, summary, anomaly_score, status, rule, action, subtype, object_name)
+           VALUES ($1,$2,'critical',$3,$4,95,'open','agent-offline','detected','agent_health',$5) RETURNING id, created_at`,
+          [a.tenant_id, a.instance_id || null, label, summary, label]);
+      } catch (e) { console.log('[Agent] offline-alert insert failed:', e.message); continue; }
+      try { await dispatchAlert({ tenantId: a.tenant_id, severity: 'critical', principal: label, summary, database: a.host || null, rule: 'agent-offline', ts: ins.rows[0].created_at }); } catch (e) { /* best-effort */ }
+      try { broadcast({ type: 'alert', alert: { id: ins.rows[0].id, severity: 'critical', summary, rule: 'agent-offline' } }); } catch (e) { /* WS optional */ }
+    }
+    if (downed.rows.length) console.log(`[Agent] ${downed.rows.length} agent(s) offline → critical alert(s) raised`);
   } catch (e) { /* non-fatal */ }
 }, 30000);
 
