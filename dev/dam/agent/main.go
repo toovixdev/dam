@@ -78,6 +78,13 @@ type Config struct {
 	// MAX_SQL_LEN: cap on stored raw-SQL length (bytes). Longer statements are truncated so
 	// the trail stays granular without unbounded rows. Default 4096 (was a hard 500).
 	MaxSqlLen int
+	// SCAN_RESULTS (proxy/inline mode, Sl.34): inspect the OUTGOING result set content and alert
+	// when a single response returns more than RESULT_SCAN_THRESHOLD sensitive values (PAN/Aadhaar/
+	// SSN/…). Off by default — scanning returned data is costly and privacy-sensitive; values are
+	// never stored. RESULT_SCAN_MAX_ROWS caps the rows scanned per response to bound cost.
+	ScanResults        bool
+	ResultScanThreshold int
+	ResultScanMaxRows   int
 	// audit-forward (AgentLite) mode: tail the DB's native audit log on the host.
 	AuditLog    string // path to the native audit log file to tail
 	AuditSource string // audit type (audit_log | pgaudit | sql_server_audit | unified_audit_trail | profiler)
@@ -183,6 +190,9 @@ func loadConfig() Config {
 		MaskLiterals:     env("MASK_SQL_LITERALS", "false") == "true",
 		LargeResultBytes: int64(atoiDefault(env("LARGE_RESULT_BYTES", "1048576"), 1048576)), // 1 MiB default
 		MaxSqlLen:        maxSqlLenFromEnv(),
+		ScanResults:         env("SCAN_RESULTS", "false") == "true",
+		ResultScanThreshold: atoiDefault(env("RESULT_SCAN_THRESHOLD", "50"), 50),
+		ResultScanMaxRows:   atoiDefault(env("RESULT_SCAN_MAX_ROWS", "2000"), 2000),
 		AuditLog:         env("AUDIT_LOG", ""),
 		AuditSource:      env("AUDIT_SOURCE", ""),
 		AuditTopic:       env("AUDIT_TOPIC", ""),
@@ -973,6 +983,53 @@ var contentValidators = []contentValidator{
 	}},
 }
 
+// scanSensitiveValue returns the sensitivity tag of a single returned value (pci/aadhaar/pan/
+// gstin/email/ssn), or "" if it matches none. Reuses the classification content validators so
+// detection stays consistent. Cheap length pre-check first; the low-signal ip/phone validators
+// are skipped for egress alerting (too noisy to threshold on).
+func scanSensitiveValue(s string) string {
+	if len(s) < 5 || len(s) > 64 {
+		return ""
+	}
+	for _, cv := range contentValidators {
+		if cv.tag == "ip" || cv.tag == "phone" {
+			continue
+		}
+		if cv.test(s) {
+			return cv.tag
+		}
+	}
+	return ""
+}
+
+// scanRowValues decodes the lenenc-string values of one MySQL result row (n columns) and scans
+// each for sensitive content, returning the number of sensitive values and a per-kind tally.
+// Bounds-checked: a short/garbled row simply stops early. It never mutates the row.
+func scanRowValues(payload []byte, ncols int, kinds map[string]int) int {
+	hits := 0
+	p := payload
+	for i := 0; i < ncols; i++ {
+		if len(p) == 0 {
+			break
+		}
+		if p[0] == 0xfb { // NULL
+			p = p[1:]
+			continue
+		}
+		l, ln := readLenencInt(p)
+		if ln == 0 || ln+int(l) > len(p) {
+			break
+		}
+		val := p[ln : ln+int(l)]
+		p = p[ln+int(l):]
+		if k := scanSensitiveValue(string(val)); k != "" {
+			hits++
+			kinds[k]++
+		}
+	}
+	return hits
+}
+
 // Column classification is data-driven from the pulled detector pack — see classifyWith and
 // resolveDetectors in classify_pack.go. nameClassifiers + contentValidators above are the
 // compiled-in fallback library that builtinDetectors() assembles when a pack can't be pulled.
@@ -1576,6 +1633,14 @@ func (st *connState) snap() (principal string, deprecateEof bool) {
 	return st.principal, st.deprecateEof
 }
 
+// lastQuery returns the most recent captured query + client IP (proxy mode), for attributing a
+// result-content egress alert raised from the response goroutine.
+func (st *connState) lastQuery() (sql, ip string) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.pendingSQL, st.pendingIP
+}
+
 func handleConn(cfg Config, client net.Conn) {
 	defer client.Close()
 	upstream, err := net.Dial("tcp", cfg.Upstream)
@@ -1651,6 +1716,12 @@ func processPackets(cfg Config, st *connState, buf []byte, client, upstream net.
 				q = skipQueryAttrs(q)
 			}
 			sql := strings.TrimSpace(string(q))
+			// Remember the query + client so the response goroutine (maskedPipe) can attribute a
+			// result-content egress alert (Sl.34) to it.
+			st.mu.Lock()
+			st.pendingSQL = sql
+			st.pendingIP = clientIP
+			st.mu.Unlock()
 			if isQuarantined(st.principal) {
 				// Quarantined account: refuse and DROP the live session (no resume).
 				writeMySQLError(client, seq+1, 1142, "Session quarantined by TooVix DAM — account access is blocked")
@@ -1777,6 +1848,9 @@ func maskedPipe(cfg Config, st *connState, upstream, client net.Conn) {
 	colsLeft := 0
 	anyMask := false
 	var cols []maskCol
+	// Result-content egress scan (Sl.34), per result set. Off unless SCAN_RESULTS=true.
+	scanHits, scanRows := 0, 0
+	scanKinds := map[string]int{}
 
 	var buf []byte
 	tmp := make([]byte, 32*1024)
@@ -1812,6 +1886,8 @@ func maskedPipe(cfg Config, st *connState, upstream, client net.Conn) {
 							colsLeft = int(cnt)
 							cols = make([]maskCol, 0, colsLeft)
 							anyMask = false
+							scanHits, scanRows = 0, 0 // new result set → reset the egress scan
+							scanKinds = map[string]int{}
 							rs = rsCols
 						}
 					case rsCols:
@@ -1832,10 +1908,22 @@ func maskedPipe(cfg Config, st *connState, upstream, client net.Conn) {
 						rs = rsRows // column-def terminator EOF; pass through
 					case rsRows:
 						if b0 == 0xfe && (plen < 9 || deprecateEof) {
-							rs = rsIdle // end of result set
-						} else if anyMask {
-							if np := maskRow(payload, cols); np != nil {
-								out = buildPacket(seq, np)
+							// End of result set → evaluate the egress rule on what was returned.
+							if cfg.ScanResults && scanHits >= cfg.ResultScanThreshold {
+								principal, _ := st.snap()
+								sql, ip := st.lastQuery()
+								go raiseResultEgressAlert(cfg, principal, ip, sql, scanHits, scanKinds)
+							}
+							rs = rsIdle
+						} else {
+							if cfg.ScanResults && scanRows < cfg.ResultScanMaxRows {
+								scanHits += scanRowValues(payload, len(cols), scanKinds)
+								scanRows++
+							}
+							if anyMask {
+								if np := maskRow(payload, cols); np != nil {
+									out = buildPacket(seq, np)
+								}
 							}
 						}
 					}
@@ -2059,6 +2147,37 @@ func raiseAlert(cfg Config, principal, clientIP, sql string) {
 	if err == nil {
 		resp.Body.Close()
 	}
+}
+
+// raiseResultEgressAlert fires when an OUTGOING result set returned more sensitive values than
+// the configured threshold (Sl.34 — inspect outgoing traffic, compare to a rule, alert). The
+// content is counted, never stored; the summary carries the per-kind tally and the query.
+func raiseResultEgressAlert(cfg Config, principal, clientIP, sql string, hits int, kinds map[string]int) {
+	parts := []string{}
+	sev := "high"
+	for _, k := range []string{"pci", "aadhaar", "ssn", "pan", "gstin", "email"} {
+		if n := kinds[k]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s:%d", k, n))
+			if k == "pci" || k == "aadhaar" || k == "ssn" {
+				sev = "critical"
+			}
+		}
+	}
+	body, _ := json.Marshal(map[string]interface{}{
+		"token":     cfg.EnrollToken,
+		"host":      cfg.TargetHost,
+		"port":      atoiOrNil(cfg.TargetPort),
+		"principal": principal,
+		"client_ip": clientIP,
+		"summary":   fmt.Sprintf("Sensitive data egress: result set returned %d sensitive value(s) [%s]", hits, strings.Join(parts, " ")),
+		"severity":  sev,
+		"raw_sql":   truncate(sql, 500),
+	})
+	resp, err := http.Post(cfg.ControlPlane+"/api/agents/alert", "application/json", bytes.NewReader(body))
+	if err == nil {
+		resp.Body.Close()
+	}
+	log.Printf("[EGRESS] %-14s result returned %d sensitive value(s) [%s]", principal, hits, strings.Join(parts, " "))
 }
 
 // quarantineSession holds the offending session for human review: a blocked query
