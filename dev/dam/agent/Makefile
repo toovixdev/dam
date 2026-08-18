@@ -13,7 +13,7 @@ PLATFORM ?= linux/amd64
 DIST     := dist
 NFPM_IMG ?= goreleaser/nfpm:latest
 
-.PHONY: binary packages deb rpm clean
+.PHONY: binary solaris windows packages deb rpm clean
 
 binary:
 	mkdir -p $(DIST)
@@ -22,6 +22,25 @@ binary:
 	docker cp $$cid:/usr/local/bin/dam-agent $(DIST)/dam-agent-linux-amd64; \
 	docker rm $$cid >/dev/null
 	@echo "==> $(DIST)/dam-agent-linux-amd64"
+
+# Solaris / illumos build. eBPF (host) and AF_PACKET (network) are Linux-only, so on Solaris
+# the agent runs in MODE=proxy (inline TCP) or MODE=audit-forward (tail the DB audit log) —
+# the same modes used on Windows. CGO off → a single self-contained binary; no clang/libbpf.
+solaris:
+	mkdir -p $(DIST)
+	docker run --rm --platform linux/amd64 -v "$$PWD":/w -w /w \
+	  -e GOOS=solaris -e GOARCH=amd64 -e CGO_ENABLED=0 golang:1.22-alpine \
+	  sh -c 'apk add --no-cache git >/dev/null 2>&1; go build -trimpath -o $(DIST)/dam-agent-solaris-amd64 .'
+	@echo "==> $(DIST)/dam-agent-solaris-amd64  (deploy with packaging/dam-agent.smf.xml)"
+
+# Windows build (SQL Server via Extended Events over TDS). eBPF/AF_PACKET unavailable → proxy
+# or audit-forward mode; runs as a Windows service.
+windows:
+	mkdir -p $(DIST)
+	docker run --rm --platform linux/amd64 -v "$$PWD":/w -w /w \
+	  -e GOOS=windows -e GOARCH=amd64 -e CGO_ENABLED=0 golang:1.22-alpine \
+	  sh -c 'apk add --no-cache git >/dev/null 2>&1; go build -trimpath -o $(DIST)/dam-agent-windows-amd64.exe .'
+	@echo "==> $(DIST)/dam-agent-windows-amd64.exe"
 
 deb: binary
 	docker run --rm --platform $(PLATFORM) -v "$$PWD":/w -w /w $(NFPM_IMG) \

@@ -1,0 +1,72 @@
+<?xml version="1.0"?>
+<!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
+<!--
+  TooVix DAM Agent — Solaris / illumos SMF service manifest.
+
+  Solaris uses SMF, not systemd. eBPF (host) and AF_PACKET (network) capture are Linux-only,
+  so on Solaris the agent runs in MODE=proxy (inline TCP) or MODE=audit-forward (tail the DB's
+  native audit log) — see packaging/agent-solaris.env.example.
+
+  Install:
+    cp dam-agent-solaris-amd64            /usr/local/bin/dam-agent && chmod 755 /usr/local/bin/dam-agent
+    mkdir -p /etc/toovix
+    cp agent-solaris.env.example          /etc/toovix/agent.env      # then edit it
+    cp dam-agent.smf.xml                  /var/svc/manifest/site/dam-agent.xml
+    svccfg import /var/svc/manifest/site/dam-agent.xml
+    svcadm enable site/toovix/dam-agent
+    svcs -xv site/toovix/dam-agent                                    # status / log path
+
+  Optional resource capping (the Solaris analogue of the systemd cgroup caps): bind the
+  service to a project with resource controls, e.g.
+    projadd -c "toovix dam agent" -K "project.max-lwps=(privileged,512,deny)" \
+      -K "rcap.max-rss=805306368" user.dam-agent
+  and set method_credential project below.
+-->
+<service_bundle type='manifest' name='toovix-dam-agent'>
+  <service name='site/toovix/dam-agent' type='service' version='1'>
+
+    <!-- One agent per host by default; clone the manifest (new service name) for multi-mode. -->
+    <single_instance/>
+
+    <dependency name='network' grouping='require_all' restart_on='error' type='service'>
+      <service_fmri value='svc:/milestone/network:default'/>
+    </dependency>
+    <dependency name='filesystem-local' grouping='require_all' restart_on='none' type='service'>
+      <service_fmri value='svc:/system/filesystem/local:default'/>
+    </dependency>
+
+    <!-- Sources the env file (MODE, TARGET_HOST, AGENT_ENROLL_TOKEN, ...) then execs the agent. -->
+    <exec_method type='method' name='start' timeout_seconds='60'
+      exec='/bin/sh -c &quot;. /etc/toovix/agent.env; exec /usr/local/bin/dam-agent&quot;'>
+      <method_context>
+        <method_credential user='root' group='root'/>
+      </method_context>
+    </exec_method>
+
+    <exec_method type='method' name='stop' exec=':kill' timeout_seconds='30'>
+      <method_context>
+        <method_credential user='root' group='root'/>
+      </method_context>
+    </exec_method>
+
+    <!-- Long-running child; SMF restarts it on failure (RestartSec-equivalent handled by startd). -->
+    <property_group name='startd' type='framework'>
+      <propval name='duration' type='astring' value='child'/>
+      <propval name='ignore_error' type='astring' value='core,signal'/>
+    </property_group>
+
+    <instance name='default' enabled='false'/>
+
+    <stability value='Evolving'/>
+
+    <template>
+      <common_name>
+        <loctext xml:lang='C'>TooVix DAM Agent</loctext>
+      </common_name>
+      <documentation>
+        <manpage title='dam-agent' section='1'/>
+        <doc_link name='toovix.security' uri='https://toovix.security/docs/agent'/>
+      </documentation>
+    </template>
+  </service>
+</service_bundle>
