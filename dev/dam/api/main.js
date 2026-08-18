@@ -7103,10 +7103,22 @@ app.delete('/api/integrations/:type', authRequired, async (req, res) => {
 const agentLabel = (host, agentType, id) => host || (agentType ? `${agentType} agent` : String(id || '').slice(0, 8));
 setInterval(async () => {
   try {
+    // 1) Mark agents that missed heartbeats (60s) offline.
+    await pgPool.query(`UPDATE agents SET status='offline' WHERE status='online' AND last_heartbeat < now() - interval '60 seconds'`);
+    // 2) Reconcile alerts: any offline agent that stopped reporting recently and has no open
+    //    'agent-offline' alert gets one now. The NOT EXISTS guard makes this fire once per
+    //    outage (idempotent across sweeps); the 24h window skips long-decommissioned agents so
+    //    a backlog of old corpses never storms. This catches fresh online→offline transitions
+    //    AND agents that were already offline before alerting existed.
     const downed = await pgPool.query(
-      `UPDATE agents SET status='offline'
-        WHERE status='online' AND last_heartbeat < now() - interval '60 seconds'
-        RETURNING id, tenant_id, host, agent_type, instance_id`);
+      `SELECT a.id, a.tenant_id, a.host, a.agent_type, a.instance_id
+         FROM agents a
+        WHERE a.status='offline'
+          AND a.last_heartbeat > now() - interval '24 hours'
+          AND NOT EXISTS (
+            SELECT 1 FROM alerts al
+             WHERE al.tenant_id = a.tenant_id AND al.rule='agent-offline' AND al.status='open'
+               AND al.object_name = COALESCE(a.host, a.agent_type || ' agent', left(a.id::text, 8)))`);
     for (const a of downed.rows) {
       const label = agentLabel(a.host, a.agent_type, a.id);
       const summary = `Monitoring agent on ${label} stopped reporting — possible malfunction, disable, or uninstall. Activity on this host is no longer being captured.`;
