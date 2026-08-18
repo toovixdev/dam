@@ -76,6 +76,19 @@ function ReportView({ report, onPrint }) {
 
 const FREQUENCIES = ['Daily', 'Weekly', 'Monthly', 'Quarterly'];
 
+// Custom report builder (Sl.86) — no-code field/period allow-lists mirrored from the API.
+const CUSTOM_COLS = [
+  ['timestamp', 'Time'], ['principal', 'Principal'], ['database_name', 'Database'],
+  ['operation', 'Operation'], ['row_count', 'Rows'], ['client_ip', 'Client IP'], ['tags', 'Tags'],
+];
+const CUSTOM_PERIODS = [['24h', 'Last 24 hours'], ['7d', 'Last 7 days'], ['30d', 'Last 30 days'], ['90d', 'Last 90 days']];
+const CUSTOM_GROUPS = [['none', 'No grouping'], ['principal', 'Principal'], ['database_name', 'Database'], ['operation', 'Operation']];
+const DEFAULT_CUSTOM = {
+  name: '', period: '30d', groupBy: 'none',
+  columns: ['timestamp', 'principal', 'database_name', 'operation', 'row_count'],
+  filters: { database_name: '', principal: '', operation: '', sensitive_only: false, min_rows: '' },
+};
+
 export default function Reports() {
   const { user } = useAuth();
   const [tab, setTab] = useState('lib');
@@ -85,6 +98,9 @@ export default function Reports() {
   const [scheduleFor, setScheduleFor] = useState(null); // report card being scheduled
   const [freq, setFreq] = useState('Monthly');
   const [recipients, setRecipients] = useState('');
+  const [customOpen, setCustomOpen] = useState(false);
+  const [custom, setCustom] = useState(DEFAULT_CUSTOM);
+  const [customBusy, setCustomBusy] = useState(false);
 
   const { data: schedData, refetch: refetchSched } = useApiData('/report-schedules');
   const schedules = Array.isArray(schedData) ? schedData : [];
@@ -105,6 +121,20 @@ export default function Reports() {
     if (!ok) toast('Allow pop-ups for this site to download the PDF', 'err');
   };
 
+  const openCustom = () => { setCustom(DEFAULT_CUSTOM); setCustomOpen(true); };
+  const toggleCol = (key) => setCustom((c) => ({
+    ...c, columns: c.columns.includes(key) ? c.columns.filter((k) => k !== key) : [...c.columns, key],
+  }));
+  const setFilter = (key, val) => setCustom((c) => ({ ...c, filters: { ...c.filters, [key]: val } }));
+  const runCustom = async () => {
+    if (!custom.columns.length) { toast('Pick at least one column', 'err'); return; }
+    setCustomBusy(true);
+    const res = await apiPost('/reports/custom', custom);
+    setCustomBusy(false);
+    if (res && !res.error) { setCustomOpen(false); setReport(res); }
+    else toast('Could not generate custom report', 'err');
+  };
+
   const openSchedule = (r) => { setScheduleFor(r); setFreq('Monthly'); setRecipients(''); };
   const saveSchedule = async () => {
     const res = await apiPost('/report-schedules', { report_type: scheduleFor.id, report_name: scheduleFor.n, frequency: freq, recipients });
@@ -117,7 +147,7 @@ export default function Reports() {
   return (
     <Layout lastRefresh={lastRefresh} onRefresh={() => { setLastRefresh(new Date()); refetchSched(); }}>
       <PageHeader title="Reports" meta={['pre-built + scheduled', 'PDF / CSV / signed evidence']}>
-        <button className="btn-primary" onClick={() => toast('Custom report builder opened')}>＋ Custom report</button>
+        <button className="btn-primary" onClick={openCustom}>＋ Custom report</button>
       </PageHeader>
 
       <TabNav tabs={[{ id: 'lib', label: 'Library' }, { id: 'sched', label: 'Scheduled', count: schedules.length }]} active={tab} onChange={setTab} />
@@ -167,6 +197,53 @@ export default function Reports() {
           </table>
         </div></div>
       )}
+
+      <Modal open={customOpen} onClose={() => setCustomOpen(false)} title="Build a custom report" width={560}>
+        <p className="muted" style={{ fontSize: 12.5, margin: '0 0 14px' }}>
+          Assemble a report from database activity — pick the period, columns, grouping and filters. No query or code needed; the result exports to PDF / CSV / Excel like any library report.
+        </p>
+        <div className="form-field"><label>Report name</label>
+          <input value={custom.name} onChange={(e) => setCustom({ ...custom, name: e.target.value })} placeholder="e.g. Finance-DB privileged access — Q3" />
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="form-field"><label>Period</label>
+            <select value={custom.period} onChange={(e) => setCustom({ ...custom, period: e.target.value })}>
+              {CUSTOM_PERIODS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+          <div className="form-field"><label>Group summary by</label>
+            <select value={custom.groupBy} onChange={(e) => setCustom({ ...custom, groupBy: e.target.value })}>
+              {CUSTOM_GROUPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="form-field"><label>Columns</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {CUSTOM_COLS.map(([key, label]) => (
+              <button key={key} type="button" onClick={() => toggleCol(key)}
+                className={`badge ${custom.columns.includes(key) ? 'green' : ''}`}
+                style={{ cursor: 'pointer', border: '1px solid var(--line)', padding: '5px 11px', fontSize: 12 }}>
+                {custom.columns.includes(key) ? '✓ ' : ''}{label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="form-field" style={{ marginBottom: 6 }}><label>Filters (optional)</label></div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div className="form-field"><input value={custom.filters.database_name} onChange={(e) => setFilter('database_name', e.target.value)} placeholder="Database name" /></div>
+          <div className="form-field"><input value={custom.filters.principal} onChange={(e) => setFilter('principal', e.target.value)} placeholder="Principal / user" /></div>
+          <div className="form-field"><input value={custom.filters.operation} onChange={(e) => setFilter('operation', e.target.value)} placeholder="Operation (SELECT, GRANT…)" /></div>
+          <div className="form-field"><input type="number" min="0" value={custom.filters.min_rows} onChange={(e) => setFilter('min_rows', e.target.value)} placeholder="Min rows affected" /></div>
+        </div>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, margin: '2px 0 4px', cursor: 'pointer' }}>
+          <input type="checkbox" checked={custom.filters.sensitive_only} onChange={(e) => setFilter('sensitive_only', e.target.checked)} />
+          Sensitive-data access only (events touching classified columns)
+        </label>
+        <div className="modal-footer" style={{ padding: '10px 0 0', justifyContent: 'flex-end' }}>
+          <button className="btn-secondary" onClick={() => setCustomOpen(false)}>Cancel</button>
+          <button className="btn-primary" disabled={customBusy} onClick={runCustom}>{customBusy ? 'Generating…' : 'Generate report'}</button>
+        </div>
+      </Modal>
 
       <Modal open={!!report} onClose={() => setReport(null)} title={report ? report.title : 'Report'} width={780}>
         {report && <ReportView report={report} onPrint={handlePrint} />}

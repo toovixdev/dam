@@ -11118,6 +11118,76 @@ app.get('/api/reports/:type', authRequired, async (req, res) => {
   }
 });
 
+// ── Custom report builder (Sl.86) ─────────────────────────────────────────────
+// A no-code report assembled from a WHITELISTED spec — period, filters, columns
+// and optional grouping. Every fragment comes from an allow-list and every value
+// is escaped (chEsc / parseInt); the client never supplies raw SQL. Returns the
+// standard report envelope so it renders and exports (CSV/PDF/xlsx) exactly like
+// the pre-built library reports.
+const CUSTOM_FIELDS = {
+  timestamp:     { label: 'Time',      sql: 'timestamp' },
+  principal:     { label: 'Principal', sql: 'principal' },
+  database_name: { label: 'Database',  sql: 'database_name' },
+  operation:     { label: 'Operation', sql: 'operation' },
+  row_count:     { label: 'Rows',      sql: 'row_count' },
+  client_ip:     { label: 'Client IP', sql: 'client_ip' },
+  tags:          { label: 'Tags',      sql: "arrayStringConcat(tags, ',')" },
+};
+const CUSTOM_PERIODS = { '24h': ['Last 24 hours', '1 DAY'], '7d': ['Last 7 days', '7 DAY'], '30d': ['Last 30 days', '30 DAY'], '90d': ['Last 90 days', '90 DAY'] };
+const CUSTOM_GROUP = { principal: 'Principal', database_name: 'Database', operation: 'Operation' };
+
+async function buildCustomReport(user, spec) {
+  const evDb = await eventsDbFor(user.tenantId); const esc = chEsc(user.tenantId);
+  const [periodLabel, interval] = CUSTOM_PERIODS[spec.period] || CUSTOM_PERIODS['30d'];
+  const where = [`tenant_id='${esc}'`, `timestamp >= now() - INTERVAL ${interval}`];
+  const f = spec.filters || {};
+  if (f.database_name) where.push(`database_name='${chEsc(f.database_name)}'`);
+  if (f.principal)     where.push(`principal='${chEsc(f.principal)}'`);
+  if (f.operation)     where.push(`operation='${chEsc(f.operation)}'`);
+  if (f.sensitive_only) where.push('length(tags) > 0');
+  const minRows = parseInt(f.min_rows, 10);
+  if (Number.isFinite(minRows) && minRows > 0) where.push(`row_count >= ${minRows}`);
+  const W = where.join(' AND ');
+
+  let cols = Array.isArray(spec.columns) ? [...new Set(spec.columns)].filter((c) => CUSTOM_FIELDS[c]) : [];
+  if (!cols.length) cols = ['timestamp', 'principal', 'database_name', 'operation', 'row_count'];
+  const limit = Math.min(Math.max(parseInt(spec.limit, 10) || 200, 1), 1000);
+
+  const agg = (await chSafe(`SELECT count() ev, uniqExact(principal) prin, uniqExact(database_name) dbs, sum(row_count) rows FROM ${evDb}.events WHERE ${W}`))[0] || {};
+  const kpis = [
+    kpi('Events', Number(agg.ev || 0).toLocaleString()),
+    kpi('Distinct principals', Number(agg.prin || 0).toLocaleString()),
+    kpi('Databases touched', Number(agg.dbs || 0).toLocaleString()),
+    kpi('Rows accessed', Number(agg.rows || 0).toLocaleString()),
+  ];
+
+  const tables = [];
+  if (CUSTOM_GROUP[spec.groupBy]) {
+    const g = spec.groupBy;
+    const rows = await chSafe(`SELECT ${g} k, count() ev, sum(row_count) rows FROM ${evDb}.events WHERE ${W} GROUP BY ${g} ORDER BY ev DESC LIMIT 50`);
+    tables.push(tbl(`By ${CUSTOM_GROUP[g].toLowerCase()}`, [CUSTOM_GROUP[g], 'Events', 'Rows'],
+      rows.map((r) => [r.k, Number(r.ev).toLocaleString(), Number(r.rows).toLocaleString()])));
+  }
+  const selectSql = cols.map((c) => `${CUSTOM_FIELDS[c].sql} AS \`${c}\``).join(', ');
+  const detail = await chSafe(`SELECT ${selectSql} FROM ${evDb}.events WHERE ${W} ORDER BY timestamp DESC LIMIT ${limit}`);
+  tables.push(tbl('Detail', cols.map((c) => CUSTOM_FIELDS[c].label),
+    detail.map((r) => cols.map((c) => (r[c] == null ? '' : String(r[c]))))));
+
+  const title = (spec.name && String(spec.name).trim().slice(0, 80)) || 'Custom Report';
+  const note = `Custom report · database activity · ${periodLabel.toLowerCase()} · ${cols.length} column(s)${CUSTOM_GROUP[spec.groupBy] ? ` · grouped by ${CUSTOM_GROUP[spec.groupBy].toLowerCase()}` : ''}.`;
+  return { title, period: periodLabel, kpis, tables, note };
+}
+
+app.post('/api/reports/custom', authRequired, async (req, res) => {
+  try {
+    const report = await buildCustomReport(req.user, req.body || {});
+    res.json({ type: 'custom', generated_at: new Date().toISOString(), ...report });
+  } catch (e) {
+    console.log('[Reports] custom failed:', e.message);
+    res.status(500).json({ error: 'Custom report generation failed' });
+  }
+});
+
 // ── Compliance evidence & attestation ─────────────────────────────────────────
 // Control-mapped report catalog → run → sealed evidence record → reviewer sign-off.
 // Closes the "compliance reporting depth" gap vs. incumbents: named reports mapped
