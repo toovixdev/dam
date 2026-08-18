@@ -7119,20 +7119,24 @@ setInterval(async () => {
             SELECT 1 FROM alerts al
              WHERE al.tenant_id = a.tenant_id AND al.rule='agent-offline' AND al.status='open'
                AND al.object_name = COALESCE(a.host, a.agent_type || ' agent', left(a.id::text, 8)))`);
+    let raised = 0;
     for (const a of downed.rows) {
       const label = agentLabel(a.host, a.agent_type, a.id);
       const summary = `Monitoring agent on ${label} stopped reporting — possible malfunction, disable, or uninstall. Activity on this host is no longer being captured.`;
       let ins;
       try {
+        // database_id is NULL: this is an agent-health alert, not tied to a specific database
+        // (a.instance_id references db_instances, not databases — it would violate the FK).
         ins = await pgPool.query(
           `INSERT INTO alerts (tenant_id, database_id, severity, principal, summary, anomaly_score, status, rule, action, subtype, object_name)
-           VALUES ($1,$2,'critical',$3,$4,95,'open','agent-offline','detected','agent_health',$5) RETURNING id, created_at`,
-          [a.tenant_id, a.instance_id || null, label, summary, label]);
+           VALUES ($1,NULL,'critical',$2,$3,95,'open','agent-offline','detected','agent_health',$4) RETURNING id, created_at`,
+          [a.tenant_id, label, summary, label]);
       } catch (e) { console.log('[Agent] offline-alert insert failed:', e.message); continue; }
+      raised++;
       try { await dispatchAlert({ tenantId: a.tenant_id, severity: 'critical', principal: label, summary, database: a.host || null, rule: 'agent-offline', ts: ins.rows[0].created_at }); } catch (e) { /* best-effort */ }
       try { broadcast({ type: 'alert', alert: { id: ins.rows[0].id, severity: 'critical', summary, rule: 'agent-offline' } }); } catch (e) { /* WS optional */ }
     }
-    if (downed.rows.length) console.log(`[Agent] ${downed.rows.length} agent(s) offline → critical alert(s) raised`);
+    if (raised) console.log(`[Agent] ${raised} agent(s) offline → critical alert(s) raised`);
   } catch (e) { /* non-fatal */ }
 }, 30000);
 
