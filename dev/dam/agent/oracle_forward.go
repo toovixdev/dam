@@ -114,14 +114,15 @@ func tailOracleAudit(cfg Config) {
 	    NVL(a.USERHOST, ''),
 	    NVL(a.ACTION_NAME, ''),
 	    a.RETURN_CODE,
-	    DBMS_LOB.SUBSTR(a.SQL_TEXT, 1000, 1),
+	    DBMS_LOB.SUBSTR(a.SQL_TEXT, 4000, 1),
 	    NVL(s.ROWS_PROCESSED, 0),
 	    NVL(s.EXECUTIONS, 0),
-	    NVL(a.SESSIONID, 0), NVL(a.ENTRY_ID, 0)
+	    NVL(a.SESSIONID, 0), NVL(a.ENTRY_ID, 0),
+	    NVL(a.CLIENT_PROGRAM_NAME, '')
 	  FROM UNIFIED_AUDIT_TRAIL a
 	  LEFT JOIN V$SQLSTATS s
 	    ON RTRIM(s.SQL_TEXT, CHR(0)||CHR(10)||CHR(13)||CHR(9)||' ')
-	     = RTRIM(DBMS_LOB.SUBSTR(a.SQL_TEXT, 1000, 1), CHR(0)||CHR(10)||CHR(13)||CHR(9)||' ')
+	     = RTRIM(DBMS_LOB.SUBSTR(a.SQL_TEXT, 4000, 1), CHR(0)||CHR(10)||CHR(13)||CHR(9)||' ')
 	  WHERE a.EVENT_TIMESTAMP > TO_TIMESTAMP(:wm, 'YYYY-MM-DD HH24:MI:SS.FF6') - NUMTODSINTERVAL(:lb, 'SECOND')
 	    AND a.SQL_TEXT IS NOT NULL
 	    -- ORACLE_MAINTAINED='Y' is the authoritative flag for accounts Oracle runs itself: not
@@ -164,10 +165,10 @@ func tailOracleAudit(cfg Config) {
 		}
 		cur := map[string]bool{}
 		for rows.Next() {
-			var etStr, principal, objSchema, objName, userHost, action, statement string
+			var etStr, principal, objSchema, objName, userHost, action, statement, clientProg string
 			var returnCode, rowsProcessed, executions, sessionID, entryID int64
 			if err := rows.Scan(&etStr, &principal, &objSchema, &objName, &userHost, &action,
-				&returnCode, &statement, &rowsProcessed, &executions, &sessionID, &entryID); err != nil {
+				&returnCode, &statement, &rowsProcessed, &executions, &sessionID, &entryID, &clientProg); err != nil {
 				continue
 			}
 			// De-dupe key: a record is uniquely (event_timestamp, session, entry). Within the
@@ -202,7 +203,7 @@ func tailOracleAudit(cfg Config) {
 			if returnCode != 0 {
 				rc = 0
 			}
-			forwardEventOp(cfg, orDefault(principal, "unknown"), userHost, s, oracleOp(action, s), rc, false)
+			forwardEventOp(cfg, orDefault(principal, "unknown"), userHost, s, oracleOp(action, s), clientProg, rc, false)
 		}
 		rows.Close()
 		// The window's fingerprints become the new seen-set: anything still inside the lookback

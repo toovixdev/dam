@@ -144,7 +144,7 @@ func tailMongoProfiler(cfg Config) {
 			if !shouldForwardMongo(d, coll, dbName) {
 				continue
 			}
-			forwardEventOp(cfg, principalOfMongo(d), clientIPOfMongo(d), stmt, op, int(rowCountOfMongo(d)), false)
+			forwardEventOp(cfg, principalOfMongo(d), clientIPOfMongo(d), stmt, op, d.AppName, int(rowCountOfMongo(d)), false)
 		}
 		cur.Close(ctx)
 		// Only remember fingerprints from the window we just read; anything older can never

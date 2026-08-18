@@ -6055,6 +6055,9 @@ app.post('/api/agents/events', async (req, res) => {
     tags: (Array.isArray(e.tags) && e.tags.length) ? e.tags : detectTagsSql(e.sql_text || ''),
     agent_type: e.agent_type || 'network',
     source_host: e.source_host || req.body.host || '',
+    // Source application (Sl.37/45): client program name from the connection handshake, when
+    // the agent could capture it (empty otherwise). Length-capped to keep rows bounded.
+    application: e.application ? String(e.application).slice(0, 120) : '',
     };
   });
   try { await chInsertEvents(tenantId, evs); }
@@ -12824,7 +12827,7 @@ async function chQuery(sql, format = 'JSONEachRow') {
 // every raised alert has a real, matching event behind it).
 async function chInsertEvent(ev) {
   const db = await eventsDbFor(ev.tenant_id);
-  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, sql_text, anomaly_score, tags, agent_type, source_host) FORMAT JSONEachRow`;
+  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, sql_text, anomaly_score, tags, agent_type, source_host, application) FORMAT JSONEachRow`;
   await fetch(`${CH_URL}/?${CH_AUTH}&query=${encodeURIComponent(q)}`, { method: 'POST', body: JSON.stringify(ev) });
 }
 
@@ -12866,7 +12869,7 @@ function sqlFingerprint(sql) {
 async function chInsertEvents(tenantId, evs) {
   if (!evs.length) return;
   const db = await eventsDbFor(tenantId);
-  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, event_class, sql_text, sql_hash, anomaly_score, tags, agent_type, source_host) FORMAT JSONEachRow`;
+  const q = `INSERT INTO ${db}.events (tenant_id, database_name, timestamp, principal, client_ip, operation, schema_name, table_name, columns_accessed, row_count, event_class, sql_text, sql_hash, anomaly_score, tags, agent_type, source_host, application) FORMAT JSONEachRow`;
   // sql_hash carries the grammar fingerprint (declared in the schema but historically unwritten) so
   // the allow-list engine + UI can group by query shape ClickHouse-side, not just recompute in JS.
   const body = evs.map((e) => JSON.stringify({ ...e, tenant_id: tenantId, sql_hash: e.sql_hash || sqlFingerprint(e.sql_text) })).join('\n');
@@ -12899,6 +12902,10 @@ async function chExecRaw(sql) { await fetch(`${CH_URL}/?${CH_AUTH}`, { method: '
 async function chAddEventClassColumn(db) {
   await chExecRaw(`ALTER TABLE ${db}.events ADD COLUMN IF NOT EXISTS event_class LowCardinality(String) DEFAULT 'statement'`);
 }
+// Source application (Sl.37/45): the client program name captured from the connection handshake.
+async function chAddApplicationColumn(db) {
+  await chExecRaw(`ALTER TABLE ${db}.events ADD COLUMN IF NOT EXISTS application String DEFAULT ''`);
+}
 
 // Backfill the column across the shared plane and every per-tenant plane at boot, so an
 // upgraded deployment doesn't fail ingest on databases provisioned by an older build.
@@ -12908,11 +12915,12 @@ async function migrateEventClassAllPlanes() {
     const rows = (await pgPool.query('SELECT DISTINCT data_plane FROM tenants WHERE data_plane IS NOT NULL')).rows;
     for (const r of rows) if (r.data_plane) planes.add(r.data_plane);
   } catch (e) { /* Postgres not ready — the shared plane is still migrated below */ }
-  let ok = 0;
+  let ok = 0, okApp = 0;
   for (const db of planes) {
     try { await chAddEventClassColumn(db); ok++; } catch (e) { console.error(`[Events] event_class migration failed for ${db}: ${e.message}`); }
+    try { await chAddApplicationColumn(db); okApp++; } catch (e) { console.error(`[Events] application migration failed for ${db}: ${e.message}`); }
   }
-  console.log(`[Events] event_class column ensured on ${ok}/${planes.size} data plane(s)`);
+  console.log(`[Events] event_class column ensured on ${ok}/${planes.size} data plane(s); application on ${okApp}/${planes.size}`);
 }
 // Provision a dedicated events DB for a paid tenant (idempotent); records it on the tenant.
 async function ensureTenantEventsDb(tenantId) {
@@ -12925,9 +12933,11 @@ async function ensureTenantEventsDb(tenantId) {
     columns_accessed Array(String), row_count UInt64 DEFAULT 0, sql_hash String,
     event_class LowCardinality(String) DEFAULT 'statement',
     sql_text String, duration_ms UInt32 DEFAULT 0, anomaly_score UInt8 DEFAULT 0,
-    tags Array(String), agent_type LowCardinality(String), source_host String
+    tags Array(String), agent_type LowCardinality(String), source_host String,
+    application String DEFAULT ''
   ) ENGINE = MergeTree() PARTITION BY toYYYYMM(timestamp) ORDER BY (tenant_id, database_name, timestamp)`);
   await chAddEventClassColumn(db);
+  await chAddApplicationColumn(db);
   await pgPool.query('UPDATE tenants SET data_plane = $1 WHERE id = $2', [db, tenantId]);
   _tenantDbCache.set(tenantId, db);
   console.log(`[DataPlane] Provisioned dedicated events DB ${db} for tenant ${tenantId}`);

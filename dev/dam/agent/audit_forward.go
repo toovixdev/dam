@@ -133,7 +133,7 @@ func tailSqlServerAudit(cfg Config) {
 				continue
 			}
 			if s := strings.TrimSpace(statement); s != "" && shouldForward(s) {
-				forwardEvent(cfg, orDefault(principal, "unknown"), clientIP, s, 0, false)
+				forwardEvent(cfg, orDefault(principal, "unknown"), clientIP, s, "", 0, false)
 			}
 			if et.After(wm) {
 				wm = et
@@ -323,7 +323,7 @@ func tailSqlServerXEvents(cfg Config) {
 			if !shouldForward(s) || isMssqlSystemStmt(s) {
 				continue
 			}
-			forwardEvent(cfg, orDefault(principal.String, "unknown"), clientHost.String, s, int(rowCount.Int64), false)
+			forwardEvent(cfg, orDefault(principal.String, "unknown"), clientHost.String, s, "", int(rowCount.Int64), false)
 		}
 		rows.Close()
 		// Keep the previous seen-set when a poll returned nothing. Now that reads are
@@ -397,7 +397,7 @@ func tailMySQLGeneralLog(cfg Config, path string) {
 	flush := func() {
 		if havePend {
 			if sql := strings.TrimSpace(pendSQL); sql != "" && shouldForward(sql) {
-				forwardEvent(cfg, orDefault(connUser[pendID], "unknown"), connHost[pendID], sql, 0, false)
+				forwardEvent(cfg, orDefault(connUser[pendID], "unknown"), connHost[pendID], sql, "", 0, false)
 			}
 			havePend, pendSQL = false, ""
 		}
@@ -478,7 +478,7 @@ func tailPostgresLog(cfg Config, path string) {
 	flush := func() {
 		if havePend {
 			if sql := strings.TrimSpace(pendSQL); sql != "" && shouldForward(sql) {
-				forwardEvent(cfg, orDefault(pendUser, "unknown"), "", sql, 0, false)
+				forwardEvent(cfg, orDefault(pendUser, "unknown"), "", sql, "", 0, false)
 			}
 			havePend, pendSQL = false, ""
 		}

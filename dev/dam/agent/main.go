@@ -75,6 +75,9 @@ type Config struct {
 	// host mode: tag a read 'large-result' when the total response exceeds this many bytes.
 	// Tunable without a rebuild; 0 disables the tag. Independent of the eBPF capture window.
 	LargeResultBytes int64
+	// MAX_SQL_LEN: cap on stored raw-SQL length (bytes). Longer statements are truncated so
+	// the trail stays granular without unbounded rows. Default 4096 (was a hard 500).
+	MaxSqlLen int
 	// audit-forward (AgentLite) mode: tail the DB's native audit log on the host.
 	AuditLog    string // path to the native audit log file to tail
 	AuditSource string // audit type (audit_log | pgaudit | sql_server_audit | unified_audit_trail | profiler)
@@ -179,6 +182,7 @@ func loadConfig() Config {
 		SampleAtRest:     env("CLASSIFY_SAMPLE", "true") == "true",
 		MaskLiterals:     env("MASK_SQL_LITERALS", "false") == "true",
 		LargeResultBytes: int64(atoiDefault(env("LARGE_RESULT_BYTES", "1048576"), 1048576)), // 1 MiB default
+		MaxSqlLen:        maxSqlLenFromEnv(),
 		AuditLog:         env("AUDIT_LOG", ""),
 		AuditSource:      env("AUDIT_SOURCE", ""),
 		AuditTopic:       env("AUDIT_TOPIC", ""),
@@ -420,7 +424,7 @@ func parseResponse(cfg Config, st *connState, buf []byte) []byte {
 func emitCaptured(cfg Config, st *connState, rowCount int) {
 	if st.haveQuery {
 		large := cfg.LargeResultBytes > 0 && st.respBytes >= cfg.LargeResultBytes
-		forwardEvent(cfg, st.principal, st.pendingIP, st.pendingSQL, rowCount, large)
+		forwardEvent(cfg, st.principal, st.pendingIP, st.pendingSQL, st.application, rowCount, large)
 	}
 	st.haveQuery = false
 	st.respBytes = 0
@@ -443,8 +447,9 @@ func frameAndDecode(st *connState, buf []byte, onQuery func(sql string)) []byte 
 		// authed, not a command byte (COM_QUERY=0x03), and long enough for caps+filler+user.
 		if !st.gotUser && plen > 32 && payload[0] != 0x03 {
 			st.gotUser = true
+			var caps uint32
 			if len(payload) >= 4 {
-				caps := uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24
+				caps = uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24
 				st.queryAttrs = caps&0x08000000 != 0
 				st.deprecateEof = caps&0x01000000 != 0 // CLIENT_DEPRECATE_EOF
 			}
@@ -452,6 +457,9 @@ func frameAndDecode(st *connState, buf []byte, onQuery func(sql string)) []byte 
 				if end := bytes.IndexByte(payload[32:], 0); end > 0 {
 					st.principal = string(payload[32 : 32+end])
 				}
+			}
+			if app := mysqlAppFromHandshake(payload, caps); app != "" {
+				st.application = app
 			}
 		} else if len(payload) > 0 && payload[0] == 0x03 {
 			q := payload[1:]
@@ -533,8 +541,13 @@ func frameAndDecodePG(st *connState, buf []byte, onQuery func(sql string)) []byt
 			case 196608: // protocol 3.0 → params are key\0value\0…\0\0
 				parts := bytes.Split(body, []byte{0})
 				for i := 0; i+1 < len(parts); i += 2 {
-					if string(parts[i]) == "user" && st.principal == "unknown" {
-						st.principal = string(parts[i+1])
+					switch string(parts[i]) {
+					case "user":
+						if st.principal == "unknown" {
+							st.principal = string(parts[i+1])
+						}
+					case "application_name":
+						st.application = string(parts[i+1])
 					}
 				}
 			}
@@ -651,19 +664,24 @@ func stripAllHeaders(d []byte) []byte {
 	return d // older TDS with no ALL_HEADERS
 }
 
-// tdsLogin7User pulls the connecting username from a LOGIN7 message (36-byte fixed
-// header, then offset/length pairs; ibUserName@40, cchUserName@42, value in UTF-16LE).
-func tdsLogin7User(d []byte) string {
-	if len(d) < 44 {
+// tdsLogin7Field reads one offset/length-addressed UTF-16LE field from a LOGIN7 message.
+// The 36-byte fixed header is followed by 2-byte (offset,length-in-chars) pairs at fixed
+// positions: ibUserName@40, ibAppName@48. Value bytes are at [offset : offset+len*2].
+func tdsLogin7Field(d []byte, ibOff int) string {
+	if len(d) < ibOff+4 {
 		return ""
 	}
-	ib := int(d[40]) | int(d[41])<<8
-	cch := int(d[42]) | int(d[43])<<8
+	ib := int(d[ibOff]) | int(d[ibOff+1])<<8
+	cch := int(d[ibOff+2]) | int(d[ibOff+3])<<8
 	if ib <= 0 || cch <= 0 || ib+cch*2 > len(d) {
 		return ""
 	}
 	return utf16le(d[ib : ib+cch*2])
 }
+
+// tdsLogin7User pulls the connecting username; tdsLogin7App pulls the client app name.
+func tdsLogin7User(d []byte) string { return tdsLogin7Field(d, 40) }
+func tdsLogin7App(d []byte) string  { return tdsLogin7Field(d, 48) }
 
 // tdsRPCSql best-effort-extracts the SQL from an RPC message — the sp_executesql case,
 // whose first parameter is the @stmt NVARCHAR (UTF-16LE). Returns "" if it can't parse.
@@ -742,6 +760,9 @@ func frameAndDecodeTDS(st *connState, buf []byte, onQuery func(sql string)) []by
 		case 0x10: // LOGIN7
 			if u := tdsLogin7User(msg); u != "" {
 				st.principal = u
+			}
+			if a := tdsLogin7App(msg); a != "" {
+				st.application = a
 			}
 		}
 	}
@@ -1493,6 +1514,7 @@ func startQuarantinePoller(cfg Config) {
 type connState struct {
 	mu           sync.Mutex // guards fields shared with the server→client (masking) goroutine
 	principal    string
+	application  string // source application (from the connection handshake), attached to each event
 	firstSeen    bool   // proxy mode: first client packet seen
 	gotUser      bool   // network mode: handshake response (seq 1) decoded
 	queryAttrs   bool   // MySQL 8 CLIENT_QUERY_ATTRIBUTES negotiated → COM_QUERY has a param header
@@ -1608,8 +1630,9 @@ func processPackets(cfg Config, st *connState, buf []byte, client, upstream net.
 			// [4B capability flags LE][4B max packet][1B charset][23B reserved][NUL-term username].
 			st.firstSeen = true
 			st.mu.Lock()
+			var caps uint32
 			if len(payload) >= 4 {
-				caps := uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24
+				caps = uint32(payload[0]) | uint32(payload[1])<<8 | uint32(payload[2])<<16 | uint32(payload[3])<<24
 				st.queryAttrs = caps&0x08000000 != 0   // CLIENT_QUERY_ATTRIBUTES
 				st.deprecateEof = caps&0x01000000 != 0 // CLIENT_DEPRECATE_EOF
 			}
@@ -1617,6 +1640,9 @@ func processPackets(cfg Config, st *connState, buf []byte, client, upstream net.
 				if end := bytes.IndexByte(payload[32:], 0); end > 0 {
 					st.principal = string(payload[32 : 32+end])
 				}
+			}
+			if app := mysqlAppFromHandshake(payload, caps); app != "" {
+				st.application = app
 			}
 			st.mu.Unlock()
 		} else if payload[0] == 0x03 { // COM_QUERY
@@ -1639,7 +1665,7 @@ func processPackets(cfg Config, st *connState, buf []byte, client, upstream net.
 				go raiseAlert(cfg, st.principal, clientIP, sql)
 				go quarantineSession(cfg, st.principal, clientIP, sql)
 			} else {
-				forwardEvent(cfg, st.principal, clientIP, sql, 0, false)
+				forwardEvent(cfg, st.principal, clientIP, sql, st.application, 0, false)
 			}
 		}
 
@@ -2109,6 +2135,84 @@ func readLenencInt(b []byte) (uint64, int) {
 	return 0, 0
 }
 
+// mysqlAppFromHandshake extracts the client application name from a MySQL protocol-41
+// handshake-response payload, if the client sent CLIENT_CONNECT_ATTRS. It walks past the
+// fixed header, username, auth-response, optional database and auth-plugin name, then reads
+// the connect-attrs key/value pairs and returns program_name / _program_name. Fully
+// bounds-checked: any malformed field returns "" rather than panicking.
+func mysqlAppFromHandshake(payload []byte, caps uint32) string {
+	const (
+		capLenencAuth  = 0x00200000 // CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA
+		capSecureConn  = 0x00008000 // CLIENT_SECURE_CONNECTION
+		capConnectDB   = 0x00000008 // CLIENT_CONNECT_WITH_DB
+		capPluginAuth  = 0x00080000 // CLIENT_PLUGIN_AUTH
+		capConnectAttr = 0x00100000 // CLIENT_CONNECT_ATTRS
+	)
+	if caps&capConnectAttr == 0 || len(payload) < 33 {
+		return ""
+	}
+	p := payload[32:] // skip caps(4)+maxpkt(4)+charset(1)+reserved(23)
+	end := bytes.IndexByte(p, 0)
+	if end < 0 {
+		return ""
+	}
+	p = p[end+1:] // past username
+	// auth-response
+	if caps&capLenencAuth != 0 {
+		l, n := readLenencInt(p)
+		if n == 0 || n+int(l) > len(p) {
+			return ""
+		}
+		p = p[n+int(l):]
+	} else if caps&capSecureConn != 0 {
+		if len(p) < 1 || 1+int(p[0]) > len(p) {
+			return ""
+		}
+		p = p[1+int(p[0]):]
+	} else {
+		if end = bytes.IndexByte(p, 0); end < 0 {
+			return ""
+		}
+		p = p[end+1:]
+	}
+	if caps&capConnectDB != 0 { // database
+		if end = bytes.IndexByte(p, 0); end < 0 {
+			return ""
+		}
+		p = p[end+1:]
+	}
+	if caps&capPluginAuth != 0 { // auth-plugin name
+		if end = bytes.IndexByte(p, 0); end < 0 {
+			return ""
+		}
+		p = p[end+1:]
+	}
+	total, n := readLenencInt(p) // length of the whole connect-attrs block
+	if n == 0 {
+		return ""
+	}
+	p = p[n:]
+	if int(total) < len(p) {
+		p = p[:total]
+	}
+	for len(p) > 0 {
+		k, kn := readLenencStr(p)
+		if kn == 0 {
+			break
+		}
+		p = p[kn:]
+		v, vn := readLenencStr(p)
+		if vn == 0 {
+			break
+		}
+		p = p[vn:]
+		if ks := string(k); ks == "program_name" || ks == "_program_name" {
+			return string(v)
+		}
+	}
+	return ""
+}
+
 // ── Event forwarding to the control plane ────────────────────────────
 // SQL-literal masking (MASK_SQL_LITERALS). Redacts quoted string literals and standalone numeric
 // literals so the stored statement keeps its shape but not the bind-variable values. RE2-safe
@@ -2122,15 +2226,25 @@ func maskLiterals(sql string) string {
 	return reNumLiteral.ReplaceAllString(sql, "?")
 }
 
-func forwardEvent(cfg Config, principal, clientIP, sql string, rowCount int, large bool) {
-	forwardEventOp(cfg, principal, clientIP, sql, detectOp(sql), rowCount, large)
+// maxSqlLenFromEnv reads MAX_SQL_LEN with a sane floor — a tiny/zero value would empty the
+// captured SQL. Default 4096.
+func maxSqlLenFromEnv() int {
+	n := atoiDefault(env("MAX_SQL_LEN", "4096"), 4096)
+	if n < 64 {
+		n = 4096
+	}
+	return n
+}
+
+func forwardEvent(cfg Config, principal, clientIP, sql, application string, rowCount int, large bool) {
+	forwardEventOp(cfg, principal, clientIP, sql, detectOp(sql), application, rowCount, large)
 }
 
 // forwardEventOp is forwardEvent with the operation supplied by the caller instead of being
 // sniffed from the statement text. Non-SQL engines need this: MongoDB's statement renders as
 // `db.users.find({...})`, which detectOp's SQL-keyword prefixes would only ever call "OTHER" —
 // the collector knows the real operation from the profiler's op/command fields.
-func forwardEventOp(cfg Config, principal, clientIP, sql, op string, rowCount int, large bool) {
+func forwardEventOp(cfg Config, principal, clientIP, sql, op, application string, rowCount int, large bool) {
 	sql = strings.TrimSpace(sql)
 	if sql == "" {
 		return
@@ -2165,7 +2279,8 @@ func forwardEventOp(cfg Config, principal, clientIP, sql, op string, rowCount in
 		"principal":     principal,
 		"client_ip":     clientIP,
 		"operation":     op,
-		"sql_text":      truncate(sql, 500),
+		"sql_text":      truncate(sql, cfg.MaxSqlLen),
+		"application":   application,
 		"tags":          dedupTags(tags),
 		"agent_type":    agentTypeByMode[cfg.Mode],
 		"row_count":     rowCount,
