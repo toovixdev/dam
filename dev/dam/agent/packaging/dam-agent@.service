@@ -15,6 +15,23 @@ ExecStart=/usr/local/bin/dam-agent
 Restart=always
 RestartSec=5
 
+# Resource caps (Sl.73) — the agent is capped via the kernel cgroup so a busy or
+# misbehaving agent can never starve the database host of CPU, RAM, or disk I/O.
+# These are conservative defaults; override per host with a drop-in, e.g.
+#   /etc/systemd/system/dam-agent@.service.d/limits.conf
+#   [Service]
+#   CPUQuota=50%
+#   MemoryMax=512M
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+CPUQuota=75%
+MemoryHigh=384M
+MemoryMax=768M
+TasksMax=512
+IOWeight=100
+
 # Runs as root: host (eBPF) attaches uprobes to libssl + reads /proc; network opens an
 # AF_PACKET raw socket; proxy just listens on a port; audit-forward (AgentLite) reads the
 # DB's native audit log, which the DB owns (e.g. /var/log/mysql 750 mysql:adm, files 640).
