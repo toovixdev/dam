@@ -394,6 +394,19 @@ async function runAuthMigration() {
         ELSE role END
       WHERE role IN ('Admin','Security Analyst','DBA','Compliance Officer','Auditor','Viewer')`);
 
+    // External directory authentication (Sl.79): per-tenant LDAP/AD or RADIUS. Users whose
+    // auth_provider is 'ldap'/'radius' authenticate their password against this directory at
+    // login instead of the local bcrypt hash. config is JSONB; the RADIUS shared secret is
+    // encrypted (secrets.encSecret). LDAP stores no secret — the end user's own password is
+    // used for the bind.
+    await client.query(`CREATE TABLE IF NOT EXISTS tenant_directory_auth (
+      tenant_id  UUID PRIMARY KEY REFERENCES tenants(id),
+      method     VARCHAR(10) NOT NULL,
+      config     JSONB NOT NULL,
+      enabled    BOOLEAN DEFAULT true,
+      updated_at TIMESTAMPTZ DEFAULT now()
+    )`);
+
     // Email is unique PER TENANT (a person can belong to multiple workspaces), not global.
     await client.query(`ALTER TABLE users DROP CONSTRAINT IF EXISTS users_email_key`);
     await client.query(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='users_tenant_email_key') THEN ALTER TABLE users ADD CONSTRAINT users_tenant_email_key UNIQUE (tenant_id, email); END IF; END $$;`);
@@ -2183,6 +2196,98 @@ function sessionUserPayload(u, authProvider = 'local') {
   return { id: u.id, email: u.email, fullName: u.full_name, role: u.role, mfaEnabled: u.mfa_enabled, tenantId: u.tenant_id, tenantName: u.tenant_name, authProvider };
 }
 
+// ── External directory authentication (Sl.79): LDAP/AD + RADIUS ───────────────
+// Dependency-free clients. RADIUS is an Access-Request over UDP with the RFC 2865 §5.2
+// password-hiding and a verified Response Authenticator; LDAP is a simple bind (BER over TCP,
+// optionally TLS) checking resultCode 0. Verified against freeradius + openldap.
+function radiusAuthenticate({ host, port = 1812, secret, timeout = 6000 }, username, password) {
+  return new Promise((resolve) => {
+    const dgram = require('dgram');
+    const id = crypto.randomBytes(1)[0];
+    const authenticator = crypto.randomBytes(16);
+    const secretBuf = Buffer.from(secret || '', 'utf8');
+    const pw = Buffer.from(password || '', 'utf8');
+    const padLen = Math.max(16, Math.ceil((pw.length || 1) / 16) * 16);
+    const padded = Buffer.alloc(padLen); pw.copy(padded);
+    const enc = Buffer.alloc(padLen); let prev = authenticator;
+    for (let i = 0; i < padLen; i += 16) {
+      const b = crypto.createHash('md5').update(Buffer.concat([secretBuf, prev])).digest();
+      for (let j = 0; j < 16; j++) enc[i + j] = padded[i + j] ^ b[j];
+      prev = enc.subarray(i, i + 16);
+    }
+    const un = Buffer.from(username || '', 'utf8');
+    const attrs = Buffer.concat([
+      Buffer.concat([Buffer.from([1, 2 + un.length]), un]),   // User-Name
+      Buffer.concat([Buffer.from([2, 2 + enc.length]), enc]), // User-Password
+    ]);
+    const header = Buffer.alloc(4); header[0] = 1; header[1] = id; header.writeUInt16BE(20 + attrs.length, 2);
+    const packet = Buffer.concat([header, authenticator, attrs]);
+    const sock = dgram.createSocket('udp4'); let done = false;
+    const finish = (ok, detail) => { if (done) return; done = true; try { sock.close(); } catch {} resolve({ ok, detail }); };
+    const timer = setTimeout(() => finish(false, 'timeout'), timeout);
+    sock.on('message', (msg) => {
+      clearTimeout(timer);
+      if (msg.length < 20) return finish(false, 'short response');
+      const check = crypto.createHash('md5').update(Buffer.concat([msg.subarray(0, 4), authenticator, msg.subarray(20), secretBuf])).digest();
+      if (!check.equals(msg.subarray(4, 20))) return finish(false, 'bad response authenticator (wrong shared secret?)');
+      finish(msg[0] === 2, msg[0] === 2 ? 'accept' : msg[0] === 3 ? 'reject' : 'code ' + msg[0]);
+    });
+    sock.on('error', () => finish(false, 'socket error'));
+    sock.send(packet, 0, packet.length, port, host);
+  });
+}
+function _berLenD(n) { if (n < 0x80) return Buffer.from([n]); const b = []; let x = n; while (x > 0) { b.unshift(x & 0xff); x = Math.floor(x / 256); } return Buffer.from([0x80 | b.length, ...b]); }
+function _berTLV(t, c) { return Buffer.concat([Buffer.from([t]), _berLenD(c.length), c]); }
+function _berIntD(n) { const b = []; if (n === 0) b.push(0); else { let x = n; while (x > 0) { b.unshift(x & 0xff); x = Math.floor(x / 256); } if (b[0] & 0x80) b.unshift(0); } return _berTLV(0x02, Buffer.from(b)); }
+function _berStrD(s) { return _berTLV(0x04, Buffer.from(s, 'utf8')); }
+function _ldapReadLen(buf, p) { const f = buf[p]; if (f < 0x80) return [f, 1]; const num = f & 0x7f; let len = 0; for (let i = 0; i < num; i++) len = (len << 8) | buf[p + 1 + i]; return [len, 1 + num]; }
+function _ldapBindResultCode(buf) {
+  try {
+    let p = 0;
+    if (buf[p++] !== 0x30) return -1; const [sl, n1] = _ldapReadLen(buf, p); p += n1;
+    if (buf.length < p + sl) return null; // incomplete
+    if (buf[p++] !== 0x02) return -1; const [il, n2] = _ldapReadLen(buf, p); p += n2 + il; // messageID
+    if (buf[p++] !== 0x61) return -1; const [, n3] = _ldapReadLen(buf, p); p += n3;         // [APPLICATION 1] BindResponse
+    if (buf[p++] !== 0x0a) return -1; const [rl, n4] = _ldapReadLen(buf, p); p += n4;        // resultCode ENUMERATED
+    let rc = 0; for (let i = 0; i < rl; i++) rc = (rc << 8) | buf[p + i];
+    return rc;
+  } catch { return -1; }
+}
+function ldapBind({ host, port = 389, use_tls = false, timeout = 6000 }, bindDn, password) {
+  return new Promise((resolve) => {
+    if (!password) return resolve({ ok: false, detail: 'empty password' }); // LDAP unauthenticated-bind quirk: empty pwd = anonymous success
+    const bindReq = Buffer.concat([_berIntD(3), _berStrD(bindDn), _berTLV(0x80, Buffer.from(password, 'utf8'))]);
+    const msg = _berTLV(0x30, Buffer.concat([_berIntD(1), _berTLV(0x60, bindReq)]));
+    let done = false, buf = Buffer.alloc(0);
+    const finish = (ok, detail) => { if (done) return; done = true; try { sock.destroy(); } catch {} resolve({ ok, detail }); };
+    const onC = () => sock.write(msg);
+    const sock = use_tls ? require('tls').connect({ host, port, rejectUnauthorized: false }, onC) : require('net').connect({ host, port }, onC);
+    sock.setTimeout(timeout);
+    sock.on('timeout', () => finish(false, 'timeout'));
+    sock.on('error', (e) => finish(false, 'connect: ' + e.message));
+    sock.on('data', (d) => { buf = Buffer.concat([buf, d]); const rc = _ldapBindResultCode(buf); if (rc === null) return; finish(rc === 0, rc === 0 ? 'bind ok' : 'ldap resultCode ' + rc); });
+  });
+}
+// Load a tenant's directory config (secret decrypted). Returns null if none/disabled.
+async function directoryConfigFor(tenantId, { includeDisabled = false } = {}) {
+  const r = (await pgPool.query('SELECT method, config, enabled FROM tenant_directory_auth WHERE tenant_id = $1', [tenantId])).rows[0];
+  if (!r || (!includeDisabled && !r.enabled)) return null;
+  const cfg = { ...(r.config || {}) };
+  if (r.method === 'radius' && cfg.secret) { try { cfg.secret = secrets.decSecret(cfg.secret); } catch { /* leave as-is */ } }
+  return { method: r.method, enabled: r.enabled, config: cfg };
+}
+// Authenticate an email/password against the tenant's directory. Returns {ok, detail}.
+async function directoryAuthenticate(dir, email, password) {
+  const local = String(email).split('@')[0];
+  if (dir.method === 'radius') {
+    return radiusAuthenticate(dir.config, dir.config.radius_username_full ? email : local, password);
+  }
+  // LDAP: build the bind DN from the template ({user}=local-part, {email}=full address).
+  const tmpl = dir.config.bind_dn_template || 'uid={user},dc=example,dc=org';
+  const bindDn = tmpl.replace(/\{user\}/g, local).replace(/\{email\}/g, email);
+  return ldapBind(dir.config, bindDn, password);
+}
+
 app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
   const slug = String(req.body?.workspace || req.body?.slug || '').toLowerCase().trim();
@@ -2198,7 +2303,7 @@ app.post('/api/auth/login', async (req, res) => {
   let scope = 'u.email = $1';
   if (slug) { scope += ' AND t.slug = $2'; params.push(slug); }
   const { rows } = await pgPool.query(
-    `SELECT u.id, u.email, u.full_name, u.role, u.password_hash, u.status, u.mfa_enabled, u.mfa_secret, u.mfa_enrolled_at, t.id as tenant_id, t.name as tenant_name
+    `SELECT u.id, u.email, u.full_name, u.role, u.password_hash, u.status, u.mfa_enabled, u.mfa_secret, u.mfa_enrolled_at, u.auth_provider, t.id as tenant_id, t.name as tenant_name
      FROM users u JOIN tenants t ON u.tenant_id = t.id
      WHERE ${scope}`,
     params
@@ -2217,13 +2322,26 @@ app.post('/api/auth/login', async (req, res) => {
     return res.status(403).json({ error: user.status === 'unverified' ? 'Please verify your email first — check your inbox for the activation link.' : 'Account is not active' });
   }
 
-  if (!user.password_hash) {
-    return res.status(401).json({ error: 'Password not set. Contact your administrator.' });
-  }
-
-  const valid = await bcrypt.compare(password, user.password_hash);
-  if (!valid) {
-    return res.status(401).json({ error: 'Invalid email or password' });
+  // Directory auth (Sl.79): LDAP/AD or RADIUS users validate their password against the tenant
+  // directory; everyone else against the local bcrypt hash.
+  if (user.auth_provider === 'ldap' || user.auth_provider === 'radius') {
+    const dir = await directoryConfigFor(user.tenant_id);
+    if (!dir || dir.method !== user.auth_provider) {
+      return res.status(401).json({ error: 'Directory authentication is not configured. Contact your administrator.' });
+    }
+    const r = await directoryAuthenticate(dir, user.email, password);
+    if (!r.ok) {
+      console.log(`[Auth] directory (${dir.method}) rejected ${user.email}: ${r.detail}`);
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+  } else {
+    if (!user.password_hash) {
+      return res.status(401).json({ error: 'Password not set. Contact your administrator.' });
+    }
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
   }
 
   // ── MFA gate (password auth only; SSO users are exempt) ──
@@ -2238,8 +2356,50 @@ app.post('/api/auth/login', async (req, res) => {
 
   // MFA disabled for this account → issue the session directly.
   await pgPool.query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
-  writeAudit({ tenantId: user.tenant_id, actorId: user.id, actorEmail: user.email, action: 'auth.login', resourceType: 'user', resourceId: user.id, details: { role: user.role, mfa: false } });
+  writeAudit({ tenantId: user.tenant_id, actorId: user.id, actorEmail: user.email, action: 'auth.login', resourceType: 'user', resourceId: user.id, details: { role: user.role, mfa: false, auth: user.auth_provider || 'local' } });
   res.json({ token: issueSessionToken(user), user: sessionUserPayload(user) });
+});
+
+// ── Directory auth config (admin only) — LDAP/AD + RADIUS (Sl.79) ──────────────
+app.get('/api/directory-auth', authRequired, adminOnly, async (req, res) => {
+  const dir = await directoryConfigFor(req.user.tenantId, { includeDisabled: true });
+  if (!dir) return res.json({ configured: false });
+  const cfg = { ...dir.config };
+  if (cfg.secret) cfg.secret = '••••••'; // never return the RADIUS shared secret
+  res.json({ configured: true, method: dir.method, enabled: dir.enabled, config: cfg });
+});
+app.put('/api/directory-auth', authRequired, adminOnly, async (req, res) => {
+  const { method, enabled = true, config } = req.body || {};
+  if (!['ldap', 'radius'].includes(method)) return res.status(400).json({ error: 'method must be ldap or radius' });
+  if (!config || !config.host) return res.status(400).json({ error: 'config.host is required' });
+  const store = { ...config };
+  if (method === 'radius') {
+    if (!store.secret || store.secret === '••••••') { // keep the stored secret when the mask is re-sent
+      const cur = await directoryConfigFor(req.user.tenantId, { includeDisabled: true });
+      store.secret = cur && cur.config.secret ? cur.config.secret : '';
+    }
+    if (!store.secret) return res.status(400).json({ error: 'config.secret (shared secret) is required for RADIUS' });
+    store.secret = secrets.encSecret(store.secret);
+  }
+  await pgPool.query(
+    `INSERT INTO tenant_directory_auth (tenant_id, method, config, enabled, updated_at)
+     VALUES ($1,$2,$3,$4, now())
+     ON CONFLICT (tenant_id) DO UPDATE SET method=EXCLUDED.method, config=EXCLUDED.config, enabled=EXCLUDED.enabled, updated_at=now()`,
+    [req.user.tenantId, method, store, enabled]);
+  try { await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'directory_auth.configure', resourceType: 'directory_auth', details: { method, enabled } }); } catch {}
+  res.json({ ok: true });
+});
+app.delete('/api/directory-auth', authRequired, adminOnly, async (req, res) => {
+  await pgPool.query('DELETE FROM tenant_directory_auth WHERE tenant_id = $1', [req.user.tenantId]);
+  res.json({ ok: true });
+});
+// Test a directory bind with a supplied credential (never stored) so an admin can validate config.
+app.post('/api/directory-auth/test', authRequired, adminOnly, async (req, res) => {
+  const { test_username, test_password } = req.body || {};
+  if (!test_username || !test_password) return res.status(400).json({ error: 'test_username and test_password are required' });
+  const dir = await directoryConfigFor(req.user.tenantId, { includeDisabled: true });
+  if (!dir) return res.status(400).json({ error: 'No directory configured' });
+  res.json(await directoryAuthenticate(dir, test_username, test_password));
 });
 
 // ── MFA · begin enrolment (after password, before first session) ──
