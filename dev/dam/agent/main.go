@@ -965,6 +965,10 @@ var (
 	reIP       = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}$`)
 	rePhone    = regexp.MustCompile(`^[\d\s+()-]+$`)
 	reNonDigit = regexp.MustCompile(`\D`)
+	// DB-link usage (Sl.60): a statement reaching across a database link / linked server —
+	// Oracle "FROM tab@dblink", SQL Server OPENQUERY/OPENROWSET or a 4-part linked-server name.
+	// Anchored to FROM/JOIN/UPDATE/INTO so an email literal ('a@b.com') doesn't false-positive.
+	reDbLink = regexp.MustCompile(`(?i)(\b(?:from|join|update|into)\s+[\w$#]+@[\w$#]+)|(\bopen(?:query|rowset)\s*\()|(\b(?:from|join)\s+\[?\w+\]?\.\[?\w+\]?\.\[?\w+\]?\.\[?\w+\]?)`)
 )
 
 // contentValidators mirror collector.js CONTENT (Luhn card check + Aadhaar/PAN/GSTIN/email/
@@ -2510,6 +2514,9 @@ func detectTags(sql string) []string {
 	}
 	if strings.Contains(u, "DIAGNOS") || strings.Contains(u, "PATIENT") || strings.Contains(u, "MEDICAL_RECORD") || strings.Contains(u, "MRN") || strings.Contains(u, "ICD") || strings.Contains(u, "MEDICATION") || strings.Contains(u, "PRESCRIPTION") || strings.Contains(u, "HEALTH_PLAN") || strings.Contains(u, "NPI") {
 		add("phi")
+	}
+	if reDbLink.MatchString(sql) { // cross-database-link / linked-server access (Sl.60)
+		add("db-link")
 	}
 	return tags
 }
