@@ -216,6 +216,31 @@ function getPlatformMailer() { if (!_platformMailer) _platformMailer = buildTran
 function platformFrom() { const s = activePlatformSmtp(); return (s && s.from) || SMTP_FROM; }
 function platformConfigured() { return !!activePlatformSmtp(); }
 
+// ── Per-tenant alert mailer ───────────────────────────────────────────────────
+// Alert emails must relay through the alert's OWN tenant's SMTP — never another
+// tenant's. Resolve the tenant's active 'email' integration; if it has none, fall
+// back to the platform relay (activePlatformSmtp), never to a different tenant's
+// config. (The tenant-agnostic activeSmtp()/getMailer() global singleton previously
+// used here leaked one tenant's mail through whichever tenant configured SMTP last.)
+async function resolveTenantSmtp(tenantId) {
+  if (tenantId) {
+    try {
+      const row = (await pgPool.query(
+        "SELECT config FROM integrations WHERE tenant_id = $1 AND type = 'email' AND status = 'active' LIMIT 1",
+        [tenantId])).rows[0];
+      if (row && row.config && row.config.host) {
+        const c = decIntegrationConfig('email', row.config);
+        if (c && c.host) return {
+          host: c.host, port: parseInt(c.port) || 587, secure: !!c.secure,
+          user: c.user || undefined, pass: c.pass || undefined,
+          from: c.from || SMTP_FROM, source: 'tenant',
+        };
+      }
+    } catch (e) { /* fall through to the platform relay */ }
+  }
+  return activePlatformSmtp();
+}
+
 function inviteEmailHtml({ fullName, role, tenantName, inviterName, acceptUrl }) {
   return `<!doctype html><html><body style="margin:0;background:#f1f5f9;font-family:Inter,Segoe UI,Arial,sans-serif;color:#0f172a">
   <div style="max-width:520px;margin:0 auto;padding:24px">
@@ -6670,7 +6695,10 @@ async function postSentinel(cfg, a) {
 async function postEmailAlert(cfg, a) {
   const to = String(cfg.recipients || '').split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean);
   if (!to.length) return { ok: false, status: 'no recipients' };
-  if (!smtpConfigured()) return { ok: false, status: 'SMTP not configured — set it up in Settings → Email first' };
+  // Relay through the alert's OWN tenant's SMTP; fall back to the platform relay when
+  // the tenant has none. Never borrow another tenant's SMTP (cross-tenant leak).
+  const smtp = await resolveTenantSmtp(a.tenantId);
+  if (!smtp || !smtp.host) return { ok: false, status: 'SMTP not configured — set it up in Settings → Email first' };
   const sev = String(a.severity || '').toUpperCase();
   const subject = `[SecurEra DAM] ${sev} — ${a.summary || 'Security alert'}`.slice(0, 180);
   const rows = [['Severity', a.severity || '—'], ['Principal', a.principal || '—'], ['Database', a.database || '—'], ['Time', new Date(a.ts || Date.now()).toISOString()]];
@@ -6681,7 +6709,7 @@ async function postEmailAlert(cfg, a) {
     <table style="font-size:13px;border-collapse:collapse">${rows.map(([k, v]) => `<tr><td style="padding:3px 14px 3px 0;color:#64748b">${k}</td><td><b>${String(v)}</b></td></tr>`).join('')}</table>
     ${a.raw_sql ? `<pre style="background:#f1f5f9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap;margin-top:12px">${String(a.raw_sql).slice(0, 500)}</pre>` : ''}
   </div>`;
-  await getMailer().sendMail({ from: activeFrom(), to: to.join(','), subject, text, html });
+  await buildTransport(smtp).sendMail({ from: smtp.from || SMTP_FROM, to: to.join(','), subject, text, html });
   return { ok: true, status: 'sent' };
 }
 
@@ -6918,7 +6946,7 @@ async function dispatchAlert(a) {
       if ((SEV_ORDER[a.severity] ?? 0) < (SEV_ORDER[cfg.min_severity] ?? 2)) continue;
       try {
         const r = await connector.send(cfg, a);
-        if (r && r.ok) await pgPool.query('UPDATE integrations SET last_sync_at = now() WHERE type = $1', [row.type]);
+        if (r && r.ok) await pgPool.query('UPDATE integrations SET last_sync_at = now() WHERE tenant_id = $1 AND type = $2', [a.tenantId, row.type]);
         else console.log(`[${row.type}] returned`, r && r.status);
       } catch (e) { console.log(`[${row.type}] dispatch failed:`, e.message); }
     }
