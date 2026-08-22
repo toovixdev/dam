@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Database Onboarding SOPs — TooVix DAM</title>
+<title>Database Onboarding SOPs — SecurEra DAM</title>
 <style>
   :root{
     --bg:#f5f7fa; --surface:#ffffff; --surface-2:#eef2f7; --ink:#1a2432; --ink-soft:#42506380;
@@ -69,7 +69,7 @@
 <div class="wrap">
   <a class="back" href="/tutorial.html">← Back to the tutorial</a>
   <header class="hero">
-    <p class="eyebrow">TooVix DAM · Database onboarding SOPs</p>
+    <p class="eyebrow">SecurEra DAM · Database onboarding SOPs</p>
     <h1>Onboard any database — engine-by-engine runbooks</h1>
     <p style="color:var(--muted);margin:0 0 14px;max-width:70ch">One place for the standard operating procedures. For each engine — <b>MySQL, PostgreSQL, SQL Server, Oracle, MongoDB</b> — you get its <b>prerequisites</b> and the three onboarding paths: the <b>Agent</b> (network/host on the DB host), <b>AgentLite</b> (reads the DB's native audit), and <b>PaaS</b> (managed cloud DB, agentless). Read §0 once, then jump to your engine.</p>
     <div class="meta">
@@ -268,7 +268,7 @@ GO</code></pre>
 
   <h4>3 · Forwarder — pick where the agent runs</h4>
   <p><b>Option A — on the Windows SQL Server host</b> (runs as a Windows service; no separate box). Put <code>dam-agent.exe</code> on the host, write the config, install + start the service:</p>
-  <pre><code><span class="cmt"># config file: C:\ProgramData\TooVix\dam-agent.env</span>
+  <pre><code><span class="cmt"># config file: C:\ProgramData\SecurEra\dam-agent.env</span>
 MODE=audit-forward
 DB_ENGINE=mssql
 AUDIT_SOURCE=xevents
@@ -281,9 +281,9 @@ AGENT_ENROLL_TOKEN=tvxenr_...
 CONTROL_PLANE=https://dam.yourcompany.com
 
 <span class="cmt"># elevated PowerShell:</span>
-&amp; 'C:\Program Files\TooVix\dam-agent.exe' install   <span class="cmt"># registers service "TooVixDAMAgent"</span>
-&amp; 'C:\Program Files\TooVix\dam-agent.exe' start
-Get-Content 'C:\ProgramData\TooVix\dam-agent.log' -Tail 20 -Wait</code></pre>
+&amp; 'C:\Program Files\SecurEra\dam-agent.exe' install   <span class="cmt"># registers service "SecurEraDAMAgent"</span>
+&amp; 'C:\Program Files\SecurEra\dam-agent.exe' start
+Get-Content 'C:\ProgramData\SecurEra\dam-agent.log' -Tail 20 -Wait</code></pre>
   <p><b>Option B — a remote Linux collector</b> (nothing on Windows; polls over TDS):</p>
   <pre><code><span class="cmt"># any Linux host reaching &lt;db&gt;:1433:</span>
 MODE=audit-forward DB_ENGINE=mssql AUDIT_SOURCE=xevents   <span class="cmt"># or sql_server_audit</span>
@@ -339,12 +339,12 @@ GO</code></pre>
 
   <p style="margin-bottom:4px"><b>Option A — Windows service, on the SQL Server host itself.</b></p>
   <p style="margin:6px 0 4px"><b>3a · Get the binary.</b> &nbsp;<span style="color:var(--muted)">Where: Windows PowerShell (Admin), or your SSH session into the host — no browser needed.</span> &nbsp;The control plane serves the <code>.exe</code> at a plain URL, so download it straight to disk:</p>
-  <pre><code>New-Item -ItemType Directory -Force 'C:\Program Files\TooVix' | Out-Null
+  <pre><code>New-Item -ItemType Directory -Force 'C:\Program Files\SecurEra' | Out-Null
 Invoke-WebRequest -Uri https://dam.yourcompany.com/api/download/dam-agent.exe `
-  -OutFile 'C:\Program Files\TooVix\dam-agent.exe'
-<span class="cmt"># or (works in PowerShell, cmd, or an SSH shell): curl.exe -L https://dam.yourcompany.com/api/download/dam-agent.exe -o "C:\Program Files\TooVix\dam-agent.exe"</span></code></pre>
+  -OutFile 'C:\Program Files\SecurEra\dam-agent.exe'
+<span class="cmt"># or (works in PowerShell, cmd, or an SSH shell): curl.exe -L https://dam.yourcompany.com/api/download/dam-agent.exe -o "C:\Program Files\SecurEra\dam-agent.exe"</span></code></pre>
   <p style="margin:6px 0 4px"><span style="color:var(--muted)">Prefer a browser? The same file is at <b>Agents → Add agent → Windows</b> in the DAM console, or directly at <code>https://dam.yourcompany.com/api/download/dam-agent.exe</code>.</span></p>
-  <p style="margin:6px 0 4px"><b>3b · Write the config file.</b> &nbsp;<span style="color:var(--muted)">Where: Notepad, opened <b>as Administrator</b> (the path is under <code>C:\ProgramData</code>).</span> &nbsp;Save this as <code>C:\ProgramData\TooVix\dam-agent.env</code> — it is a plain text file, <b>not</b> a command to run:</p>
+  <p style="margin:6px 0 4px"><b>3b · Write the config file.</b> &nbsp;<span style="color:var(--muted)">Where: Notepad, opened <b>as Administrator</b> (the path is under <code>C:\ProgramData</code>).</span> &nbsp;Save this as <code>C:\ProgramData\SecurEra\dam-agent.env</code> — it is a plain text file, <b>not</b> a command to run:</p>
   <pre><code>MODE=audit-forward
 DB_ENGINE=mssql
 AUDIT_SOURCE=xevents
@@ -356,9 +356,9 @@ DB_PASSWORD=&lt;StrongSecret!&gt;
 AGENT_ENROLL_TOKEN=tvxenr_...
 CONTROL_PLANE=https://dam.yourcompany.com</code></pre>
   <p style="margin:6px 0 4px"><b>3c · Install &amp; start the service.</b> &nbsp;<span style="color:var(--muted)">Where: <b>Windows PowerShell — Run as Administrator</b> (right-click the Start menu → "Terminal (Admin)" / "Windows PowerShell (Admin)"). Not SSMS.</span></p>
-  <pre><code>&amp; 'C:\Program Files\TooVix\dam-agent.exe' install   <span class="cmt"># registers service "TooVixDAMAgent"</span>
-&amp; 'C:\Program Files\TooVix\dam-agent.exe' start
-Get-Content 'C:\ProgramData\TooVix\dam-agent.log' -Tail 20 -Wait   <span class="cmt"># watch it enroll + capture</span></code></pre>
+  <pre><code>&amp; 'C:\Program Files\SecurEra\dam-agent.exe' install   <span class="cmt"># registers service "SecurEraDAMAgent"</span>
+&amp; 'C:\Program Files\SecurEra\dam-agent.exe' start
+Get-Content 'C:\ProgramData\SecurEra\dam-agent.log' -Tail 20 -Wait   <span class="cmt"># watch it enroll + capture</span></code></pre>
 
   <p style="margin:14px 0 4px"><b>Option B — remote Linux collector</b> (nothing installed on Windows). &nbsp;<span style="color:var(--muted)">Where: a <b>bash shell</b> on any Linux host that can reach <code>&lt;db&gt;:1433</code>.</span> &nbsp;Same settings as an environment, e.g. via Docker:</p>
   <pre><code>docker run -d --name toovix-agent-mssql --restart unless-stopped \
@@ -467,7 +467,7 @@ db.setProfilingLevel(2, { slowms: 0 })     <span class="cmt">// every op; persis
   </table>
 
   <footer>
-    These SOPs cover the standard paths. For the deepest per-engine AgentLite detail (Azure SQL blob setup, Mongo profiler limits, Oracle ADB TLS, audit-stream wiring) see the <a href="/guides/agentlite-mysql-vm.html">AgentLite setup guide</a>. Questions → your TooVix DAM operator.
+    These SOPs cover the standard paths. For the deepest per-engine AgentLite detail (Azure SQL blob setup, Mongo profiler limits, Oracle ADB TLS, audit-stream wiring) see the <a href="/guides/agentlite-mysql-vm.html">AgentLite setup guide</a>. Questions → your SecurEra DAM operator.
   </footer>
 </div>
 </body>

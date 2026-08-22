@@ -750,20 +750,20 @@ function buildInstall(format, mode, target, token, cp, engine, image, opts = {})
   if (format === 'windows_exe') {
     // On-host Windows service: the agent runs under the Service Control Manager on the SQL Server
     // box (reads XEvents locally over TDS — captures TLS + row counts, no sqlservr.exe injection).
-    // The service inherits no user env, so config lives in C:\ProgramData\TooVix\dam-agent.env.
+    // The service inherits no user env, so config lives in C:\ProgramData\SecurEra\dam-agent.env.
     return `${warn}# Windows service on the DB host — run in an ELEVATED PowerShell.
 # 1) Download the agent + create the folders:
-New-Item -ItemType Directory -Force 'C:\\Program Files\\TooVix','C:\\ProgramData\\TooVix' | Out-Null
-Invoke-WebRequest -Uri '${cp}/api/download/dam-agent.exe' -OutFile 'C:\\Program Files\\TooVix\\dam-agent.exe'
+New-Item -ItemType Directory -Force 'C:\\Program Files\\SecurEra','C:\\ProgramData\\SecurEra' | Out-Null
+Invoke-WebRequest -Uri '${cp}/api/download/dam-agent.exe' -OutFile 'C:\\Program Files\\SecurEra\\dam-agent.exe'
 
 @'
 ${env.join('\n')}
-'@ | Set-Content -Encoding ASCII 'C:\\ProgramData\\TooVix\\dam-agent.env'
+'@ | Set-Content -Encoding ASCII 'C:\\ProgramData\\SecurEra\\dam-agent.env'
 
 # Install + start the service (auto-start), then tail the log:
-& 'C:\\Program Files\\TooVix\\dam-agent.exe' install   # registers service "TooVixDAMAgent"
-& 'C:\\Program Files\\TooVix\\dam-agent.exe' start
-Get-Content 'C:\\ProgramData\\TooVix\\dam-agent.log' -Tail 20 -Wait`;
+& 'C:\\Program Files\\SecurEra\\dam-agent.exe' install   # registers service "SecurEraDAMAgent"
+& 'C:\\Program Files\\SecurEra\\dam-agent.exe' start
+Get-Content 'C:\\ProgramData\\SecurEra\\dam-agent.log' -Tail 20 -Wait`;
   }
 
   if (format === 'docker') {

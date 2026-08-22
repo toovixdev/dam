@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>TooVix DAM — Getting Started with Database Activity Monitoring</title>
+<title>SecurEra DAM — Getting Started with Database Activity Monitoring</title>
 <style>
   :root{
     --indigo:#6366f1; --indigo-d:#4f46e5; --ink:#0f172a; --body:#334155; --muted:#64748b;
@@ -191,7 +191,7 @@
 <div class="topbar">
   <div class="logo">T</div>
   <div>
-    <b>TooVix DAM</b> <span class="sub">· Getting Started Tutorial</span>
+    <b>SecurEra DAM</b> <span class="sub">· Getting Started Tutorial</span>
   </div>
   <div class="spacer"></div>
   <a class="btn-print" href="/">← Back to home</a>
@@ -202,7 +202,7 @@
   <div class="wrap">
     <div class="kicker">Database Activity Monitoring · From Zero</div>
     <h1>A complete beginner's guide to Database Activity Monitoring</h1>
-    <p>No prior security experience needed. By the end you'll understand what DAM is, why it matters, and exactly how to protect your databases using TooVix DAM — step by step.</p>
+    <p>No prior security experience needed. By the end you'll understand what DAM is, why it matters, and exactly how to protect your databases using SecurEra DAM — step by step.</p>
     <div class="meta">
       <div><b>4 parts</b> Concepts → Product</div>
       <div><b>~25 min</b> read</div>
@@ -230,7 +230,7 @@
     <a href="#va-concept">Vulnerability assessment</a>
     <a href="#deploy-topos">Deployment topologies</a>
     <a href="#deploy-discovery">Deploying a discovery agent</a>
-    <div class="toc-title">Part 3 · Using TooVix DAM</div>
+    <div class="toc-title">Part 3 · Using SecurEra DAM</div>
     <a href="#tour">The interface</a>
     <a href="#quickstart">Quick-start walkthrough</a>
     <a href="#s-register">1 · Register a database</a>
@@ -302,7 +302,7 @@
         <dt>Policy / Rule</dt><dd>A condition that defines "risky." E.g. <em>"alert if anyone reads more than 10,000 rows of PII."</em></dd>
         <dt>Alert</dt><dd>What's raised when activity matches a policy — the thing a security analyst investigates.</dd>
         <dt>Quarantine</dt><dd>The response: isolating or blocking a risky account/session so it can't do (more) harm.</dd>
-        <dt>Agent</dt><dd>The lightweight software that actually captures the database activity and feeds it to TooVix.</dd>
+        <dt>Agent</dt><dd>The lightweight software that actually captures the database activity and feeds it to SecurEra.</dd>
       </dl>
     </section>
 
@@ -310,7 +310,7 @@
     <section id="pipeline">
       <span class="part-badge">Part 2 · How DAM works</span>
       <h2>The monitoring pipeline</h2>
-      <p>Every DAM system, TooVix included, works as a pipeline. Activity flows left to right, and at each stage it gets a little more useful:</p>
+      <p>Every DAM system, SecurEra included, works as a pipeline. Activity flows left to right, and at each stage it gets a little more useful:</p>
       <div class="pipe">
         <div class="node">Capture<small>see the activity</small></div>
         <div class="arr">→</div>
@@ -324,28 +324,28 @@
         <div class="arr">→</div>
         <div class="node">Report<small>audit & prove</small></div>
       </div>
-      <p>The rest of Part 2 walks through each stage. When you reach Part 3, you'll see exactly which TooVix screen maps to each one.</p>
+      <p>The rest of Part 2 walks through each stage. When you reach Part 3, you'll see exactly which SecurEra screen maps to each one.</p>
     </section>
 
     <section id="capture">
       <span class="part-badge">Part 2 · How DAM works</span>
       <h2>Stage 1 — Capturing activity</h2>
-      <p>Before you can monitor anything, you have to <b>see</b> it. DAM tools capture database activity in a few ways; TooVix supports the main ones:</p>
+      <p>Before you can monitor anything, you have to <b>see</b> it. DAM tools capture database activity in a few ways; SecurEra supports the main ones:</p>
       <table>
         <tr><th>Method</th><th>How it works</th><th>Trade-off</th></tr>
         <tr><td><b>Agent-based</b></td><td>A small agent runs near the database and reads its activity stream.</td><td>Rich detail; needs deployment.</td></tr>
-        <tr><td><b>Inline proxy</b></td><td>Traffic flows <em>through</em> TooVix, so it can <b>block</b> in real time, not just watch.</td><td>Enables active defense; sits in the path.</td></tr>
+        <tr><td><b>Inline proxy</b></td><td>Traffic flows <em>through</em> SecurEra, so it can <b>block</b> in real time, not just watch.</td><td>Enables active defense; sits in the path.</td></tr>
         <tr><td><b>Network / logs</b></td><td>Reads network traffic or the database's own audit logs.</td><td>Low touch; less granular.</td></tr>
       </table>
       <p>The choice of method is called the <b>capture mode</b>, and how widely you've deployed it is your <b>coverage</b>. More coverage = fewer blind spots.</p>
-      <div class="tip"><b>Beginner takeaway:</b> a database TooVix doesn't capture is a database it can't protect. Step one is always getting monitoring onto your data sources.</div>
+      <div class="tip"><b>Beginner takeaway:</b> a database SecurEra doesn't capture is a database it can't protect. Step one is always getting monitoring onto your data sources.</div>
     </section>
 
     <!-- ══════════ CAPTURE MODES (in depth) ══════════ -->
     <section id="capture-modes">
       <span class="part-badge">Part 2 · How DAM works</span>
       <h2>Capture modes &amp; coverage — in depth</h2>
-      <p>The section above introduced capture at a high level. In practice TooVix offers <b>five</b> capture modes — three that read the wire (network, host eBPF, inline proxy) and two that read the database's own audit source (<b>AgentLite</b> on a host or over the network, and <b>Agentless</b> cloud streams for managed services). You rarely pick just one — you combine them to close blind spots.</p>
+      <p>The section above introduced capture at a high level. In practice SecurEra offers <b>five</b> capture modes — three that read the wire (network, host eBPF, inline proxy) and two that read the database's own audit source (<b>AgentLite</b> on a host or over the network, and <b>Agentless</b> cloud streams for managed services). You rarely pick just one — you combine them to close blind spots.</p>
 
       <h3 style="margin:22px 0 6px">What each configuration can do</h3>
       <p style="color:var(--muted);font-size:13.5px;margin:0 0 6px">Footprint, visibility and enforcement, side by side. <span style="color:#4f46e5">★</span> marks the two rows that decide most deployments.</p>
@@ -486,7 +486,7 @@
       <span class="part-badge">Part 2 · How DAM works</span>
       <h2>Knowing <em>what</em> to protect — classification & compliance</h2>
       <p>You can't prioritise protecting data if you don't know <b>where the sensitive stuff lives</b>. <b>Classification</b> scans your databases and labels columns that hold PII — emails, card numbers, tax IDs — so policies and reports can focus on what actually matters.</p>
-      <p>Related tools you'll see in TooVix:</p>
+      <p>Related tools you'll see in SecurEra:</p>
       <ul>
         <li><b>Masking</b> — hide or scramble sensitive values (e.g. show <code>****1234</code> instead of a full card number) so people can work without seeing raw PII.</li>
         <li><b>Access Governance</b> — control <em>who</em> is allowed to reach which data, including <b>just-in-time (JIT)</b> access that's granted temporarily and auto-expires.</li>
@@ -554,7 +554,7 @@
             <span class="dt-out stream">↑ Cloud SQL audit → sink → bus</span>
           </div>
           <div class="dt-arrow">→</div>
-          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+          <div class="dt-zone dam"><span class="dt-zl">SecurEra DAM</span>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest + consumer</div><div class="dt-ns">/api/agents/events · Pub/Sub</div></div></div>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
           </div>
@@ -583,7 +583,7 @@
             <div class="dt-n"><span class="dt-tile stream"><svg class="dt-ico"><use href="#dt-bus"/></svg></span><div><div class="dt-nt">Kinesis Data Stream</div><div class="dt-ns">agentless bus · roadmap</div></div></div>
           </div>
           <div class="dt-arrow">→</div>
-          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+          <div class="dt-zone dam"><span class="dt-zl">SecurEra DAM</span>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest + consumer</div><div class="dt-ns">Kinesis source · roadmap</div></div></div>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
           </div>
@@ -611,7 +611,7 @@
             <span class="dt-out stream">↑ Azure SQL → Event Hub (~2 min)</span>
           </div>
           <div class="dt-arrow">→</div>
-          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+          <div class="dt-zone dam"><span class="dt-zl">SecurEra DAM</span>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest + consumer</div><div class="dt-ns">Event Hub source</div></div></div>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
           </div>
@@ -638,7 +638,7 @@
             <div class="dt-note">No cloud bus — a native OCI stream would be a 5-hop Data&nbsp;Safe→Function→Logging→Connector&nbsp;Hub→Streaming pipeline.</div>
           </div>
           <div class="dt-arrow">→</div>
-          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+          <div class="dt-zone dam"><span class="dt-zl">SecurEra DAM</span>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest</div><div class="dt-ns">/api/agents/events</div></div></div>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
           </div>
@@ -665,7 +665,7 @@
             <div class="dt-note">No cloud stream on-prem — DAM never connects inbound.</div>
           </div>
           <div class="dt-arrow">→</div>
-          <div class="dt-zone dam"><span class="dt-zl">TooVix DAM</span>
+          <div class="dt-zone dam"><span class="dt-zl">SecurEra DAM</span>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-shield"/></svg></span><div><div class="dt-nt">HTTPS ingest</div><div class="dt-ns">/api/agents/events</div></div></div>
             <div class="dt-n"><span class="dt-tile dam"><svg class="dt-ico"><use href="#dt-store"/></svg></span><div><div class="dt-nt">ClickHouse → Detect</div><div class="dt-ns">classify · tamper-evident</div></div></div>
           </div>
@@ -677,8 +677,8 @@
 
     <!-- ══════════ PART 3 ══════════ -->
     <section id="tour">
-      <span class="part-badge">Part 3 · Using TooVix DAM</span>
-      <h2>The TooVix interface at a glance</h2>
+      <span class="part-badge">Part 3 · Using SecurEra DAM</span>
+      <h2>The SecurEra interface at a glance</h2>
       <p>Everything is reached from the <b>left sidebar</b>, grouped by purpose. Here's the map — matched to the concepts you just learned:</p>
       <table>
         <tr><th>Sidebar group</th><th>Screens</th><th>What you do there</th></tr>
@@ -694,11 +694,11 @@
     </section>
 
     <section id="quickstart">
-      <span class="part-badge">Part 3 · Using TooVix DAM</span>
+      <span class="part-badge">Part 3 · Using SecurEra DAM</span>
       <h2>Your first day: the quick-start path</h2>
       <p>Here's the shortest sensible path from empty to protected. Each step below has its own detailed section.</p>
       <ol class="steps">
-        <li><b>Register a database</b> so TooVix knows about your data source.</li>
+        <li><b>Register a database</b> so SecurEra knows about your data source.</li>
         <li><b>Deploy monitoring</b> to start capturing its activity.</li>
         <li><b>Classify</b> to discover where your sensitive data is.</li>
         <li><b>Tune policies</b> so the right things raise alerts.</li>
@@ -718,14 +718,14 @@
         <li>Click <span class="ui">Register instance</span> at the top right. (An "instance" is a database server — it can hold several databases.)</li>
         <li>Choose how to add it:
           <ul>
-            <li><span class="ui">Cloud Discovery</span> — TooVix auto-finds databases in a connected cloud account.</li>
+            <li><span class="ui">Cloud Discovery</span> — SecurEra auto-finds databases in a connected cloud account.</li>
             <li><span class="ui">Manual</span> — you type the host, port and engine (e.g. PostgreSQL, MySQL, SQL Server, Oracle) yourself.</li>
           </ul>
         </li>
         <li>Complete the form and confirm. Your instance now appears in the list.</li>
         <li>To add another database <em>under</em> an existing instance, click <span class="ui g">＋ DB</span> on that instance's row.</li>
       </ol>
-      <div class="tip">Prefer to let TooVix find things for you? Use <span class="nav-chip">Discovery</span> → <span class="ui">Run scan</span>, then <span class="ui g">Approve</span> and <span class="ui g">Register</span> each database it finds. <span class="ui g">View registered</span> jumps back to the Databases list.</div>
+      <div class="tip">Prefer to let SecurEra find things for you? Use <span class="nav-chip">Discovery</span> → <span class="ui">Run scan</span>, then <span class="ui g">Approve</span> and <span class="ui g">Register</span> each database it finds. <span class="ui g">View registered</span> jumps back to the Databases list.</div>
     </section>
 
     <section id="deploy-discovery">
@@ -769,7 +769,7 @@ sudo systemctl enable --now toovix-discovery</code></pre>
       <p>A registered database isn't watched until an <b>agent</b> is monitoring it. In the console you'd click <span class="nav-chip">Databases</span> → <span class="ui g">Deploy monitoring</span> (or <span class="nav-chip">Agents &amp; Coverage</span> → <span class="ui">Deploy monitoring</span>), pick a capture model, and paste the generated command onto your database host. The rest of this section is the <b>full reference</b> for what those commands do, per model and per engine.</p>
 
       <h3>Pick a capture model</h3>
-      <p>TooVix captures activity three ways, all feeding the same pipeline from Part 2. Which one applies depends on the engine and where it runs — a <b>self-managed</b> database (VM / on-prem) can use all three; a <b>managed PaaS</b> database you don't control can only use Agentless.</p>
+      <p>SecurEra captures activity three ways, all feeding the same pipeline from Part 2. Which one applies depends on the engine and where it runs — a <b>self-managed</b> database (VM / on-prem) can use all three; a <b>managed PaaS</b> database you don't control can only use Agentless.</p>
       <div class="grid">
         <div class="card">
           <span class="mtag lite">AgentLite · recommended</span>
@@ -950,7 +950,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
       <h2>Classify your sensitive data</h2>
       <p>Now find where the PII lives. Go to <span class="nav-chip">Classification</span>.</p>
       <ol class="steps">
-        <li>Click <span class="ui">Run Scan</span>. TooVix inspects columns and labels sensitive ones (emails, card numbers, tax IDs, etc.).</li>
+        <li>Click <span class="ui">Run Scan</span>. SecurEra inspects columns and labels sensitive ones (emails, card numbers, tax IDs, etc.).</li>
         <li>Review the results. Sensitive columns now carry tags that policies and reports can target.</li>
         <li>Want to hide sensitive values from certain users? Go to <span class="nav-chip">Masking</span> and click <span class="ui g">Add</span> to create a masking rule for a database.</li>
       </ol>
@@ -1051,19 +1051,19 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
     <section id="s-copilot">
       <span class="part-badge">Step 9</span>
       <h2>Meet the AI Copilot</h2>
-      <p>Open <span class="nav-chip">Copilot</span> (or the <span class="ui g">✦ Ask TooVix AI</span> button in the top bar). It has two tabs:</p>
+      <p>Open <span class="nav-chip">Copilot</span> (or the <span class="ui g">✦ Ask SecurEra AI</span> button in the top bar). It has two tabs:</p>
       <div class="grid">
         <div class="card"><div class="ic">🛡️</div><h4>Security data</h4><p>Grounded in <em>your</em> live environment. Ask "What are my top risks right now?" or "Summarise today's critical alerts."</p></div>
         <div class="card"><div class="ic">✧</div><h4>Help</h4><p>Product how-to and security/compliance questions. Ask "How do I create a policy?" — it answers using the real screens.</p></div>
       </div>
       <p>An admin first connects an AI account (Anthropic Claude or OpenAI) via the Copilot <span class="ui g">⚙ Configure</span> button. After that, anyone in the workspace can chat.</p>
-      <div class="note">The Help tab is scoped on purpose: it helps with TooVix and database-security topics and politely declines unrelated questions.</div>
+      <div class="note">The Help tab is scoped on purpose: it helps with SecurEra and database-security topics and politely declines unrelated questions.</div>
     </section>
 
     <section id="encryption">
       <span class="part-badge">Part 3 · Security</span>
       <h2>How your secrets are protected — encryption &amp; BYOK</h2>
-      <p>TooVix stores a few sensitive things for you — the read-only cloud keys it uses to discover
+      <p>SecurEra stores a few sensitive things for you — the read-only cloud keys it uses to discover
          managed databases, integration secrets, and so on. These are always <b>encrypted</b> before they
          touch the database. The only question BYOK answers is: <b>who holds the key that can unlock them?</b></p>
 
@@ -1233,7 +1233,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
       <span class="part-badge">Part 5 · Wrap-up</span>
       <h2>Glossary</h2>
       <dl class="gloss">
-        <dt>Agent</dt><dd>Software that captures a database's activity and feeds it to TooVix.</dd>
+        <dt>Agent</dt><dd>Software that captures a database's activity and feeds it to SecurEra.</dd>
         <dt>Alert</dt><dd>A flagged event raised when activity matches an enabled policy.</dd>
         <dt>Audit Trail</dt><dd>An immutable, tamper-evident log of actions — evidence for auditors.</dd>
         <dt>Capture mode</dt><dd>The method used to observe a database (agent, inline proxy, network/logs).</dd>
@@ -1242,7 +1242,7 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
         <dt>DAM</dt><dd>Database Activity Monitoring — watching, detecting, and responding to database activity.</dd>
         <dt>DSAR</dt><dd>Data Subject Access Request — a person asking what data you hold about them.</dd>
         <dt>False positive</dt><dd>An alert that turned out to be benign.</dd>
-        <dt>Inline proxy</dt><dd>A capture mode where traffic flows through TooVix, enabling real-time blocking.</dd>
+        <dt>Inline proxy</dt><dd>A capture mode where traffic flows through SecurEra, enabling real-time blocking.</dd>
         <dt>JIT access</dt><dd>Just-in-time access — permissions granted temporarily and auto-expiring.</dd>
         <dt>Masking</dt><dd>Hiding or scrambling sensitive values from users who don't need to see them.</dd>
         <dt>PII</dt><dd>Personally Identifiable Information — data that identifies a person.</dd>
@@ -1253,14 +1253,14 @@ gcloud logging sinks create toovix-cloudsql-audit-sink \
         <dt>Severity</dt><dd>How urgent an alert is: Critical, High, Medium, or Low.</dd>
         <dt>Shadow / Monitor mode</dt><dd>Running a policy silently — it counts matches but raises no alert.</dd>
       </dl>
-      <div class="tip"><b>Next step:</b> open TooVix, head to <span class="nav-chip">Databases</span>, and register your first instance. Then ask the <span class="nav-chip">Copilot</span> anything you're unsure about — that's what it's there for.</div>
+      <div class="tip"><b>Next step:</b> open SecurEra, head to <span class="nav-chip">Databases</span>, and register your first instance. Then ask the <span class="nav-chip">Copilot</span> anything you're unsure about — that's what it's there for.</div>
     </section>
 
   </main>
 </div>
 
 <footer>
-  TooVix DAM — Getting Started Tutorial · This guide reflects the current product screens. Button labels shown in the app are your source of truth.
+  SecurEra DAM — Getting Started Tutorial · This guide reflects the current product screens. Button labels shown in the app are your source of truth.
 </footer>
 
 <script>
