@@ -3500,6 +3500,52 @@ app.post('/api/admin/tenants', async (req, res) => {
   }
 });
 
+// Change an EXISTING tenant's plan/tier (trial → business/enterprise and back). This is the
+// post-creation counterpart to the create endpoint: it updates tenants.tier and, when moving
+// INTO a paid tier, provisions the dedicated ClickHouse data plane (idempotent) so events start
+// landing on the tenant's own DB. Downgrades keep the dedicated plane intact (no data is dropped).
+const VALID_TIERS = new Set(['starter', 'professional', 'business', 'enterprise']);
+app.put('/api/admin/tenants/:id/plan', async (req, res) => {
+  const { tier, status: statusIn, actor } = req.body || {};
+  const newTier = String(tier || '').toLowerCase().trim();
+  if (!VALID_TIERS.has(newTier)) {
+    return res.status(400).json({ error: `tier must be one of: ${[...VALID_TIERS].join(', ')}` });
+  }
+  try {
+    const cur = (await pgPool.query('SELECT name, slug, tier, status, data_plane FROM tenants WHERE id = $1', [req.params.id])).rows[0];
+    if (!cur) return res.status(404).json({ error: 'Unknown tenant' });
+
+    // Status: honour an explicit value, else auto-activate when leaving trial for a paid tier.
+    const wasTrial = String(cur.status || '').toLowerCase() === 'trial' || String(cur.tier || '').toLowerCase() === 'starter';
+    let newStatus = cur.status;
+    if (statusIn) newStatus = String(statusIn).toLowerCase().trim();
+    else if (wasTrial && DEDICATED_TIERS.has(newTier)) newStatus = 'active';
+
+    await pgPool.query('UPDATE tenants SET tier = $1, status = $2 WHERE id = $3', [newTier, newStatus, req.params.id]);
+
+    // Moving into a paid tier with no dedicated plane yet → provision one now (warms _tenantDbCache).
+    let dataPlane = cur.data_plane;
+    let provisioned = false;
+    if (DEDICATED_TIERS.has(newTier) && !cur.data_plane) {
+      try { dataPlane = await ensureTenantEventsDb(req.params.id); provisioned = true; }
+      catch (e) { console.error('[Admin] plan change: data-plane provision failed:', e.message); }
+    }
+
+    await logPlatformAudit({
+      actor: actor || 'Platform Ops', action: 'tenant.plan.change', tenantId: req.params.id,
+      tenantName: cur.name, resource: `tenant/${cur.slug}`, ip: req.ip,
+      details: `Plan ${cur.tier} → ${newTier}${provisioned ? ' · provisioned dedicated data plane' : ''}${newStatus !== cur.status ? ` · status ${cur.status} → ${newStatus}` : ''}`
+    });
+
+    const tenants = await pgPool.query(`${TENANT_AGG} WHERE t.id = $1`, [req.params.id]);
+    const events = await eventsByTenantToday();
+    res.json({ ok: true, provisioned, dataPlane: dataPlane || null, tenant: shapeTenant(tenants.rows[0], events) });
+  } catch (err) {
+    console.error('[Admin] change tenant plan failed:', err.message);
+    res.status(500).json({ error: 'Failed to change plan' });
+  }
+});
+
 // ── Admin · Platform settings (super-admin console) ──────────────────────────
 // The public control-plane URL + the agent image ref used in Deploy-agent instructions.
 app.get('/api/admin/platform/settings', async (req, res) => {

@@ -2,6 +2,7 @@ import Layout from '../components/Layout';
 import KpiCard from '../components/KpiCard';
 import PageHeader from '../components/shared/PageHeader';
 import { toast } from '../components/shared/Toast';
+import { apiPut } from '../api/client';
 import useApiData from '../hooks/useApiData';
 
 const HEALTH_BADGE = { excellent: 'status-green', 'on-track': 'status-green', slow: 'sev-high', 'at-risk': 'sev-high' };
@@ -10,6 +11,16 @@ const REC = { amber: { b: 'var(--amber)', bg: 'var(--amber-soft)' }, info: { b: 
 
 export default function TrialConversion() {
   const { data, loading, lastRefresh, refetch } = useApiData('/admin/trials', { poll: 30000 });
+
+  // REAL conversion: flip the trial tenant to a paid tier (default Business) and provision its
+  // dedicated data plane server-side. Confirm first — this activates billing.
+  const convert = async (t) => {
+    if (!window.confirm(`Convert "${t.name}" from trial to Business?\n\nThis activates the tenant, moves it to a paid plan, and provisions a dedicated ClickHouse data plane.`)) return;
+    const r = await apiPut(`/admin/tenants/${t.id}/plan`, { tier: 'business' });
+    if (r.ok) { toast(`${t.name} converted to Business${r.data?.provisioned ? ' · dedicated data plane provisioned' : ''}`, 'ok'); refetch(); }
+    else toast(r.data?.error || 'Conversion failed', 'err');
+  };
+
   if (loading && !data) return <div className="loading-screen"><div className="loading-spinner" /><p>Loading trial pipeline…</p></div>;
 
   const k = data?.kpis || {};
@@ -56,9 +67,7 @@ export default function TrialConversion() {
                   <td className="num">{t.day}</td><td className="num">{t.dbs}</td><td className="num">{t.alerts}</td><td className="num">{t.reports}</td>
                   <td><span className={`badge ${t.health === 'excellent' ? 'status-green' : 'sev-medium'}`}>{t.milestone}</span></td>
                   <td><span className={`badge ${HEALTH_BADGE[t.health]}`}>{HEALTH_LABEL[t.health]}</span></td>
-                  <td>{t.health === 'excellent'
-                    ? <button className="btn-primary" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => toast(`Conversion offer sent to ${t.name}`, 'ok')}>Convert</button>
-                    : <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => toast(`Opening ${t.name}`, 'ok')}>View</button>}</td>
+                  <td><button className={t.health === 'excellent' ? 'btn-primary' : 'btn-secondary'} style={{ padding: '4px 10px', fontSize: 11 }} onClick={() => convert(t)}>Convert →</button></td>
                 </tr>
               ))}
             </tbody>

@@ -6,7 +6,7 @@ import PageHeader from '../components/shared/PageHeader';
 import Modal from '../components/shared/Modal';
 import { toast } from '../components/shared/Toast';
 import useApiData from '../hooks/useApiData';
-import { apiPost } from '../api/client';
+import { apiPost, apiPut } from '../api/client';
 
 function formatNumber(n) {
   if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
@@ -156,11 +156,36 @@ function Section({ children }) {
   return <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--subtle)', margin: '16px 0 8px' }}>{children}</div>;
 }
 
+const PLAN_OPTIONS = [
+  { tier: 'starter', label: 'Starter (trial · shared data plane)' },
+  { tier: 'business', label: 'Business (dedicated data plane)' },
+  { tier: 'enterprise', label: 'Enterprise (dedicated data plane)' },
+];
 function ManageModal({ tenant: t, onClose, navigate, onChanged }) {
+  const [planTier, setPlanTier] = useState('');
+  const [savingPlan, setSavingPlan] = useState(false);
+  useEffect(() => { setPlanTier(t?.tier || ''); }, [t]);
   if (!t) return null;
   const isTrial = t.status === 'trial';
   const isSuspended = t.status === 'suspended';
   const proto = (msg) => { toast(msg, 'ok'); onClose(); };
+
+  // REAL plan change — updates the tenant tier and (moving into a paid tier) provisions the
+  // dedicated ClickHouse data plane server-side. This is the one control here that DOES mutate
+  // the tenant record.
+  const changePlan = async () => {
+    if (!planTier || planTier === t.tier) return;
+    setSavingPlan(true);
+    const r = await apiPut(`/admin/tenants/${t.id}/plan`, { tier: planTier });
+    setSavingPlan(false);
+    if (r.ok) {
+      toast(`${t.name} → ${TIER_LABEL[planTier] || planTier}${r.data?.provisioned ? ' · dedicated data plane provisioned' : ''}`, 'ok');
+      onChanged && onChanged();
+      onClose();
+    } else {
+      toast(r.data?.error || 'Failed to change plan', 'err');
+    }
+  };
   // Suspend/Offboard don't change the tenant directly (prototype) — they submit a
   // REAL approval request to the Approvals queue (multi-party sign-off).
   const requestApproval = async (type, detail) => {
@@ -219,6 +244,20 @@ function ManageModal({ tenant: t, onClose, navigate, onChanged }) {
         ))}
       </div>
 
+      <Section>Change Plan</Section>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <select value={planTier} onChange={(e) => setPlanTier(e.target.value)} style={{ minWidth: 280 }}>
+          {PLAN_OPTIONS.map(o => <option key={o.tier} value={o.tier}>{o.label}</option>)}
+        </select>
+        <button className="btn-primary" disabled={savingPlan || planTier === t.tier} onClick={changePlan}>
+          {savingPlan ? 'Applying…' : planTier === t.tier ? 'Current plan' : 'Apply plan'}
+        </button>
+      </div>
+      <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+        Moving into <b>Business/Enterprise</b> provisions a dedicated ClickHouse data plane (idempotent).
+        Downgrades keep existing data in place. This writes to the tenant record and is audit-logged.
+      </p>
+
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 16, paddingTop: 16, borderTop: '1px solid var(--line)' }}>
         <button className="btn-secondary" onClick={() => proto(`Reset password for ${t.admin || t.slug} — temp password generated, MFA re-enrollment required`)}>🔒 Reset admin password</button>
         <button className="btn-secondary" onClick={() => proto(`${t.slug} — all user sessions terminated`)}>⎋ Force logout</button>
@@ -231,7 +270,7 @@ function ManageModal({ tenant: t, onClose, navigate, onChanged }) {
       </div>
       <p className="muted" style={{ fontSize: 11, marginTop: 10 }}>
         Reset / logout / export are prototype-only. <b>Suspend</b> and <b>Offboard</b> submit a real
-        multi-party approval request (visible in Approvals) — the tenant record itself is never changed here.
+        multi-party approval request (visible in Approvals). <b>Change Plan</b> is a real change and takes effect immediately.
       </p>
     </Modal>
   );
