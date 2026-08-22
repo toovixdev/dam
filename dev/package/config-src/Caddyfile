@@ -4,10 +4,25 @@
 # docker-compose passes through from the installer's .env (${DOMAIN}). So one bundle deploys to
 # any domain — no hand-editing per deployment.
 #
+# Routing note: in dev, the Vite dev server proxied /api, /auth, /ws to dam-api. The prod
+# frontend is static nginx (SPA only), so THIS edge must send those paths to dam-api itself;
+# everything else goes to the console SPA.
+#
 # Requirements: the domain's A record points at this host, and inbound 80 + 443 are open
 # (Caddy solves the ACME HTTP-01 challenge on 80, serves on 443).
 
 {$DOMAIN} {
+	# Control-plane API, SSO callbacks, and websockets → dam-api (matches the dev Vite proxy).
+	handle /api/* {
+		reverse_proxy dam-api:3000
+	}
+	handle /auth/* {
+		reverse_proxy dam-api:3000
+	}
+	handle /ws/* {
+		reverse_proxy dam-api:3000
+	}
+
 	# Self-hosted agent-image registry — PULL-ONLY from the internet. Pushes happen on-host
 	# (localhost:5001); external writes are refused.
 	@registry_write {
@@ -21,7 +36,8 @@
 	handle @registry_read {
 		reverse_proxy dam-registry:5000
 	}
-	# Everything else → the console (its nginx already proxies /api, /auth, /ws to dam-api).
+
+	# Everything else → the console SPA (static nginx).
 	handle {
 		reverse_proxy dam-react:5173
 	}
