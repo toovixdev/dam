@@ -1,4 +1,4 @@
-# TooVix DAM — GCP single-VM test deploy (HTTPS on 443)
+# SecurEra DAM — GCP single-VM test deploy (HTTPS on 443)
 
 Runs the whole dev stack on one Compute Engine VM, fronted by **Caddy** for automatic
 HTTPS on port 443 (`https://dam.suchirasoistories.in`). Caddy terminates TLS and proxies

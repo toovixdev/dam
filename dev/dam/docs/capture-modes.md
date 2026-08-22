@@ -1,4 +1,4 @@
-# TooVix DAM — Capture Modes
+# SecurEra DAM — Capture Modes
 
 Four ways the DAM captures database activity. All feed the same pipeline (agent → collector →
 ClickHouse → alerts); they differ in **where they sit** and whether they can **block** vs only

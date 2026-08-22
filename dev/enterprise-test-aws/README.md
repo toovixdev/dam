@@ -1,4 +1,4 @@
-# TooVix DAM — Enterprise Cloud Test (AWS)
+# SecurEra DAM — Enterprise Cloud Test (AWS)
 
 The AWS mirror of `dev/enterprise-test` (GCP) and `dev/enterprise-test-azure`. Same shape:
 **3 MySQL databases, each in its own VPC + private subnet, no public IPs**, seeded with the
@@ -71,4 +71,4 @@ terraform destroy
   accepts 3306 only from the **seeder security group**. No SSH inbound anywhere (SSM only).
 - **Passwords in user_data:** templated into EC2 `user_data` for POC simplicity (also in Secrets
   Manager). Read from Secrets Manager at boot for production.
-- **Phase 2 (agents):** `deploy_agents` placeholder; wiring the TooVix agent is a follow-up.
+- **Phase 2 (agents):** `deploy_agents` placeholder; wiring the SecurEra agent is a follow-up.

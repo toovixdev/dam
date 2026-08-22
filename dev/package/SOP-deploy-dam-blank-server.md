@@ -1,6 +1,6 @@
-# SOP — Deploy TooVix DAM on a Blank Server (source-less)
+# SOP — Deploy SecurEra DAM on a Blank Server (source-less)
 
-**Purpose:** stand up a full TooVix DAM control plane on a fresh Linux server using **pre-built images
+**Purpose:** stand up a full SecurEra DAM control plane on a fresh Linux server using **pre-built images
 only** — no source code on the target. The server runs Docker + a production compose file + config + a
 `.env`; nothing else.
 

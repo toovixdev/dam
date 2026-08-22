@@ -1,6 +1,6 @@
 # SOP — Install the Network Agent on a PostgreSQL VM
 
-**Purpose:** onboard a self-managed **PostgreSQL on a VM** into TooVix DAM using **network (passive)
+**Purpose:** onboard a self-managed **PostgreSQL on a VM** into SecurEra DAM using **network (passive)
 capture** — an AF_PACKET sniffer that decodes the Postgres wire protocol **in the clear**. This is the right
 mode for a **plaintext** database (the common case) and gives you full SQL visibility **plus row counts**,
 with **no eBPF/kernel requirements** and **no changes to the DB or the app**.
@@ -120,7 +120,7 @@ docker run -d --name toovix-agent-network --restart unless-stopped \
 
 ### Healthy start
 ```
-=== TooVix DAM Agent · mode=network engine=postgresql target=10.0.0.30:5432 ===
+=== SecurEra DAM Agent · mode=network engine=postgresql target=10.0.0.30:5432 ===
 enrolled: agent=… instance=… tenant=…
 network agent sniffing any for tcp/5432 engine=postgresql (passive capture, debug=false)
 [capture] SELECT  rows=…  <user>  SELECT …

@@ -1,6 +1,6 @@
 # SOP — Install the DAM Host Agent on a Windows SQL Server (Extended Events)
 
-**Purpose:** run the TooVix DAM agent **as a Windows service on the SQL Server box itself**, capturing
+**Purpose:** run the SecurEra DAM agent **as a Windows service on the SQL Server box itself**, capturing
 activity through **Extended Events (XEvents)**. Because SQL Server hands XEvents the statement *after*
 it has decrypted the session, this **captures TLS-encrypted client connections** and carries **row
 counts** — the same benefits people expect from a "below-TLS host agent" — **without injecting anything
@@ -59,7 +59,7 @@ In the DAM console: **Agents → Deploy monitoring**, register this SQL Server i
 
 ## Step 4 — Write the agent config file
 The service inherits no user environment, so it reads a config file at
-**`C:\ProgramData\TooVix\dam-agent.env`** (override with the `DAM_AGENT_ENV` env var for a console run).
+**`C:\ProgramData\SecurEra\dam-agent.env`** (override with the `DAM_AGENT_ENV` env var for a console run).
 
 ```ini
 CONTROL_PLANE=https://dam.yourcompany.com
@@ -83,21 +83,21 @@ DB_PASSWORD=CHANGE_ME_strong
 
 ```powershell
 # Put the exe somewhere stable, then register + start the service:
-New-Item -ItemType Directory -Force 'C:\Program Files\TooVix' | Out-Null
-Copy-Item .\dam-agent.exe 'C:\Program Files\TooVix\dam-agent.exe'
-& 'C:\Program Files\TooVix\dam-agent.exe' install     # creates service "TooVixDAMAgent" (auto-start)
-& 'C:\Program Files\TooVix\dam-agent.exe' start        # or: Start-Service TooVixDAMAgent
+New-Item -ItemType Directory -Force 'C:\Program Files\SecurEra' | Out-Null
+Copy-Item .\dam-agent.exe 'C:\Program Files\SecurEra\dam-agent.exe'
+& 'C:\Program Files\SecurEra\dam-agent.exe' install     # creates service "TooVixDAMAgent" (auto-start)
+& 'C:\Program Files\SecurEra\dam-agent.exe' start        # or: Start-Service TooVixDAMAgent
 Get-Service TooVixDAMAgent
 ```
 
 ## Step 6 — Verify
 
 ```powershell
-Get-Content 'C:\ProgramData\TooVix\dam-agent.log' -Tail 20 -Wait
+Get-Content 'C:\ProgramData\SecurEra\dam-agent.log' -Tail 20 -Wait
 ```
 A healthy start logs enrollment, then something like:
 ```
-=== TooVix DAM Agent v0.1.0 · mode=audit-forward engine=mssql target=SQLSERVER01:1433 ===
+=== SecurEra DAM Agent v0.1.0 · mode=audit-forward engine=mssql target=SQLSERVER01:1433 ===
 enrolled: agent=… tenant=…
 AgentLite audit-forward (mssql xevents): reading session ToovixXE …
 ```
@@ -108,8 +108,8 @@ Activity** — it should appear within a few seconds with a row count.
 
 ## Manage / uninstall
 ```powershell
-& 'C:\Program Files\TooVix\dam-agent.exe' stop
-& 'C:\Program Files\TooVix\dam-agent.exe' uninstall     # removes the service
+& 'C:\Program Files\SecurEra\dam-agent.exe' stop
+& 'C:\Program Files\SecurEra\dam-agent.exe' uninstall     # removes the service
 ```
 
 ## Notes

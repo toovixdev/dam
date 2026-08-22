@@ -1,6 +1,6 @@
-# SOP — Onboarding Azure Databases into TooVix DAM (MySQL · PostgreSQL · SQL Server)
+# SOP — Onboarding Azure Databases into SecurEra DAM (MySQL · PostgreSQL · SQL Server)
 
-**Purpose:** Bring a customer's **Azure-hosted** databases under TooVix DAM monitoring, covering both
+**Purpose:** Bring a customer's **Azure-hosted** databases under SecurEra DAM monitoring, covering both
 **PaaS** (Azure SQL Database / Managed Instance, Azure Database for MySQL & PostgreSQL Flexible Server)
 and **self-managed on Azure VMs**.
 
@@ -246,5 +246,5 @@ above work for private, no-public-IP databases.
 | `DB_USER` / `DB_PASSWORD` | only for `CLASSIFY` | only for `CLASSIFY` | **required** (VIEW DATABASE STATE for XEvents) |
 | `AGENT_ENROLL_TOKEN` / `CONTROL_PLANE` | required | required | required |
 
-*Questions or an engine/host combination not covered here → your TooVix DAM operator. For the two ⚠️ PaaS
+*Questions or an engine/host combination not covered here → your SecurEra DAM operator. For the two ⚠️ PaaS
 cells (Azure MySQL/PG activity capture), see Part C for status and the path to close the gap.*

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Generate sample database activity so it shows up in TooVix DAM.
+# Generate sample database activity so it shows up in SecurEra DAM.
 # Run INSIDE the VM after setup-onprem.sh. Connects as the app user over TCP so DAM sees a
 # realistic principal + client IP. A mix of benign reads, broad PII/PCI reads, and writes.
 set -euo pipefail

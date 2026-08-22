@@ -1,4 +1,4 @@
-# TooVix DAM — Enterprise Cloud Test (Azure)
+# SecurEra DAM — Enterprise Cloud Test (Azure)
 
 A minimal **SQL Server** test estate on Azure: one SQL Server on an **IaaS VM** and one
 **PaaS** Azure SQL Database, both private (no public DB endpoints), reached through a

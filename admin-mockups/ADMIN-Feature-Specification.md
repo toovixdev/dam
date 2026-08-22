@@ -1,4 +1,4 @@
-# TooVix DAM — Super Admin Feature Specification
+# SecurEra DAM — Super Admin Feature Specification
 
 > Companion to [ADMIN-KB.md](ADMIN-KB.md). Expands every admin feature into **sub-features**, **use cases**, and **governance rules**.
 >
@@ -31,7 +31,7 @@
 
 ### A1.5 Clone Tenant Configuration 🟡
 - **Sub-features:** clone source tenant's policies, rules, classification rules, notification channels, integration configs to a new or existing tenant; selective clone (choose which config categories); diff preview before apply; does NOT clone data (audit events, alerts).
-- **Use case:** Meridian Financial acquires a subsidiary. The subsidiary gets a new TooVix tenant with identical policy configuration cloned from the parent — 74 rules, 48 classifiers, 5 integrations — in one click instead of manual recreation.
+- **Use case:** Meridian Financial acquires a subsidiary. The subsidiary gets a new SecurEra tenant with identical policy configuration cloned from the parent — 74 rules, 48 classifiers, 5 integrations — in one click instead of manual recreation.
 - **Governance:** clone source must be a tenant the operator has access to. Clone logged with source/target/categories. Target tenant admin notified of configuration import.
 
 ### A1.6 Tenant Feature Flags 🟢
@@ -55,7 +55,7 @@
 
 ### A2.1 Tenant Impersonation 🟢
 - **Sub-features:** impersonate into any tenant's console as if logged in as their admin; mandatory justification text (min 20 chars); time-limited (30m/1h/2h max, configurable); auto-revoke at expiry; full session recording (every click, page view, action); `impersonated_by` field on all audit records during session; post-session review by security team; revocable mid-session by security; visual indicator in tenant UI ("Support session active").
-- **Use case:** Bharat National Bank reports "our Oracle alerts aren't firing." Support engineer impersonates into their tenant, sees the Oracle policy is scoped to `db_group: test` instead of `prod`, fixes it, and logs the resolution. Bank sees "TooVix support session was active 14:22–14:38 — 3 actions taken."
+- **Use case:** Bharat National Bank reports "our Oracle alerts aren't firing." Support engineer impersonates into their tenant, sees the Oracle policy is scoped to `db_group: test` instead of `prod`, fixes it, and logs the resolution. Bank sees "SecurEra support session was active 14:22–14:38 — 3 actions taken."
 - **Governance:** impersonation requires: active support ticket reference, justification text, approval (auto for Tier 2+, manual for Tier 1). Max 2h per session. All impersonation sessions reviewed by security within 24h. Quarterly impersonation audit report.
 
 ### A2.2 Tenant Health Dashboard 🟡
@@ -191,7 +191,7 @@
 
 ### A6.1 Platform Audit Log 🟢
 - **Sub-features:** every vendor-side action logged (tenant access, config changes, impersonation sessions, billing adjustments, content pack pushes, break-glass access, deployments, cert rotations); immutable, hash-chained (same BLAKE3 standard as the product); searchable by actor + action type + tenant + time range; export as signed evidence pack (PDF/CSV); retention: indefinite for compliance.
-- **Use case:** During TooVix's annual SOC 2 audit, the auditor requests evidence of all production tenant access for Q1 2026. Ops exports the platform audit log filtered to tenant access events — 347 events, all with justification, operator identity, and duration. Hash-chain integrity verified.
+- **Use case:** During SecurEra's annual SOC 2 audit, the auditor requests evidence of all production tenant access for Q1 2026. Ops exports the platform audit log filtered to tenant access events — 347 events, all with justification, operator identity, and duration. Hash-chain integrity verified.
 - **Governance:** platform audit log is append-only, never deletable. Hash-chain verification runs hourly. Log access restricted to security team + auditors. Quarterly log review mandatory.
 
 ### A6.2 Break-Glass Access 🟢
@@ -205,8 +205,8 @@
 - **Governance:** access reviews are SOC 2 evidence. Review completion tracked (% on time). Overdue reviews escalate to CISO. Access review reports retained indefinitely.
 
 ### A6.4 SOC 2 Evidence Collection 🟡
-- **Sub-features:** auto-generate evidence for TooVix's own SOC 2 Type II / ISO 27001 audits; evidence categories (access logs, change management, incident response, vendor access reviews, encryption status, backup verification, DR test results); evidence export as PDF/CSV bundle; evidence collection schedule (quarterly for SOC 2, annual for ISO); gap identification (which evidence is missing or incomplete).
-- **Use case:** TooVix's SOC 2 auditor requests evidence for 8 control objectives. The admin console generates a bundle: platform audit log (control 1), access review reports (control 2), incident reports with RCA (control 3), DR test results (control 4), encryption verification (control 5), change management log (control 6), vendor access log (control 7), backup verification (control 8). All cryptographically signed.
+- **Sub-features:** auto-generate evidence for SecurEra's own SOC 2 Type II / ISO 27001 audits; evidence categories (access logs, change management, incident response, vendor access reviews, encryption status, backup verification, DR test results); evidence export as PDF/CSV bundle; evidence collection schedule (quarterly for SOC 2, annual for ISO); gap identification (which evidence is missing or incomplete).
+- **Use case:** SecurEra's SOC 2 auditor requests evidence for 8 control objectives. The admin console generates a bundle: platform audit log (control 1), access review reports (control 2), incident reports with RCA (control 3), DR test results (control 4), encryption verification (control 5), change management log (control 6), vendor access log (control 7), backup verification (control 8). All cryptographically signed.
 - **Governance:** evidence auto-collected on schedule. Gaps flagged 30 days before audit. Evidence bundles signed and tamper-evident.
 
 ### A6.5 Data Sovereignty Enforcement 🟡

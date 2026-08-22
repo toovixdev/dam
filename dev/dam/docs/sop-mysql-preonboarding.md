@@ -1,4 +1,4 @@
-# SOP — Pre-Onboarding Checklist: MySQL Database → TooVix DAM
+# SOP — Pre-Onboarding Checklist: MySQL Database → SecurEra DAM
 
 **Purpose:** a go/no-go readiness gate to run **before** onboarding a client's MySQL database. Work top to
 bottom; every check has a **command** and a **PASS criterion**. Do not deploy the agent until Phases 0–5

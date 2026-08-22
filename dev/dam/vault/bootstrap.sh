@@ -1,6 +1,6 @@
 #!/bin/sh
 # ─────────────────────────────────────────────────────────────────────────────
-#  TooVix DAM — Vault bootstrap (dev)
+#  SecurEra DAM — Vault bootstrap (dev)
 #  Configures Vault so the DAM API holds NO database password:
 #   1. Provisions a LEAST-PRIVILEGE broker account on the client DB (the runbook
 #      step, automated for the dev demo — NOT root).

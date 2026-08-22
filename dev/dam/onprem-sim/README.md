@@ -1,7 +1,7 @@
-# Simulate an on-prem database in a Linux VM and connect it to TooVix DAM
+# Simulate an on-prem database in a Linux VM and connect it to SecurEra DAM
 
 This harness turns a Mac into a stand-in for a **self-managed, on-premises database
-server**: a real Ubuntu VM running MySQL, monitored by TooVix DAM using **AgentLite
+server**: a real Ubuntu VM running MySQL, monitored by SecurEra DAM using **AgentLite
 (audit-forward)** — the same native-package path a real customer uses on a VM they own.
 
 ```
@@ -10,7 +10,7 @@ server**: a real Ubuntu VM running MySQL, monitored by TooVix DAM using **AgentL
  └────────────────────────────────────────────────────────────────┬─────────────────┘
                                                                     │ outbound HTTPS (443)
                                                                     ▼
-                                                  TooVix DAM control plane
+                                                  SecurEra DAM control plane
                                                 (https://dam.suchirasoistories.in)
 ```
 
@@ -53,7 +53,7 @@ ENROLL_TOKEN=tvxenr_your_token_here ./setup-onprem.sh
 
 A healthy agent start (see `sudo journalctl -u dam-agent@onprem -f`) looks like:
 ```
-=== TooVix DAM Agent · mode=audit-forward engine=mysql target=<vm-ip>:3306 ===
+=== SecurEra DAM Agent · mode=audit-forward engine=mysql target=<vm-ip>:3306 ===
 enrolled: agent=… instance=… tenant=…
 AgentLite audit-forward tailing /var/log/mysql/general.log (source=general_log engine=mysql)
 ```

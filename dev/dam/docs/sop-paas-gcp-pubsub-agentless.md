@@ -1,6 +1,6 @@
 # SOP — Agentless Monitoring of a GCP Cloud SQL (PaaS) Database via Pub/Sub Push
 
-**Purpose:** Onboard a managed **GCP Cloud SQL (MySQL)** database into TooVix DAM **agentlessly** —
+**Purpose:** Onboard a managed **GCP Cloud SQL (MySQL)** database into SecurEra DAM **agentlessly** —
 no agent on the DB, no inbound path into the customer network. The DB emits audit records to Cloud
 Logging; a Log Sink pushes them to a Pub/Sub topic; the DAM **pulls** the subscription outbound.
 
@@ -14,7 +14,7 @@ audit source + stream service; see Appendix C.)
 
 ![Agentless Cloud SQL → Pub/Sub → DAM architecture](sop-paas-gcp-pubsub-agentless.png)
 
-<sub>(Text version below; editable Word copy: `TooVix-DAM-SOP-Agentless-Cloud-SQL-PubSub.docx`)</sub>
+<sub>(Text version below; editable Word copy: `SecurEra-DAM-SOP-Agentless-Cloud-SQL-PubSub.docx`)</sub>
 
 ```
         CUSTOMER LANDING ZONE (their GCP org/project)                 GOOGLE-MANAGED (global,          DAM LANDING ZONE (SaaS org — GCP or AWS/Azure)

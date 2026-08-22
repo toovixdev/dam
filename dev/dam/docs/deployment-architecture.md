@@ -1,4 +1,4 @@
-# TooVix DAM — Production Deployment Architecture
+# SecurEra DAM — Production Deployment Architecture
 
 End-to-end topology: **agents run in the customer tenant**, the **DAM runs in its own tenant** as a
 **hub-and-spoke landing zone**. The guiding rule is that **agents are outbound-only** — nothing ever

@@ -1,11 +1,11 @@
-# TooVix DAM — Enterprise Cloud Test (GCP)
+# SecurEra DAM — Enterprise Cloud Test (GCP)
 
-Provisions a realistic multi-VPC MySQL estate on GCP and points it at your TooVix DAM
+Provisions a realistic multi-VPC MySQL estate on GCP and points it at your SecurEra DAM
 platform:
 
 | DB | Deployment | VPC / subnet | Capture mode |
 |----|------------|--------------|--------------|
-| `db-vm-a` | MySQL 8 on a Compute Engine **VM** | own VPC, private subnet | **Network agent** (TooVix Go agent on the VM) |
+| `db-vm-a` | MySQL 8 on a Compute Engine **VM** | own VPC, private subnet | **Network agent** (SecurEra Go agent on the VM) |
 | `db-vm-b` | MySQL 8 on a Compute Engine **VM** | own VPC, private subnet | **Network agent** |
 | `db-paas` | **Cloud SQL for MySQL** (PaaS) | own VPC, private IP (PSA) | **Inline proxy** agent VM *or* audit-log Cloud Push |
 
@@ -16,7 +16,7 @@ DAM platform + package/registry mirrors is via **Cloud NAT**.
 
 ## Architecture / connectivity model (what to decide first)
 
-The agents must reach two TooVix endpoints:
+The agents must reach two SecurEra endpoints:
 
 1. **Control-plane API** — enroll / heartbeat / quarantine-list / masking-policy
    (`/api/agents/*`). Default port `3000` (or behind your reverse proxy on `443`).
@@ -40,7 +40,7 @@ DAM platform's **public** endpoints. Two supported topologies:
 
 ## Part 1 — Prerequisites (before `terraform apply`)
 
-### A. On the TooVix DAM platform (one-time)
+### A. On the SecurEra DAM platform (one-time)
 1. **Expose the agent endpoints** the VMs will call:
    - Control-plane API: `POST /api/agents/enroll`, `POST /api/agents/:id/heartbeat`,
      `GET /api/agents/quarantine-list`, `GET /api/agents/masking-policy`,
@@ -51,7 +51,7 @@ DAM platform's **public** endpoints. Two supported topologies:
    on `dam_analytics.events` only. Pass it as `dam_clickhouse_user/password`.
 3. **Set an enrollment token** (`AGENT_ENROLL_TOKEN`) on the platform and pass the same value
    as `agent_enroll_token`. This is how agents authenticate to enroll + fetch quarantine list.
-4. **Publish the agent image.** The TooVix Go agent (`dev/dam/agent`) isn't on a public
+4. **Publish the agent image.** The SecurEra Go agent (`dev/dam/agent`) isn't on a public
    registry, so build + push it to **Artifact Registry** once:
    ```bash
    REGION=us-central1; PROJECT=<your-project>
@@ -74,7 +74,7 @@ DAM platform's **public** endpoints. Two supported topologies:
   **TLS**, a network sniffer can't decode it → use the **inline-proxy** agent or DB audit
   logs instead. For the VM DBs here we keep app↔MySQL non-TLS on the private subnet so the
   network agent can decode (fine for a private-subnet test; use proxy/audit for TLS).
-- **Least-privilege DB account** (per TooVix's security rule — never root for the platform):
+- **Least-privilege DB account** (per SecurEra's security rule — never root for the platform):
   the startup script creates a dedicated `dam_svc` user with only the privileges needed for
   optional enrichment / quarantine execution. The network agent itself needs **no** DB creds.
 - **NTP / time sync** — GCP VMs sync automatically; Cloud SQL is managed.
@@ -82,7 +82,7 @@ DAM platform's **public** endpoints. Two supported topologies:
 ### D. Cloud SQL (PaaS) prerequisites
 - You **cannot install an agent on the host.** Two supported options (pick in tfvars):
   1. **Inline proxy VM** (`enable_paas_proxy = true`, default): a small VM in the Cloud SQL
-     VPC runs the TooVix agent in **proxy** mode; apps connect to the proxy, which forwards to
+     VPC runs the SecurEra agent in **proxy** mode; apps connect to the proxy, which forwards to
      Cloud SQL's private IP — enables capture **and** blocking.
   2. **Audit-log Cloud Push** (agentless): enable Cloud SQL **audit logging**
      (`cloudsql_mysql_audit` flags) → Cloud Logging → Pub/Sub → a collector that pushes to
@@ -121,7 +121,7 @@ docker logs toovix-agent           # watch enroll + [capture] lines
 ```
 
 Generate some MySQL traffic so the agent has activity to capture (from a VM in the same VPC,
-or a small client), then check **Agents & Coverage** / **Databases** in TooVix — the three
+or a small client), then check **Agents & Coverage** / **Databases** in SecurEra — the three
 instances should enroll and show monitored.
 
 `terraform destroy` tears the whole estate down.

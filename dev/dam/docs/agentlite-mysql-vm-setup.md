@@ -1,6 +1,6 @@
-# Connect a Self-Managed Database to TooVix DAM — AgentLite Setup Guide
+# Connect a Self-Managed Database to SecurEra DAM — AgentLite Setup Guide
 
-**Audience:** a customer/operator with a **MySQL, PostgreSQL, SQL Server, MongoDB, or Oracle database** — on a VM or a managed service (Cloud SQL, RDS, Azure SQL, Atlas, Autonomous DB) — in **GCP, AWS, Azure, or OCI**, who wants it monitored by TooVix DAM using the **AgentLite (audit-forward)** approach.
+**Audience:** a customer/operator with a **MySQL, PostgreSQL, SQL Server, MongoDB, or Oracle database** — on a VM or a managed service (Cloud SQL, RDS, Azure SQL, Atlas, Autonomous DB) — in **GCP, AWS, Azure, or OCI**, who wants it monitored by SecurEra DAM using the **AgentLite (audit-forward)** approach.
 
 **Time:** ~15–20 minutes. **Access needed:** DB admin to enable the engine's audit source; `sudo`/root on the host only for the file-tailing engines (MySQL/PostgreSQL).
 
@@ -8,7 +8,7 @@
 
 ## 1. What AgentLite is (and what it isn't)
 
-**AgentLite** is a lightweight forwarder that reads **telemetry the database already produces** and ships each statement to TooVix DAM. How it reads that telemetry depends on the engine:
+**AgentLite** is a lightweight forwarder that reads **telemetry the database already produces** and ships each statement to SecurEra DAM. How it reads that telemetry depends on the engine:
 
 - **MySQL / PostgreSQL** — tails a **log file on the database host**, so the agent runs *on* that host.
 - **SQL Server / MongoDB / Oracle** — there is no text log to tail, so the agent **polls the database's own telemetry over the network** (a DB login, no file). These can run on **any** host that can reach the DB — which is how managed services (Azure SQL, RDS, Autonomous DB, Atlas) are covered: a small collector VM alongside them.
@@ -21,7 +21,7 @@
 
 **Flow:**
 ```
-DB telemetry  →  AgentLite forwarder  →  TooVix DAM  →  Database Activity view
+DB telemetry  →  AgentLite forwarder  →  SecurEra DAM  →  Database Activity view
  (MySQL/PG log · SQL Server audit/XEvents ·   (HTTPS, or an audit stream)
   MongoDB profiler · Oracle unified audit)
 ```
@@ -315,7 +315,7 @@ Findings appear under **Vulnerability** in the DAM console. `VA_SCAN=true` with 
 
 ## 4. Step 3 — Get your enrollment token
 
-In the **TooVix DAM console**:
+In the **SecurEra DAM console**:
 1. Go to **Agents → Deploy monitoring** (or **Databases → register your instance**, then Deploy).
 2. Select your instance and the **AgentLite (Audit Forwarder)** mode.
 3. Copy the **enrollment token** shown (looks like `tvxenr_…`) and the **control-plane URL** (e.g. `https://dam.yourcompany.com`).
@@ -402,7 +402,7 @@ docker run -d --name toovix-agent-audit --restart unless-stopped \
 
 **A healthy MongoDB start looks like:**
 ```
-=== TooVix DAM Agent · mode=audit-forward engine=mongodb target=10.0.0.10:27017 ===
+=== SecurEra DAM Agent · mode=audit-forward engine=mongodb target=10.0.0.10:27017 ===
 enrolled: agent=… instance=… tenant=…
 AgentLite audit-forward tailing mongodb-10.0.0.10-27017-<db> (source=profiler engine=mongodb)
 audit-forward(mongodb): profiler already at level 2 (slowms=0)
@@ -433,7 +433,7 @@ docker run -d --name toovix-agent-audit --restart unless-stopped \
 
 **A healthy start looks like:**
 ```
-=== TooVix DAM Agent · mode=audit-forward engine=mysql target=127.0.0.1:3306 ===
+=== SecurEra DAM Agent · mode=audit-forward engine=mysql target=127.0.0.1:3306 ===
 enrolled: agent=… instance=… tenant=…
 AgentLite audit-forward tailing /var/log/mysql/general.log (source=general_log engine=mysql)
 [capture] SELECT  rows=…  <user>  SELECT …
@@ -545,4 +545,4 @@ A healthy start then logs: `AgentLite: publishing audit events to Pub/Sub topic 
 
 ---
 
-*Questions, or an engine not covered here? Contact your TooVix DAM operator. AgentLite audit-forward supports **MySQL/MariaDB, PostgreSQL, SQL Server (Audit + Extended Events), MongoDB, and Oracle**, across VMs and managed services (Cloud SQL, RDS, Azure SQL, Atlas, Autonomous DB). For real-time blocking, or row counts on an engine whose audit source lacks them, use network / host / inline-proxy capture instead.*
+*Questions, or an engine not covered here? Contact your SecurEra DAM operator. AgentLite audit-forward supports **MySQL/MariaDB, PostgreSQL, SQL Server (Audit + Extended Events), MongoDB, and Oracle**, across VMs and managed services (Cloud SQL, RDS, Azure SQL, Atlas, Autonomous DB). For real-time blocking, or row counts on an engine whose audit source lacks them, use network / host / inline-proxy capture instead.*

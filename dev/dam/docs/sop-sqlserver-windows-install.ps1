@@ -1,5 +1,5 @@
 <#
-    TooVix DAM — Windows SQL Server host agent installer.
+    SecurEra DAM — Windows SQL Server host agent installer.
     Run from an ELEVATED PowerShell on the SQL Server host. Writes the config file, installs the
     Windows service, and starts it. Requires the XEvents session (Step 1) and login (Step 2) to
     already exist — see sop-sqlserver-windows-host-agent.md.
@@ -35,13 +35,13 @@ if (-not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdent
 if (-not (Test-Path $ExePath)) { throw "dam-agent.exe not found at $ExePath" }
 
 # 1. Install the binary to a stable location
-$installDir = 'C:\Program Files\TooVix'
+$installDir = 'C:\Program Files\SecurEra'
 New-Item -ItemType Directory -Force $installDir | Out-Null
 $exe = Join-Path $installDir 'dam-agent.exe'
 Copy-Item $ExePath $exe -Force
 
-# 2. Write the config file the service reads (C:\ProgramData\TooVix\dam-agent.env)
-$cfgDir = 'C:\ProgramData\TooVix'
+# 2. Write the config file the service reads (C:\ProgramData\SecurEra\dam-agent.env)
+$cfgDir = 'C:\ProgramData\SecurEra'
 New-Item -ItemType Directory -Force $cfgDir | Out-Null
 $lines = @(
   "CONTROL_PLANE=$ControlPlane"
@@ -72,4 +72,4 @@ Get-Service TooVixDAMAgent | Format-Table -AutoSize
 
 Write-Host ""
 Write-Host "Tail the agent log with:"
-Write-Host "  Get-Content 'C:\ProgramData\TooVix\dam-agent.log' -Tail 20 -Wait"
+Write-Host "  Get-Content 'C:\ProgramData\SecurEra\dam-agent.log' -Tail 20 -Wait"

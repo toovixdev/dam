@@ -1,6 +1,6 @@
-# TooVix DAM — Super Admin Application Knowledge Base
+# SecurEra DAM — Super Admin Application Knowledge Base
 
-> **Purpose:** Feature specification for the internal Super Admin console that manages the TooVix DAM platform — tenants, infrastructure, billing, content, security, and customer success.
+> **Purpose:** Feature specification for the internal Super Admin console that manages the SecurEra DAM platform — tenants, infrastructure, billing, content, security, and customer success.
 > **Audience:** Platform operations, engineering, customer support, finance, customer success.
 > **Companion:** [DAM-Knowledge-Base.md](../DAM-Knowledge-Base.md) — the core product KB.
 
@@ -208,7 +208,7 @@
 - Segregation of duties: support can't approve their own break-glass.
 
 ### 6.4 SOC 2 Evidence Collection `[should-have]`
-- Auto-generate evidence for TooVix's own SOC 2 / ISO 27001 audits.
+- Auto-generate evidence for SecurEra's own SOC 2 / ISO 27001 audits.
 - Access logs, change logs, incident response records, vendor access reviews.
 - Evidence export as PDF/CSV bundle for auditors.
 

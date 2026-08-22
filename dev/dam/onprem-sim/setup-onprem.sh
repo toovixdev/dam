@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Turn THIS Linux VM into a simulated on-prem MySQL server monitored by TooVix DAM.
+# Turn THIS Linux VM into a simulated on-prem MySQL server monitored by SecurEra DAM.
 # Installs MySQL, enables its general query log (the AgentLite audit source), seeds a
 # realistic app schema with PII/PCI, then installs and starts the DAM AgentLite agent
 # (audit-forward) which ships activity to your DAM control plane over HTTPS.
@@ -35,7 +35,7 @@ sudo systemctl restart mysql
 echo "==> [3/5] Seeding app schema + sensitive data + monitoring/app logins..."
 sudo mysql < "$HERE/seed.sql"
 
-echo "==> [4/5] Installing the TooVix DAM agent (.deb) from the control plane..."
+echo "==> [4/5] Installing the SecurEra DAM agent (.deb) from the control plane..."
 curl -fsSL "$CONTROL_PLANE/api/download/dam-agent_amd64.deb" -o /tmp/dam-agent.deb
 sudo dpkg -i /tmp/dam-agent.deb || sudo apt-get -f install -y
 

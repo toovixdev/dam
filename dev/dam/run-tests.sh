@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# TooVix DAM test runner. Runs every layer that needs no live infrastructure:
+# SecurEra DAM test runner. Runs every layer that needs no live infrastructure:
 #   • API unit tests        (secrets encryption, compliance catalog)        — node
 #   • Consumer unit tests    (Cloud SQL / Azure / AgentLite normalizers)     — node
 #   • Agent Go unit tests    (masked-at-rest detection, identifier quoting)  — go

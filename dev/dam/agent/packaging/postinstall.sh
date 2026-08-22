@@ -7,7 +7,7 @@ systemctl daemon-reload 2>/dev/null || true
 
 cat <<'EOF'
 
-TooVix DAM agent installed (systemd template: dam-agent@<mode>).
+SecurEra DAM agent installed (systemd template: dam-agent@<mode>).
 
 Run one agent per mode — they coexist without colliding:
 

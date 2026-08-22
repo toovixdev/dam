@@ -1,6 +1,6 @@
 # SOP — Install the Host (eBPF) Agent on a PostgreSQL VM
 
-**Purpose:** onboard a self-managed **PostgreSQL on a VM** into TooVix DAM using **host (eBPF) capture** —
+**Purpose:** onboard a self-managed **PostgreSQL on a VM** into SecurEra DAM using **host (eBPF) capture** —
 uprobes on `libssl` that read plaintext *below* TLS. Includes the pre-checks (go/no-go gates) and the install.
 
 **⭐ Hard requirement:** host mode hooks `libssl`, so **PostgreSQL must use TLS and your app must actually
@@ -109,7 +109,7 @@ docker run -d --name toovix-agent-host --restart unless-stopped \
 
 ### Healthy start
 ```
-=== TooVix DAM Agent · mode=host engine=postgresql target=10.0.0.30:5432 ===
+=== SecurEra DAM Agent · mode=host engine=postgresql target=10.0.0.30:5432 ===
 enrolled: agent=… instance=… tenant=…
 host: DB process "postgres" pid=1234 uses /usr/lib/x86_64-linux-gnu/libssl.so.3
 host: attached uprobe SSL_write / SSL_read

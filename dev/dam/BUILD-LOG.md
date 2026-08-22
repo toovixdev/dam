@@ -405,7 +405,7 @@ Completed the MySQL inline-proxy agent (focus on MySQL; postgres/mongo decoders 
   `traffic-gen` tolerates the missing PG/Mongo (guarded connects).
 
 **Verified:** live traffic captured continuously; `DROP TABLE transactions` via the proxy → refused
-with `ERROR 1142 … Query blocked by TooVix DAM policy`, the table **still exists**, and a
+with `ERROR 1142 … Query blocked by SecurEra DAM policy`, the table **still exists**, and a
 "Blocked by policy" alert appears in `/api/alerts`. Agent online; instance coverage = Inline Proxy.
 
 > Still open (later): real TLS visibility (proxy TLS-termination), network/host modes, postgres/mongo
@@ -1661,7 +1661,7 @@ The login page was cosmetically + functionally tied to Meridian. Made it generic
   their own tenant by email. The `else` branch used to **auto-provision unknown identities into
   `tenants LIMIT 1` (Meridian)** — both a Meridian hardcoding and a security hole (any Azure account could
   land in Meridian as a viewer). Now unknown SSO identities are **rejected** with
-  `?error=No TooVix workspace is linked to <email>…` — they must be invited by an admin or self-serve sign
+  `?error=No SecurEra workspace is linked to <email>…` — they must be invited by an admin or self-serve sign
   up. (Deferred: first-time SSO org onboarding keyed on Azure `tid`/email-domain.)
 - Verified: Meridian admin password login → resolves to Meridian tenant; unknown email → generic 401.
 
@@ -1988,7 +1988,7 @@ stored server-side, write-only, never sent to the browser.
 A second, general-purpose chatbot for everyday questions — not tied to the tenant's DAM data. Reuses the
 **same** per-tenant BYO LLM config as the Copilot (one key, two experiences).
 - **Backend** (`main.js`): `POST /api/assistant/chat` now takes an optional `grounded` flag. `grounded:false`
-  skips `buildDamContext` and uses a general assistant system prompt ("TooVix Assistant… answer clearly
+  skips `buildDamContext` and uses a general assistant system prompt ("SecurEra Assistant… answer clearly
   across any topic… not connected to live DAM data → point to Copilot for that"). Default stays `true`
   (Copilot behaviour unchanged). Same Anthropic/OpenAI adapters, same audit.
 - **Frontend** [Assistant.jsx](../frontend/src/pages/Assistant.jsx): general chat page — reuses the exported
@@ -2270,7 +2270,7 @@ larger profile collection is the mitigation.
 ## 67. Compliance evidence catalog + tamper-evident attestation workflow
 
 Closed the largest "compliance reporting depth" gap against the incumbents (IBM Guardium's
-Compliance Accelerators): TooVix had posture *scores* (`compliance_scores`), report *cards*
+Compliance Accelerators): SecurEra had posture *scores* (`compliance_scores`), report *cards*
 (`REPORTS`), and DDL-change attestation, but no **control-mapped report catalog** and no general
 **report → review → sign-off → sealed evidence** loop. That sign-off loop is what auditors actually
 buy — documented proof a human reviewed DB activity (PCI 10.6, SOX control attestation).
@@ -2722,7 +2722,7 @@ OpenSSL — no libssl to probe), so this uses the XEvents source instead.
 - `main()` → `platformMain(runAgent)`; `platform_windows.go` adds SCM integration (`svc.Run` +
   install/uninstall/start/stop subcommands, file logging under ProgramData);
   `platform_other.go` runs directly on Linux/macOS.
-- `env_file.go` — a service inherits no env, so read `%ProgramData%\TooVix\dam-agent.env`
+- `env_file.go` — a service inherits no env, so read `%ProgramData%\SecurEra\dam-agent.env`
   (or `DAM_AGENT_ENV`); real env wins. `x/sys` promoted to a direct dep.
 
 **Verified:** `GOOS=windows` build → `dam-agent.exe` (30 MB); full **Linux** Docker image

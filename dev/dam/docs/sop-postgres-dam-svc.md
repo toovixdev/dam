@@ -1,6 +1,6 @@
 # SOP — Create the read-only `dam_svc` role (PostgreSQL)
 
-**Purpose:** a least-privilege PostgreSQL login for TooVix DAM **classification** and **VA scanning**.
+**Purpose:** a least-privilege PostgreSQL login for SecurEra DAM **classification** and **VA scanning**.
 **Not needed for capture** — host/network/AgentLite capture never logs in as this user. `dam_svc` is strictly
 read-only and can never modify data.
 

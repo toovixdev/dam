@@ -1,4 +1,4 @@
-# TooVix DAM — Test Suite
+# SecurEra DAM — Test Suite
 
 Functional + regression tests for the DAM stack, organised in layers so most of it runs with
 **no live infrastructure**. One command runs everything:
