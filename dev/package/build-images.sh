@@ -10,24 +10,35 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."                       # -> dev/
 : "${TAG:=prod}"; : "${REGISTRY:=}"; : "${PUSH:=0}"
+# Target servers are x86_64 — force it so a build on an arm64 machine (e.g. Apple Silicon) still
+# produces runnable images. Override with PLATFORM=linux/arm64 only for an arm target.
+: "${PLATFORM:=linux/amd64}"
 : "${CP:=https://dam.suchirasoistories.in}"   # where to fetch the pre-built agent artifacts
 ref(){ if [ -n "$REGISTRY" ]; then echo "${REGISTRY%/}/$1:$TAG"; else echo "$1:$TAG"; fi; }
 
-echo "== 1/4 fetch pre-built agent artifacts (served at /api/download) =="
+echo "== 1/4 gather pre-built agent artifacts (Dockerfile.prod copies the whole dir) =="
 mkdir -p dam/prebuilt-artifacts
+# Keep any artifact you pre-placed (e.g. a locally-built dam-agent.exe); otherwise fetch it from
+# the control plane. A 404 is non-fatal — the download for that platform is simply unavailable.
 for f in dam-agent-linux-amd64 dam-agent.exe dam-agent_amd64.deb dam-agent_amd64.rpm; do
-  curl -fsSL "$CP/api/download/$f" -o "dam/prebuilt-artifacts/$f"
-  printf '   %-26s %s\n' "$f" "$(du -h dam/prebuilt-artifacts/$f | cut -f1)"
+  if [ -s "dam/prebuilt-artifacts/$f" ]; then
+    printf '   %-26s %s (kept — pre-placed)\n' "$f" "$(du -h dam/prebuilt-artifacts/$f | cut -f1)"
+  elif curl -fsSL "$CP/api/download/$f" -o "dam/prebuilt-artifacts/$f"; then
+    printf '   %-26s %s\n' "$f" "$(du -h dam/prebuilt-artifacts/$f | cut -f1)"
+  else
+    rm -f "dam/prebuilt-artifacts/$f"
+    printf '   %-26s !! not served by %s — SKIPPED (that download will be unavailable)\n' "$f" "$CP"
+  fi
 done
 
-echo "== 2/4 build self-contained images =="
-docker build -t "$(ref dam-api)"             -f dam/api/Dockerfile.prod            dam
-docker build -t "$(ref dam-react)"           -f dam/frontend/Dockerfile.prod       dam/frontend
-docker build -t "$(ref dam-admin-react)"     -f dam/admin-frontend/Dockerfile.prod dam/admin-frontend
-docker build -t "$(ref dam-collector)"       dam/collector
-docker build -t "$(ref dam-audit-consumer)"  dam/audit-consumer
-docker build -t "$(ref dam-approval-signer)" dam/approval-signer
-docker build -t "$(ref dam-discovery)"       dam/discovery
+echo "== 2/4 build self-contained images (platform=$PLATFORM) =="
+docker build --platform "$PLATFORM" -t "$(ref dam-api)"             -f dam/api/Dockerfile.prod            dam
+docker build --platform "$PLATFORM" -t "$(ref dam-react)"           -f dam/frontend/Dockerfile.prod       dam/frontend
+docker build --platform "$PLATFORM" -t "$(ref dam-admin-react)"     -f dam/admin-frontend/Dockerfile.prod dam/admin-frontend
+docker build --platform "$PLATFORM" -t "$(ref dam-collector)"       dam/collector
+docker build --platform "$PLATFORM" -t "$(ref dam-audit-consumer)"  dam/audit-consumer
+docker build --platform "$PLATFORM" -t "$(ref dam-approval-signer)" dam/approval-signer
+docker build --platform "$PLATFORM" -t "$(ref dam-discovery)"       dam/discovery
 
 echo "== 3/4 generate the prod compose + bundle config files =="
 docker compose -f docker-compose.yml config --no-interpolate --format json \
