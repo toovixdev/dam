@@ -97,7 +97,7 @@ export default function Quarantine() {
         title="Quarantine"
         meta={[<LivePill key="live" />, 'Blocked accounts · containment & review', `${held} account${held === 1 ? '' : 's'} held`]}
       >
-        <button className="btn-secondary" onClick={() => { exportCsv('toovix-quarantine.csv', ['Session', 'Principal', 'Database', 'Severity', 'Reason', 'Status', 'Held', 'Resolved'], rows.map((s) => [s.session_id, s.principal, s.database_name, s.severity, s.reason, s.status, s.held_at, s.resolved_at])); toast(`Exported ${rows.length} sessions`, 'ok'); }}>⤓ Export</button>
+        <button className="btn-secondary" onClick={() => { exportCsv('securera-quarantine.csv', ['Session', 'Principal', 'Database', 'Severity', 'Reason', 'Status', 'Held', 'Resolved'], rows.map((s) => [s.session_id, s.principal, s.database_name, s.severity, s.reason, s.status, s.held_at, s.resolved_at])); toast(`Exported ${rows.length} sessions`, 'ok'); }}>⤓ Export</button>
         <button className="btn-secondary" onClick={() => setQAcctOpen(true)}>⛔ Quarantine account</button>
         <button className="btn-primary" onClick={() => setPolicyOpen(true)}>⛨ Quarantine policy</button>
       </PageHeader>

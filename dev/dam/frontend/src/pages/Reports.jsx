@@ -31,7 +31,7 @@ function downloadReportCsv(report) {
   const csv = lines.map((r) => r.map(esc).join(',')).join('\n');
   const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
   const a = document.createElement('a');
-  a.href = url; a.download = `toovix-${report.type}-report.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  a.href = url; a.download = `securera-${report.type}-report.csv`; document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
 function ReportView({ report, onPrint }) {

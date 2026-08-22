@@ -40,7 +40,7 @@ export default function ChangeLog() {
 
   const onExport = () => {
     // "Change ID" first — keep it in the CSV so the returned file can be bulk-imported.
-    exportCsv('toovix-ddl-change-log.csv',
+    exportCsv('securera-ddl-change-log.csv',
       ['Change ID', 'When (UTC)', 'Principal', 'Database', 'Object', 'Operation', 'In change window', 'CR#', 'Status', 'Statement'],
       changes.map((c) => [c.id, c.event_ts, c.principal, c.database_name, c.object_name, c.operation, c.in_window ? 'yes' : 'no', c.cr_number, c.status, c.statement]));
     toast(`Exported ${changes.length} changes`, 'ok');

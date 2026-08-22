@@ -39,7 +39,7 @@ function DeployDecoyModal({ open, onClose, onDeployed }) {
   return (
     <Modal open={open} onClose={onClose} title="Deploy a decoy (honeypot)" width={460}>
       <p className="muted" style={{ fontSize: 12.5, lineHeight: 1.5, margin: '0 0 14px' }}>
-        A decoy is a table no legitimate app should ever touch. TooVix arms it and raises a <b>critical alert</b> the
+        A decoy is a table no legitimate app should ever touch. SecurEra arms it and raises a <b>critical alert</b> the
         moment any principal queries it — the query is caught inline even if the table doesn’t exist.
       </p>
       <div className="form-row">

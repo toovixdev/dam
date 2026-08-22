@@ -68,12 +68,12 @@ export default function AuditTrail() {
 
   const onExport = () => {
     if (tab === 'db') {
-      exportCsv('toovix-db-activity.csv',
+      exportCsv('securera-db-activity.csv',
         [`Time (${tzShortName(tz)})`, 'Principal', 'Database', 'Instance', 'Host', 'Action', 'SQL', 'Rows', 'Score', 'Chain'],
         actRows.map((r) => [formatDate(r.timestamp, tz), r.principal, r.database_name, r.instance_name || '', r.source_host || r.client_ip, r.operation, (r.sql_text || '').replace(/\s+/g, ' '), r.row_count, r.anomaly_score, r.chain]));
       toast(`Exported ${actRows.length} activity rows`, 'ok');
     } else {
-      exportCsv('toovix-control-plane-audit.csv',
+      exportCsv('securera-control-plane-audit.csv',
         [`Time (${tzShortName(tz)})`, 'Actor', 'Action', 'Resource', 'Details'],
         cpRows.map((r) => [formatDate(r.created_at, tz), r.actor_email, r.action, r.resource_type, JSON.stringify(r.details || {})]));
       toast(`Exported ${cpRows.length} audit rows`, 'ok');

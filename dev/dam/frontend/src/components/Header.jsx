@@ -1,11 +1,12 @@
 import { getUser } from '../api/client';
 import { fmtTs, getTimezone } from '../hooks/useTimezone';
+import BrandMark from './BrandMark';
 
 export default function Header({ lastRefresh, onRefresh }) {
   const user = getUser();
   const name = user?.fullName || 'User';
   const initials = name.split(' ').map(p => p[0]).join('').substring(0, 2).toUpperCase();
-  const tenant = user?.tenantName || 'TooVix DAM';
+  const tenant = user?.tenantName || 'SecurEra DAM';
 
   function handleSignOut() {
     // Only SSO users need their IdP session cleared; local users just go to /login.
@@ -24,8 +25,8 @@ export default function Header({ lastRefresh, onRefresh }) {
     <header className="app-header">
       <div className="header-left">
         <div className="brand">
-          <span className="brand-dot">T</span>
-          <span className="brand-text">TooVix <span className="brand-sub">DAM</span></span>
+          <BrandMark size={30} />
+          <span className="brand-text">SecurEra <span className="brand-sub">DAM</span></span>
         </div>
       </div>
       <div className="header-center">

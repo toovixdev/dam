@@ -503,7 +503,7 @@ function CloudConnectors({ tenantClouds, cloudLabel, onChanged }) {
 const GCP_SETUP = `# Create a READ-ONLY service account for Cloud SQL discovery (run in your GCP project):
 export PROJECT=YOUR_PROJECT_ID
 gcloud iam service-accounts create toovix-dam-discovery \\
-  --project=$PROJECT --display-name="TooVix DAM discovery (read-only)"
+  --project=$PROJECT --display-name="SecurEra DAM discovery (read-only)"
 gcloud projects add-iam-policy-binding $PROJECT \\
   --member="serviceAccount:toovix-dam-discovery@$PROJECT.iam.gserviceaccount.com" \\
   --role="roles/cloudsql.viewer"

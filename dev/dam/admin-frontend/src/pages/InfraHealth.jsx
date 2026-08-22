@@ -36,7 +36,7 @@ export default function InfraHealth() {
 
   return (
     <Layout lastRefresh={lastRefresh} onRefresh={refetch}>
-      <PageHeader title="Infrastructure Health" meta={['TooVix DAM · Super Admin', 'live service probes']}>
+      <PageHeader title="Infrastructure Health" meta={['SecurEra DAM · Super Admin', 'live service probes']}>
         <span className="badge status-green">● live</span>
       </PageHeader>
 

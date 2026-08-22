@@ -131,7 +131,7 @@ export default function Alerts() {
     else toast('Action failed', 'err');
   };
   const onExport = () => {
-    exportCsv('toovix-alerts.csv',
+    exportCsv('securera-alerts.csv',
       ['ID', 'Severity', 'Alert', 'Rule', 'Principal', 'Database', 'Instance', 'Host', 'Score', 'Status', 'Created'],
       filtered.map((a) => [a.id, a.severity, a.summary, a.rule, a.principal, a.database_name, a.instance_name || '', a.instance_host || '', a.anomaly_score, a.status, a.created_at]));
     toast(`Exported ${filtered.length} alerts`, 'ok');

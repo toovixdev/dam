@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import BrandMark from '../components/BrandMark';
 
 const SSO_LOGO = { azure: { bg: '#0078d4', mark: '▲' }, okta: { bg: '#007dc1', mark: 'O' }, google: { bg: '#ea4335', mark: 'G' } };
 
@@ -173,7 +174,7 @@ export default function Login() {
     <div className="login-page">
       <div className="login-brand-panel">
         <div className="login-brand-top">
-          <span className="brand-dot">T</span> TooVix <span className="brand-sub">DAM</span>
+          <BrandMark size={30} white /> SecurEra <span className="brand-sub">DAM</span>
         </div>
         <div className="login-brand-content">
           <h2>See every query.<br />Stop every breach.</h2>
@@ -185,7 +186,7 @@ export default function Login() {
             <div className="login-feat"><span className="feat-icon" style={{ background: 'rgba(192,132,252,.2)', color: '#c084fc' }}>✦</span> LLM data-security — redact PII before it reaches ChatGPT</div>
           </div>
           <div className="login-quote">
-            "TooVix gave us a single audited view across 240 production databases — and cut our compliance audit prep from weeks to a day."
+            "SecurEra gave us a single audited view across 240 production databases — and cut our compliance audit prep from weeks to a day."
             <span className="login-quote-who">— CISO, global financial services group</span>
           </div>
         </div>
@@ -193,7 +194,7 @@ export default function Login() {
 
       <div className="login-form-panel">
         <div className="login-form-box">
-          <div className="login-mini-brand"><span className="brand-dot-sm">T</span> TooVix <span className="brand-sub">DAM</span></div>
+          <div className="login-mini-brand"><BrandMark size={24} /> SecurEra <span className="brand-sub">DAM</span></div>
 
           {mfaStage === 'verify' ? (
             /* ── MFA · enter code ── */
@@ -265,7 +266,7 @@ export default function Login() {
                 {error && <div className="login-error">{error}</div>}
                 <button type="submit" className="login-submit" disabled={resolving}>{resolving ? 'Checking…' : 'Continue'}</button>
               </form>
-              <p className="login-footer" style={{ textAlign: 'center' }}>New to TooVix? <Link to="/signup">Create a workspace</Link></p>
+              <p className="login-footer" style={{ textAlign: 'center' }}>New to SecurEra? <Link to="/signup">Create a workspace</Link></p>
             </>
           ) : (
             /* ── Step 2 · credentials for the resolved workspace (no tenant name shown) ── */
@@ -319,10 +320,10 @@ export default function Login() {
 
               {!showPasswordForm && error && <div className="login-error">{error}</div>}
 
-              <p className="login-footer" style={{ textAlign: 'center' }}>New to TooVix? <Link to="/signup">Create a workspace</Link></p>
+              <p className="login-footer" style={{ textAlign: 'center' }}>New to SecurEra? <Link to="/signup">Create a workspace</Link></p>
             </>
           )}
-          <p className="login-footer">Protected by TooVix · all sign-ins are logged for audit</p>
+          <p className="login-footer">Protected by SecurEra · all sign-ins are logged for audit</p>
         </div>
       </div>
     </div>

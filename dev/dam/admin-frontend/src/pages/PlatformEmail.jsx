@@ -116,7 +116,7 @@ export default function PlatformEmail() {
             <input type="password" value={f.password} onChange={(e) => set('password', e.target.value)} placeholder={data?.passwordSet ? '•••••••• (unchanged — leave blank to keep)' : 'Send Mail Token / SMTP password'} />
           </div>
           <div className="form-field"><label>From address</label>
-            <input value={f.from} onChange={(e) => set('from', e.target.value)} placeholder="TooVix DAM <alerts@yourdomain.com>" />
+            <input value={f.from} onChange={(e) => set('from', e.target.value)} placeholder="SecurEra DAM <alerts@yourdomain.com>" />
             <span className="muted" style={{ fontSize: 11 }}>Must be on a domain your provider is allowed to send from.</span>
           </div>
 

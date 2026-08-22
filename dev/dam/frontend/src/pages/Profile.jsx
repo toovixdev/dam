@@ -79,7 +79,7 @@ export default function Profile() {
             <span className="topbar-avatar" style={{ width: 72, height: 72, fontSize: 24 }}>{initials}</span>
             <div>
               <h2 style={{ margin: '0 0 2px', fontSize: 20, fontWeight: 800 }}>{name}</h2>
-              <div className="muted" style={{ fontSize: 13.5 }}>{ROLE_LABELS[roleKey] || roleKey} · <b style={{ color: 'var(--ink)' }}>{user?.tenantName || 'TooVix DAM'}</b></div>
+              <div className="muted" style={{ fontSize: 13.5 }}>{ROLE_LABELS[roleKey] || roleKey} · <b style={{ color: 'var(--ink)' }}>{user?.tenantName || 'SecurEra DAM'}</b></div>
             </div>
           </div>
           <div className="def-grid">

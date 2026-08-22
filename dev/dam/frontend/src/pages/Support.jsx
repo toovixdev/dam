@@ -11,7 +11,7 @@ const AI_RESPONSES = {
   'set up cloud push for rds': 'To set up Cloud Push for an AWS RDS database:\n\n**Step 1:** Enable native audit logging (pgaudit for PostgreSQL, SERVER_AUDIT_LOGGING for Aurora MySQL). Logs publish to CloudWatch automatically.\n\n**Step 2:** Create an IAM role `TooVixDAMAuditReader` with read access to CloudWatch Logs and RDS describe.\n\n**Step 3:** Go to Agents & Coverage → Deploy monitoring → Agentless → Cloud Push → select your RDS database.\n\n**Step 4:** Enter your AWS Account ID and IAM Role ARN, then click Validate connection.',
   'what does risk score 91 mean?': 'A risk score of **91/100** is **critical**. It means this database has high sensitivity (PII/PCI/regulated data), high exposure (multiple privileged access patterns), and active threats (recent anomalous alerts).\n\nThe score weights: sensitivity tags (40%), alert history (30%), access patterns (20%), compliance gaps (10%).',
 };
-const DEFAULT_RESPONSE = 'I understand your question. Based on your TooVix DAM configuration, I\'d recommend checking the relevant documentation section. If that doesn\'t resolve it, I can:\n\n1. **Create a support ticket** — automatically includes your environment context\n2. **Bring in a human engineer** — they join this chat with full history\n\nWhat would you prefer?';
+const DEFAULT_RESPONSE = 'I understand your question. Based on your SecurEra DAM configuration, I\'d recommend checking the relevant documentation section. If that doesn\'t resolve it, I can:\n\n1. **Create a support ticket** — automatically includes your environment context\n2. **Bring in a human engineer** — they join this chat with full history\n\nWhat would you prefer?';
 
 const SUGGESTIONS = [
   { q: 'Why are 2 agents offline?', label: 'Why are 2 agents offline?' },
@@ -53,7 +53,7 @@ export default function Support() {
       if (key.includes('bring in') || key.includes('engineer')) {
         setMessages((prev) => [...prev, { bot: true, text: 'Bringing in a support engineer with full context of our chat.\n\n**Estimated wait:** < 2 minutes (Enterprise priority queue)' }]);
         setTimeout(() => {
-          setMessages((prev) => [...prev, { bot: true, engineer: true, text: 'Hi, I\'m **Ravi S.** from TooVix support. I\'ve reviewed the AI conversation and can see the offline-agent issue. Did your infra team do any maintenance on the 10.20.14.x subnet recently?' }]);
+          setMessages((prev) => [...prev, { bot: true, engineer: true, text: 'Hi, I\'m **Ravi S.** from SecurEra support. I\'ve reviewed the AI conversation and can see the offline-agent issue. Did your infra team do any maintenance on the 10.20.14.x subnet recently?' }]);
           toast('Ravi S. (Support Engineer) joined the chat', 'ok');
         }, 1600);
         return;
@@ -80,34 +80,34 @@ export default function Support() {
 
       <div className="grid3" style={{ marginBottom: 14 }}>
         <div className="qa-card" onClick={() => document.getElementById('chatInput')?.focus()}>
-          <div className="qa-icon">✦</div><div className="qa-title">Ask AI Assistant</div><div className="qa-desc">Get instant answers from TooVix AI</div>
+          <div className="qa-icon">✦</div><div className="qa-title">Ask AI Assistant</div><div className="qa-desc">Get instant answers from SecurEra AI</div>
         </div>
         <div className="qa-card" onClick={() => openTicket(null)}>
           <div className="qa-icon">⚑</div><div className="qa-title">Create Ticket</div><div className="qa-desc">Open a support request</div>
         </div>
-        <div className="qa-card" onClick={() => toast('Opening TooVix DAM documentation', 'ok')}>
+        <div className="qa-card" onClick={() => toast('Opening SecurEra DAM documentation', 'ok')}>
           <div className="qa-icon">📄</div><div className="qa-title">Documentation</div><div className="qa-desc">Product guides &amp; API docs</div>
         </div>
       </div>
 
       <div className="grid2" style={{ alignItems: 'start' }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>✦ TooVix AI Assistant</div>
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>✦ SecurEra AI Assistant</div>
           <div className="chat-container">
             <div className="chat-header">
               <span className="ch-dot" />
-              <div style={{ flex: 1 }}><b>TooVix Support</b><br /><span style={{ fontSize: 11, opacity: .7 }}>AI-powered — hands off to a human engineer when needed</span></div>
+              <div style={{ flex: 1 }}><b>SecurEra Support</b><br /><span style={{ fontSize: 11, opacity: .7 }}>AI-powered — hands off to a human engineer when needed</span></div>
             </div>
             <div className="chat-messages">
               {messages.map((m, i) => {
                 if (m.intro) {
                   return (
                     <div className="chat-msg bot" key={i}>
-                      Hi! I&apos;m TooVix AI Assistant. I can help with troubleshooting agents, understanding alerts &amp; policies, product questions, and configuration.
+                      Hi! I&apos;m SecurEra AI Assistant. I can help with troubleshooting agents, understanding alerts &amp; policies, product questions, and configuration.
                       <div className="chat-suggestions">
                         {SUGGESTIONS.map((s) => <span className="chat-sug" key={s.q} onClick={() => send(s.q)}>{s.label}</span>)}
                       </div>
-                      <div className="msg-meta">TooVix AI · just now</div>
+                      <div className="msg-meta">SecurEra AI · just now</div>
                     </div>
                   );
                 }
@@ -120,7 +120,7 @@ export default function Support() {
                         <span className="chat-sug" onClick={() => send('Bring in an engineer')}>Bring in engineer</span>
                       </div>
                     )}
-                    <div className="msg-meta">{m.engineer ? 'Ravi S. (Support Engineer)' : m.bot ? 'TooVix AI' : 'You'} · just now</div>
+                    <div className="msg-meta">{m.engineer ? 'Ravi S. (Support Engineer)' : m.bot ? 'SecurEra AI' : 'You'} · just now</div>
                   </div>
                 );
               })}

@@ -52,7 +52,7 @@ export default function PlatformDashboard() {
     <Layout lastRefresh={lastRefresh} onRefresh={refetch}>
       <PageHeader
         title="Platform Dashboard"
-        meta={['TooVix DAM · Super Admin', `${regions.length || 0} regions · ${tenants.total} tenants`]}
+        meta={['SecurEra DAM · Super Admin', `${regions.length || 0} regions · ${tenants.total} tenants`]}
       />
 
       {/* KPI Row 1 */}

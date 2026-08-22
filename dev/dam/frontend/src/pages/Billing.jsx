@@ -117,7 +117,7 @@ export default function Billing() {
     if (!loaded) return toast('Could not load Razorpay checkout', 'err');
     const opts = {
       key: o.keyId, amount: o.amount, currency: o.currency,
-      name: 'TooVix DAM', description: `Invoice ${o.reference}${o.mode === 'demo' ? ' (test)' : ''}`,
+      name: 'SecurEra DAM', description: `Invoice ${o.reference}${o.mode === 'demo' ? ' (test)' : ''}`,
       prefill: { email: o.email }, theme: { color: '#6366f1' },
       handler: async (r) => {
         const endpoint = o.orderId ? '/billing/razorpay/verify' : '/billing/razorpay/demo-confirm';
@@ -163,7 +163,7 @@ export default function Billing() {
     form.submit(); // leaves the app → returns to /billing?payu=... via the callback
   };
   const downloadAll = () => {
-    exportCsv('toovix-invoices.csv', ['Reference', 'Period', 'Amount (USD)', 'Status', 'Due'], invoices.map((i) => [i.reference, i.period, Number(i.amount).toFixed(2), i.status, (i.due_date || '').slice(0, 10)]));
+    exportCsv('securera-invoices.csv', ['Reference', 'Period', 'Amount (USD)', 'Status', 'Due'], invoices.map((i) => [i.reference, i.period, Number(i.amount).toFixed(2), i.status, (i.due_date || '').slice(0, 10)]));
     toast(`Exported ${invoices.length} invoices`, 'ok');
   };
 

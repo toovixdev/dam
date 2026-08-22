@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import BrandMark from '../components/BrandMark';
 
 // Strength = length + character-class variety. `ok` mirrors the backend policy
 // (≥8 chars and at least 3 of {lowercase, uppercase, digit, symbol}).
@@ -73,7 +74,7 @@ export default function Signup() {
     <div className="login-page">
       <div className="login-brand-panel">
         <div className="login-brand-top">
-          <span className="brand-dot">T</span> TooVix <span className="brand-sub">DAM</span>
+          <BrandMark size={30} white /> SecurEra <span className="brand-sub">DAM</span>
         </div>
         <div className="login-brand-content">
           <h2>Start monitoring<br />in minutes.</h2>
@@ -89,7 +90,7 @@ export default function Signup() {
 
       <div className="login-form-panel">
         <div className="login-form-box">
-          <div className="login-mini-brand"><span className="brand-dot-sm">T</span> TooVix <span className="brand-sub">DAM</span></div>
+          <div className="login-mini-brand"><BrandMark size={24} /> SecurEra <span className="brand-sub">DAM</span></div>
 
           {sent ? (
             <>

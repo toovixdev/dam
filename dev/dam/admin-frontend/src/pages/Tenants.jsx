@@ -241,8 +241,8 @@ function ManageModal({ tenant: t, onClose, navigate, onChanged }) {
 // Create tenant wizard — 3 steps. The final step performs a REAL POST.
 // ─────────────────────────────────────────────────────────────
 const DEPLOY_CARDS = [
-  { id: 'saas', ic: '☁', title: 'SaaS (Multi-tenant)', desc: 'Fully managed on TooVix cloud. Shared infra with tenant isolation. Fastest to provision.' },
-  { id: 'cloud', ic: '⚙', title: 'Customer Cloud', desc: "Data plane runs in the customer's AWS / Azure / GCP / OCI account. Control plane on TooVix." },
+  { id: 'saas', ic: '☁', title: 'SaaS (Multi-tenant)', desc: 'Fully managed on SecurEra cloud. Shared infra with tenant isolation. Fastest to provision.' },
+  { id: 'cloud', ic: '⚙', title: 'Customer Cloud', desc: "Data plane runs in the customer's AWS / Azure / GCP / OCI account. Control plane on SecurEra." },
   { id: 'onprem', ic: '◆', title: 'On-prem / Air-gapped', desc: "Full stack in the customer's data center. No cloud dependency." },
 ];
 const PROVISION_STEPS = [

@@ -1,6 +1,6 @@
 :root, [data-theme="light"] {
-  --primary: #6366f1;
-  --primary-soft: #eef2ff;
+  --primary: #117FF7;
+  --primary-soft: #e9f3fe;
   --surface: #ffffff;
   --surface-2: #f8fafc;
   --ink: #0f172a;
@@ -20,7 +20,7 @@
   --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 [data-theme="dark"] {
-  --primary: #6366f1; --primary-soft: #1e234a;
+  --primary: #4da3fa; --primary-soft: #0d2745;
   --surface: #111a2e; --surface-2: #0e1626;
   --ink: #e8eefb; --muted: #94a3b8;
   --line: #1e2a44; --line-2: #1a2540;
@@ -248,7 +248,7 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 /* Theme preview swatches */
 .tp-light { background: #fff; border: 1px solid #e8edf3; } .tp-light .b1 { background: #4f46e5; } .tp-light .b2 { background: #cbd5e1; } .tp-light .cta { background: #4f46e5; }
 .tp-dark { background: #0f172a; } .tp-dark .b1 { background: #6366f1; } .tp-dark .b2 { background: #334155; } .tp-dark .cta { background: #6366f1; }
-.tp-system { background: linear-gradient(90deg, #fff 50%, #0f172a 50%); border: 1px solid #e8edf3; } .tp-system .b1 { background: #6366f1; } .tp-system .b2 { background: #94a3b8; } .tp-system .cta { background: #6366f1; }
+.tp-system { background: linear-gradient(90deg, #fff 50%, #0f172a 50%); border: 1px solid #e8edf3; } .tp-system .b1 { background: #117FF7; } .tp-system .b2 { background: #94a3b8; } .tp-system .cta { background: #117FF7; }
 .tp-midnight { background: #000; } .tp-midnight .b1 { background: #8b5cf6; } .tp-midnight .b2 { background: #27272a; } .tp-midnight .cta { background: #8b5cf6; }
 .tp-ocean { background: #f0f9ff; } .tp-ocean .b1 { background: #0891b2; } .tp-ocean .b2 { background: #bae6fd; } .tp-ocean .cta { background: #0891b2; }
 .tp-forest { background: #f0fdf4; } .tp-forest .b1 { background: #16a34a; } .tp-forest .b2 { background: #bbf7d0; } .tp-forest .cta { background: #16a34a; }
@@ -475,7 +475,7 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 /* ═══ Login Page ═══ */
 .login-page { display: grid; grid-template-columns: 1.1fr 1fr; min-height: 100vh; }
 .login-brand-panel {
-  background: linear-gradient(155deg, #6366f1 0%, #5b21b6 55%, #3b1d8a 100%);
+  background: linear-gradient(155deg, #117FF7 0%, #1B5BD0 52%, #041226 100%);
   color: #fff; padding: 40px 44px; display: flex; flex-direction: column; justify-content: center;
 }
 .login-brand-top { font-size: 18px; font-weight: 800; display: flex; align-items: center; gap: 8px; margin-bottom: 32px; }
@@ -490,7 +490,7 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 .login-form-panel { display: flex; align-items: center; justify-content: center; padding: 40px; background: var(--surface); }
 .login-form-box { max-width: 420px; width: 100%; }
 .login-mini-brand { font-size: 16px; font-weight: 800; display: flex; align-items: center; gap: 6px; margin-bottom: 24px; }
-.brand-dot-sm { width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 900; }
+.brand-dot-sm { width: 24px; height: 24px; border-radius: 6px; background: linear-gradient(135deg, #1B5BD0, #117FF7); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 900; }
 .login-form-box h1 { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
 .login-sub { color: var(--muted); font-size: 13.5px; margin-bottom: 20px; }
 .login-tenant-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; padding: 6px 14px; font-size: 12.5px; color: var(--muted); margin-bottom: 20px; font-weight: 600; }
@@ -713,7 +713,7 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 
 /* ═══ Chat widget (Support) ═══ */
 .chat-container { display: flex; flex-direction: column; height: 520px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--surface); box-shadow: var(--shadow); }
-.chat-header { padding: 14px 18px; background: linear-gradient(135deg, #4f46e5, #6d28d9); color: #fff; display: flex; align-items: center; gap: 10px; }
+.chat-header { padding: 14px 18px; background: linear-gradient(135deg, #1B5BD0, #117FF7); color: #fff; display: flex; align-items: center; gap: 10px; }
 .chat-header .ch-dot { width: 10px; height: 10px; border-radius: 50%; background: #4ade80; flex: none; }
 .chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
 .chat-msg { max-width: 80%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
@@ -786,3 +786,6 @@ body { font-family: var(--font); background: var(--surface-2); color: var(--ink)
 .approach-card .ap-desc { font-size: 12.5px; color: var(--muted); line-height: 1.45; margin-bottom: 10px; }
 .dep-cmd { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; line-height: 1.5; margin: 12px 0; }
 .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); margin: 18px 0 8px; }
+
+/* The dark login panel carries the white logo variant (see BrandMark). */
+.login-brand-panel .brand-sub { color: rgba(255,255,255,.72); }

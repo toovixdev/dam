@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import BrandMark from '../components/BrandMark';
 
 const ROLE_LABELS = {
   tenant_admin: 'Tenant Admin', soc_analyst: 'SOC Analyst', compliance: 'Compliance Officer',
@@ -76,7 +77,7 @@ export default function AcceptInvite() {
     <div className="login-page">
       <div className="login-brand-panel">
         <div className="login-brand-top">
-          <span className="brand-dot">T</span> TooVix <span className="brand-sub">DAM</span>
+          <BrandMark size={30} white /> SecurEra <span className="brand-sub">DAM</span>
         </div>
         <div className="login-brand-content">
           <h2>You've been invited<br />to join your team.</h2>
@@ -97,7 +98,7 @@ export default function AcceptInvite() {
 
       <div className="login-form-panel">
         <div className="login-form-box">
-          <div className="login-mini-brand"><span className="brand-dot-sm">T</span> TooVix <span className="brand-sub">DAM</span></div>
+          <div className="login-mini-brand"><BrandMark size={24} /> SecurEra <span className="brand-sub">DAM</span></div>
 
           {state === 'loading' && (
             <>

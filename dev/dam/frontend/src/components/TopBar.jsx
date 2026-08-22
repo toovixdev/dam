@@ -32,7 +32,7 @@ export default function TopBar({ lastRefresh, onRefresh }) {
   const name = authUser?.fullName || 'User';
   const initials = name.split(' ').map(p => p[0]).join('').substring(0, 2).toUpperCase();
   const role = (authUser?.role || '').replace(/_/g, ' ');
-  const tenant = authUser?.tenantName || 'TooVix DAM';
+  const tenant = authUser?.tenantName || 'SecurEra DAM';
 
   const [menuOpen, setMenuOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -91,7 +91,7 @@ export default function TopBar({ lastRefresh, onRefresh }) {
 
       <div className="topbar-spacer" />
 
-      <Link to="/copilot" className="topbar-btn ai-btn">✦ Ask TooVix AI</Link>
+      <Link to="/copilot" className="topbar-btn ai-btn">✦ Ask SecurEra AI</Link>
 
       {lastRefresh && (
         <div className="topbar-refresh">

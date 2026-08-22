@@ -28,7 +28,7 @@ export default function Login() {
   return (
     <div style={wrap}>
       <div style={card}>
-        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>TooVix <span style={{ color: 'var(--muted, #94a3b8)', fontWeight: 500 }}>DAM Admin</span></div>
+        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>SecurEra <span style={{ color: 'var(--muted, #94a3b8)', fontWeight: 500 }}>DAM Admin</span></div>
         <h1 style={{ fontSize: 20, margin: '10px 0 4px' }}>Super-Admin sign-in</h1>
         <p style={{ fontSize: 13, color: 'var(--muted, #94a3b8)', margin: '0 0 20px' }}>Platform operations console. Restricted to platform administrators.</p>
         <form onSubmit={handleSubmit}>

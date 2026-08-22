@@ -8,7 +8,7 @@ import { apiFetch, apiPut, apiDelete } from './api/client';
 
 const PREFIX = 'nx-brand';
 const EVT = 'nx-branding';
-const DEFAULT_NAME = 'TooVix DAM';
+const DEFAULT_NAME = 'SecurEra DAM';
 const DEFAULT_PLACEMENT = 'sidebar'; // 'sidebar' | 'header' | 'both'
 
 function tenantId() {

@@ -42,7 +42,7 @@ export default function Sidebar({ collapsed, onToggle }) {
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-brand">
         <span className="brand-dot" style={{ background: 'var(--danger)' }}>A</span>
-        {!collapsed && <span className="brand-label">TooVix <span className="brand-sub">ADMIN</span></span>}
+        {!collapsed && <span className="brand-label">SecurEra <span className="brand-sub">ADMIN</span></span>}
         <button className="sidebar-toggle" onClick={onToggle} title="Toggle sidebar">
           {collapsed ? '☰' : '⇤'}
         </button>

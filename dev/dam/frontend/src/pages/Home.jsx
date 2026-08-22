@@ -5,6 +5,53 @@ import './Home.css';
 
 // Public marketing homepage (ported from mockups/index.html). CTAs are wired to
 // the real /login and /signup routes; section links scroll within the page.
+// SecurEra is the platform brand; EvaSoft is the company behind it.
+
+// ---------------------------------------------------------------------------
+// PRODUCT CATALOGUE
+// Add a new SecurEra product by appending an entry here — the grid, the badges
+// and the responsive layout all follow automatically. `status: 'live'` renders
+// the highlighted card with a working CTA; `status: 'soon'` renders the dashed
+// "on the roadmap" placeholder. Rename or delete the placeholders below as the
+// real products get designed.
+// ---------------------------------------------------------------------------
+const PRODUCTS = [
+  {
+    status: 'live',
+    icon: '◎',
+    name: 'SecurEra DAM',
+    category: 'Database Activity Monitoring',
+    body: 'Real-time monitoring, behavioural threat detection and compliance automation across Oracle, SQL Server, Db2, PostgreSQL, MySQL and MongoDB — on-prem, cloud or air-gapped.',
+    tags: ['6 engines', 'UEBA', 'Inline blocking', '7 frameworks'],
+    to: '/signup',
+    cta: 'Start free trial →',
+    more: { href: '#capabilities', label: 'See capabilities' },
+  },
+  {
+    status: 'soon',
+    icon: '▦',
+    name: 'Data Security Posture',
+    category: 'DSPM — on the roadmap',
+    body: 'Continuous discovery and risk scoring of every data store you own, including the shadow ones. Placeholder card — swap in the real product once its scope is locked.',
+    tags: ['Shadow data', 'Risk scoring', 'Attack paths'],
+  },
+  {
+    status: 'soon',
+    icon: '⛨',
+    name: 'Cloud & SaaS Security',
+    category: 'CSPM — on the roadmap',
+    body: 'Misconfiguration and entitlement monitoring for the accounts your databases live in. Placeholder card — swap in the real product once its scope is locked.',
+    tags: ['AWS · Azure · GCP', 'Entitlements', 'Drift'],
+  },
+  {
+    status: 'soon',
+    icon: '✦',
+    name: 'AI & LLM Guardrails',
+    category: 'AI security — on the roadmap',
+    body: 'Prompt-level inspection of what applications send to hosted models, with PII controls before data ever reaches the LLM. Placeholder card — swap in the real product once its scope is locked.',
+    tags: ['Prompt PII', 'Model routing', 'Audit trail'],
+  },
+];
 
 const CAPS = [
   ['var(--primary-soft)', 'var(--primary)', '◎', 'Real-Time Activity Monitoring', 'Every query, every user, every session — captured in real-time with full context. Privileged accounts, application traffic, and local connections.'],
@@ -33,7 +80,7 @@ const REGIONS = [
 ];
 
 const TESTIMONIALS = [
-  ['"We replaced two legacy DAM appliances with TooVix and had Oracle + Db2 under watch the same afternoon. RBI audit prep went from weeks to a day."', 'RK', 'Rajesh K.', 'CISO · Indian private-sector bank'],
+  ['"We replaced two legacy DAM appliances with SecurEra and had Oracle + Db2 under watch the same afternoon. RBI audit prep went from weeks to a day."', 'RK', 'Rajesh K.', 'CISO · Indian private-sector bank'],
   ['"The behavioral baselines caught a compromised service account at 2am that our SIEM completely missed. That alone justified the investment."', 'ML', 'Marie L.', 'Head of SOC · European insurance group'],
   ['"One policy for \'bulk PII read\' fires identically across our Oracle, Postgres, and MongoDB fleet. No more writing the same rule six times."', 'JC', 'Jason C.', 'Security Engineering · US fintech'],
 ];
@@ -49,8 +96,8 @@ const PLANS = [
 
 const HERO_SVG = `<svg viewBox="0 0 900 380" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="hgBg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#1e1b4b"/><stop offset="100%" stop-color="#0f0a2e"/></linearGradient>
-    <linearGradient id="hgShield" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#818cf8"/><stop offset="100%" stop-color="#4f46e5"/></linearGradient>
+    <linearGradient id="hgBg" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#08203d"/><stop offset="100%" stop-color="#041226"/></linearGradient>
+    <linearGradient id="hgShield" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4da3fa"/><stop offset="100%" stop-color="#117FF7"/></linearGradient>
     <linearGradient id="hgGreen" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4ade80"/><stop offset="100%" stop-color="#16a34a"/></linearGradient>
     <linearGradient id="hgAmber" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fbbf24"/><stop offset="100%" stop-color="#d97706"/></linearGradient>
     <linearGradient id="hgRed" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fb7185"/><stop offset="100%" stop-color="#e11d48"/></linearGradient>
@@ -65,50 +112,50 @@ const HERO_SVG = `<svg viewBox="0 0 900 380" fill="none" xmlns="http://www.w3.or
     <line x1="540" y1="0" x2="540" y2="380" stroke="#fff"/><line x1="720" y1="0" x2="720" y2="380" stroke="#fff"/>
   </g>
   <g class="hg-pulse" style="animation-delay:0s">
-    <rect x="40" y="55" width="110" height="60" rx="10" fill="rgba(99,102,241,.15)" stroke="#818cf8" stroke-width="1.5"/>
-    <ellipse cx="95" cy="72" rx="28" ry="8" fill="rgba(129,140,248,.2)"/>
-    <ellipse cx="95" cy="82" rx="28" ry="8" fill="none" stroke="rgba(129,140,248,.3)" stroke-width=".7"/>
-    <ellipse cx="95" cy="92" rx="28" ry="8" fill="none" stroke="rgba(129,140,248,.2)" stroke-width=".5"/>
-    <text x="95" y="123" font-size="10" fill="#a5b4fc" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">Oracle 19c</text>
+    <rect x="40" y="55" width="110" height="60" rx="10" fill="rgba(17,127,247,.15)" stroke="#4da3fa" stroke-width="1.5"/>
+    <ellipse cx="95" cy="72" rx="28" ry="8" fill="rgba(77,163,250,.2)"/>
+    <ellipse cx="95" cy="82" rx="28" ry="8" fill="none" stroke="rgba(77,163,250,.3)" stroke-width=".7"/>
+    <ellipse cx="95" cy="92" rx="28" ry="8" fill="none" stroke="rgba(77,163,250,.2)" stroke-width=".5"/>
+    <text x="95" y="123" font-size="10" fill="#8fc4fb" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">Oracle 19c</text>
     <circle cx="142" cy="62" r="4" fill="#4ade80" class="hg-blink"/>
   </g>
   <g class="hg-pulse" style="animation-delay:.5s">
-    <rect x="40" y="145" width="110" height="60" rx="10" fill="rgba(99,102,241,.15)" stroke="#818cf8" stroke-width="1.5"/>
-    <ellipse cx="95" cy="162" rx="28" ry="8" fill="rgba(129,140,248,.2)"/>
-    <ellipse cx="95" cy="172" rx="28" ry="8" fill="none" stroke="rgba(129,140,248,.3)" stroke-width=".7"/>
-    <ellipse cx="95" cy="182" rx="28" ry="8" fill="none" stroke="rgba(129,140,248,.2)" stroke-width=".5"/>
-    <text x="95" y="213" font-size="10" fill="#a5b4fc" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">SQL Server</text>
+    <rect x="40" y="145" width="110" height="60" rx="10" fill="rgba(17,127,247,.15)" stroke="#4da3fa" stroke-width="1.5"/>
+    <ellipse cx="95" cy="162" rx="28" ry="8" fill="rgba(77,163,250,.2)"/>
+    <ellipse cx="95" cy="172" rx="28" ry="8" fill="none" stroke="rgba(77,163,250,.3)" stroke-width=".7"/>
+    <ellipse cx="95" cy="182" rx="28" ry="8" fill="none" stroke="rgba(77,163,250,.2)" stroke-width=".5"/>
+    <text x="95" y="213" font-size="10" fill="#8fc4fb" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">SQL Server</text>
     <circle cx="142" cy="152" r="4" fill="#4ade80" class="hg-blink" style="animation-delay:.3s"/>
   </g>
   <g class="hg-pulse" style="animation-delay:1s">
-    <rect x="40" y="235" width="110" height="60" rx="10" fill="rgba(99,102,241,.15)" stroke="#818cf8" stroke-width="1.5"/>
-    <ellipse cx="95" cy="252" rx="28" ry="8" fill="rgba(129,140,248,.2)"/>
-    <ellipse cx="95" cy="262" rx="28" ry="8" fill="none" stroke="rgba(129,140,248,.3)" stroke-width=".7"/>
-    <ellipse cx="95" cy="272" rx="28" ry="8" fill="none" stroke="rgba(129,140,248,.2)" stroke-width=".5"/>
-    <text x="95" y="303" font-size="10" fill="#a5b4fc" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">PostgreSQL</text>
+    <rect x="40" y="235" width="110" height="60" rx="10" fill="rgba(17,127,247,.15)" stroke="#4da3fa" stroke-width="1.5"/>
+    <ellipse cx="95" cy="252" rx="28" ry="8" fill="rgba(77,163,250,.2)"/>
+    <ellipse cx="95" cy="262" rx="28" ry="8" fill="none" stroke="rgba(77,163,250,.3)" stroke-width=".7"/>
+    <ellipse cx="95" cy="272" rx="28" ry="8" fill="none" stroke="rgba(77,163,250,.2)" stroke-width=".5"/>
+    <text x="95" y="303" font-size="10" fill="#8fc4fb" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">PostgreSQL</text>
     <circle cx="142" cy="242" r="4" fill="#fbbf24" class="hg-blink" style="animation-delay:.6s"/>
   </g>
   <g class="hg-pulse" style="animation-delay:1.5s" opacity=".7">
-    <rect x="55" y="320" width="80" height="42" rx="8" fill="rgba(99,102,241,.1)" stroke="rgba(129,140,248,.4)" stroke-width="1"/>
-    <text x="95" y="346" font-size="9" fill="#a5b4fc" text-anchor="middle" font-family="Inter,sans-serif" font-weight="600">MongoDB</text>
+    <rect x="55" y="320" width="80" height="42" rx="8" fill="rgba(17,127,247,.1)" stroke="rgba(77,163,250,.4)" stroke-width="1"/>
+    <text x="95" y="346" font-size="9" fill="#8fc4fb" text-anchor="middle" font-family="Inter,sans-serif" font-weight="600">MongoDB</text>
   </g>
-  <path d="M152 85 Q220 85 270 140" stroke="#818cf8" stroke-width="2" fill="none" class="hg-flow" opacity=".7"/>
-  <path d="M152 175 L270 175" stroke="#818cf8" stroke-width="2" fill="none" class="hg-flow" style="animation-delay:.3s" opacity=".7"/>
-  <path d="M152 265 Q220 265 270 210" stroke="#818cf8" stroke-width="2" fill="none" class="hg-flow" style="animation-delay:.6s" opacity=".7"/>
-  <path d="M135 341 Q200 330 270 230" stroke="rgba(129,140,248,.4)" stroke-width="1.5" fill="none" class="hg-flow" style="animation-delay:.9s"/>
-  <circle cx="370" cy="190" r="88" fill="none" stroke="rgba(129,140,248,.2)" stroke-width="1"/>
-  <circle cx="370" cy="190" r="68" fill="none" stroke="rgba(129,140,248,.15)" stroke-width="1"/>
-  <circle cx="370" cy="190" r="48" fill="rgba(79,70,229,.1)"/>
+  <path d="M152 85 Q220 85 270 140" stroke="#4da3fa" stroke-width="2" fill="none" class="hg-flow" opacity=".7"/>
+  <path d="M152 175 L270 175" stroke="#4da3fa" stroke-width="2" fill="none" class="hg-flow" style="animation-delay:.3s" opacity=".7"/>
+  <path d="M152 265 Q220 265 270 210" stroke="#4da3fa" stroke-width="2" fill="none" class="hg-flow" style="animation-delay:.6s" opacity=".7"/>
+  <path d="M135 341 Q200 330 270 230" stroke="rgba(77,163,250,.4)" stroke-width="1.5" fill="none" class="hg-flow" style="animation-delay:.9s"/>
+  <circle cx="370" cy="190" r="88" fill="none" stroke="rgba(77,163,250,.2)" stroke-width="1"/>
+  <circle cx="370" cy="190" r="68" fill="none" stroke="rgba(77,163,250,.15)" stroke-width="1"/>
+  <circle cx="370" cy="190" r="48" fill="rgba(27,91,208,.1)"/>
   <g class="hg-scan" filter="url(#hgGlowSm)">
-    <line x1="370" y1="190" x2="370" y2="108" stroke="rgba(129,140,248,.6)" stroke-width="2"/>
-    <circle cx="370" cy="108" r="4" fill="#818cf8"/>
+    <line x1="370" y1="190" x2="370" y2="108" stroke="rgba(77,163,250,.6)" stroke-width="2"/>
+    <circle cx="370" cy="108" r="4" fill="#4da3fa"/>
   </g>
   <g filter="url(#hgGlow)">
     <circle cx="370" cy="190" r="30" fill="url(#hgShield)"/>
     <text x="370" y="196" font-size="22" text-anchor="middle" fill="#fff">🛡️</text>
   </g>
-  <text x="370" y="245" font-size="11" fill="#c7d2fe" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">TooVix DAM Engine</text>
-  <text x="370" y="261" font-size="9" fill="rgba(167,139,250,.7)" text-anchor="middle" font-family="Inter,sans-serif">Detect · Protect · Comply</text>
+  <text x="370" y="245" font-size="11" fill="#cfe6fd" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">SecurEra DAM Engine</text>
+  <text x="370" y="261" font-size="9" fill="rgba(143,196,251,.7)" text-anchor="middle" font-family="Inter,sans-serif">Detect · Protect · Comply</text>
   <circle cx="335" cy="135" r="5" fill="url(#hgRed)" class="hg-blink" style="animation-delay:0s"/>
   <circle cx="410" cy="155" r="4" fill="url(#hgAmber)" class="hg-blink" style="animation-delay:.7s"/>
   <circle cx="390" cy="240" r="3.5" fill="url(#hgGreen)" class="hg-blink" style="animation-delay:1.2s"/>
@@ -138,18 +185,18 @@ const HERO_SVG = `<svg viewBox="0 0 900 380" fill="none" xmlns="http://www.w3.or
     <text x="536" y="276" font-size="8" fill="rgba(134,239,172,.5)" font-family="Inter,sans-serif">7 frameworks · continuous</text>
   </g>
   <g>
-    <rect x="520" y="295" width="170" height="60" rx="10" fill="rgba(99,102,241,.08)" stroke="rgba(129,140,248,.4)" stroke-width="1.3"/>
-    <text x="536" y="319" font-size="10" fill="#a5b4fc" font-family="Inter,sans-serif" font-weight="700">⛔ BLOCKED</text>
-    <text x="536" y="335" font-size="8.5" fill="rgba(165,180,252,.6)" font-family="Inter,sans-serif">SQLi attempt auto-blocked</text>
-    <text x="536" y="349" font-size="8" fill="rgba(165,180,252,.5)" font-family="Inter,sans-serif">Virtual patch · CVE-2025-1842</text>
+    <rect x="520" y="295" width="170" height="60" rx="10" fill="rgba(17,127,247,.08)" stroke="rgba(77,163,250,.4)" stroke-width="1.3"/>
+    <text x="536" y="319" font-size="10" fill="#8fc4fb" font-family="Inter,sans-serif" font-weight="700">⛔ BLOCKED</text>
+    <text x="536" y="335" font-size="8.5" fill="rgba(143,196,251,.6)" font-family="Inter,sans-serif">SQLi attempt auto-blocked</text>
+    <text x="536" y="349" font-size="8" fill="rgba(143,196,251,.5)" font-family="Inter,sans-serif">Virtual patch · CVE-2025-1842</text>
   </g>
   <path d="M440 155 Q480 100 520 76" stroke="rgba(251,113,133,.4)" stroke-width="1.5" fill="none"/>
   <path d="M440 175 L520 161" stroke="rgba(251,191,36,.3)" stroke-width="1.5" fill="none"/>
   <path d="M440 210 L520 246" stroke="rgba(74,222,128,.3)" stroke-width="1.5" fill="none"/>
-  <path d="M440 225 Q480 280 520 320" stroke="rgba(129,140,248,.3)" stroke-width="1.5" fill="none"/>
+  <path d="M440 225 Q480 280 520 320" stroke="rgba(77,163,250,.3)" stroke-width="1.5" fill="none"/>
   <g>
     <rect x="720" y="70" width="150" height="240" rx="12" fill="rgba(255,255,255,.03)" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
-    <text x="795" y="94" font-size="9" fill="rgba(199,210,254,.8)" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">DATA RESIDENCY</text>
+    <text x="795" y="94" font-size="9" fill="rgba(207,230,253,.8)" text-anchor="middle" font-family="Inter,sans-serif" font-weight="700">DATA RESIDENCY</text>
     <g><text x="740" y="122" font-size="14">🇺🇸</text><text x="758" y="122" font-size="9" fill="rgba(255,255,255,.75)" font-family="Inter,sans-serif" font-weight="600">US-East</text><text x="758" y="134" font-size="8" fill="rgba(255,255,255,.4)" font-family="Inter,sans-serif">48 databases</text></g>
     <g><text x="740" y="162" font-size="14">🇪🇺</text><text x="758" y="162" font-size="9" fill="rgba(255,255,255,.75)" font-family="Inter,sans-serif" font-weight="600">EU-West</text><text x="758" y="174" font-size="8" fill="rgba(255,255,255,.4)" font-family="Inter,sans-serif">42 databases</text></g>
     <g><text x="740" y="202" font-size="14">🇮🇳</text><text x="758" y="202" font-size="9" fill="rgba(255,255,255,.75)" font-family="Inter,sans-serif" font-weight="600">India</text><text x="758" y="214" font-size="8" fill="rgba(255,255,255,.4)" font-family="Inter,sans-serif">38 databases</text></g>
@@ -157,7 +204,7 @@ const HERO_SVG = `<svg viewBox="0 0 900 380" fill="none" xmlns="http://www.w3.or
     <g><text x="740" y="282" font-size="14">🇨🇦</text><text x="758" y="282" font-size="9" fill="rgba(255,255,255,.75)" font-family="Inter,sans-serif" font-weight="600">Canada</text><text x="758" y="294" font-size="8" fill="rgba(255,255,255,.4)" font-family="Inter,sans-serif">26 databases</text></g>
   </g>
   <rect x="20" y="362" width="860" height="4" rx="2" fill="rgba(255,255,255,.04)"/>
-  <rect x="20" y="362" width="600" height="4" rx="2" fill="rgba(79,70,229,.4)">
+  <rect x="20" y="362" width="600" height="4" rx="2" fill="rgba(27,91,208,.4)">
     <animate attributeName="width" values="200;700;500;600" dur="4s" repeatCount="indefinite"/>
   </rect>
 </svg>`;
@@ -171,8 +218,12 @@ export default function Home() {
     <div className="hp-page">
       {/* Navigation */}
       <nav className="hp-nav">
-        <Link className="logo" to="/"><span className="dot">T</span> TooVix <span style={{ fontWeight: 500, color: 'var(--muted)', fontSize: 13, marginLeft: -4 }}>DAM</span></Link>
+        <Link className="logo" to="/">
+          <img src="/brand/securera-logo-horizontal.svg" alt="SecurEra" />
+          <span className="logo-tag">DAM</span>
+        </Link>
         <div className="links">
+          <a href="#products">Products</a>
           <a href="#capabilities">Capabilities</a>
           <a href="#engines">Engines</a>
           <a href="#compliance">Compliance</a>
@@ -187,7 +238,7 @@ export default function Home() {
       <section className="hero">
         <div className="hero-badge">✦ Now with just-in-time access &amp; deception</div>
         <h1>See every query.<br /><span className="grad">Stop every breach.</span></h1>
-        <p>Database Activity Monitoring for the global enterprise. Real-time visibility, behavioral analytics, and compliance automation across every engine, every cloud, every region.</p>
+        <p><b>SecurEra DAM</b> is Database Activity Monitoring for the global enterprise — real-time visibility, behavioural analytics and compliance automation across every engine, every cloud, every region.</p>
         <div className="hero-ctas">
           <Link className="btn-lg btn-primary" to="/signup">Start 14-day free trial →</Link>
           <Link className="btn-lg btn-outline" to="/login">Live demo ↗</Link>
@@ -215,8 +266,47 @@ export default function Home() {
         ))}
       </div>
 
+      {/* Products */}
+      <section className="sec" id="products">
+        <div className="sec-head">
+          <h2>The SecurEra platform</h2>
+          <p>One security platform from EvaSoft. Database Activity Monitoring is live today — the rest of the suite is being built on the same engine, console and audit trail.</p>
+        </div>
+        <div className="prod-grid">
+          {PRODUCTS.map((p) => (
+            <div className={`prod ${p.status === 'live' ? 'live' : 'soon'}`} key={p.name}>
+              <span className={`pill ${p.status === 'live' ? 'pill-live' : 'pill-soon'}`}>
+                {p.status === 'live' ? 'Available now' : 'Coming soon'}
+              </span>
+              <div className="prod-top">
+                <div className="pi">{p.icon}</div>
+                <div>
+                  <h3>{p.name}</h3>
+                  <div className="pcat">{p.category}</div>
+                </div>
+              </div>
+              <p className="pbody">{p.body}</p>
+              <div className="ptags">{p.tags.map((t) => <span key={t}>{t}</span>)}</div>
+              <div className="pfoot">
+                {p.status === 'live' ? (
+                  <>
+                    <Link className="plink" to={p.to}>{p.cta}</Link>
+                    {p.more && <a className="plink muted" href={p.more.href}>{p.more.label}</a>}
+                  </>
+                ) : (
+                  <Link className="plink muted" to="/signup">Get notified at launch →</Link>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <p className="prod-note">
+          Building something specific? <Link to="/signup">Talk to us about the roadmap →</Link>
+        </p>
+      </section>
+
       {/* Capabilities */}
-      <section className="sec" id="capabilities">
+      <section className="sec" id="capabilities" style={{ paddingTop: 0 }}>
         <div className="sec-head">
           <h2>Everything you need to secure your database fleet</h2>
           <p>From discovery to compliance reporting — one platform that replaces legacy DAM appliances.</p>
@@ -232,7 +322,7 @@ export default function Home() {
       </section>
 
       {/* Engines */}
-      <section className="sec" id="engines" style={{ background: 'var(--surface)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', maxWidth: 'none', padding: '56px 48px' }}>
+      <section className="sec sec-band" id="engines">
         <div className="sec-head">
           <h2>One console for every database engine</h2>
           <p>Engine-specific capture, engine-neutral rules. A single policy fires identically across Oracle, SQL Server, and MongoDB.</p>
@@ -272,7 +362,7 @@ export default function Home() {
       </section>
 
       {/* Testimonials */}
-      <section className="sec" style={{ background: 'var(--surface)', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', maxWidth: 'none', padding: '56px 48px' }}>
+      <section className="sec sec-band">
         <div className="sec-head"><h2>Trusted by security teams worldwide</h2></div>
         <div className="test-grid" style={{ maxWidth: 1140, margin: '0 auto' }}>
           {TESTIMONIALS.map(([q, av, name, role]) => (
@@ -312,12 +402,16 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="hp-footer">
-        <div className="fl"><span className="dot">T</span> TooVix DAM</div>
+        <div className="fl">
+          <img src="/brand/securera-logo-horizontal.svg" alt="SecurEra" />
+          <span className="by">An <b>EvaSoft</b> product</span>
+        </div>
         <div className="fr">
           <Link to="/login">Sign in</Link>
           <Link to="/signup">Free trial</Link>
           <Link to="/login">Live demo</Link>
-          <span style={{ marginLeft: 12 }}>© 2026 TooVix · SOC 2 · ISO 27001 · Built for global enterprise</span>
+          <a href="#products">Products</a>
+          <span className="legal">© 2026 EvaSoft · SecurEra® · SOC 2 · ISO 27001 · Built for global enterprise</span>
         </div>
       </footer>
     </div>

@@ -98,7 +98,7 @@ export default function TopBar({ lastRefresh, onRefresh }) {
               <span className="user-popup-avatar">PO</span>
               <div className="user-popup-info">
                 <b>{getOperator()?.name || 'Platform Ops'}</b>
-                <small className="user-popup-role">{getOperator()?.email || 'TooVix Platform Operations'}</small>
+                <small className="user-popup-role">{getOperator()?.email || 'SecurEra Platform Operations'}</small>
                 <small className="user-popup-tenant">Super Admin</small>
               </div>
             </div>

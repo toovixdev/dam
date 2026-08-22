@@ -115,7 +115,7 @@ export default function Copilot() {
             {messages.length === 0 && (
               <div style={{ margin: 'auto', textAlign: 'center', maxWidth: 460 }}>
                 <div style={{ fontSize: 30, marginBottom: 6 }}>{mode === 'security' ? '✦' : '✧'}</div>
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>{mode === 'security' ? 'Ask about your database security' : 'How can I help you use TooVix DAM?'}</div>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>{mode === 'security' ? 'Ask about your database security' : 'How can I help you use SecurEra DAM?'}</div>
                 <p className="muted" style={{ fontSize: 12.5, marginBottom: 16 }}>
                   {mode === 'security'
                     ? 'Grounded in this workspace’s live alerts, policies, databases and risk.'
@@ -138,7 +138,7 @@ export default function Copilot() {
             {sending && <div style={{ alignSelf: 'flex-start', color: 'var(--muted)', fontSize: 12.5, padding: '4px 8px' }}>Copilot is thinking…</div>}
           </div>
           <form onSubmit={(e) => { e.preventDefault(); send(); }} style={{ display: 'flex', gap: 10, padding: '12px 16px', borderTop: '1px solid var(--line)' }}>
-            <input value={input} onChange={e => setInput(e.target.value)} placeholder={mode === 'security' ? 'Ask about alerts, risk, policies, PII exposure…' : 'Ask how to use TooVix DAM, or a security question…'} disabled={sending}
+            <input value={input} onChange={e => setInput(e.target.value)} placeholder={mode === 'security' ? 'Ask about alerts, risk, policies, PII exposure…' : 'Ask how to use SecurEra DAM, or a security question…'} disabled={sending}
               style={{ flex: 1, padding: '10px 14px', borderRadius: 10, border: '1px solid var(--line)', fontSize: 13.5, background: 'var(--surface)', color: 'var(--ink)' }} />
             <button type="submit" className="btn-primary" disabled={sending || !input.trim()}>Send</button>
           </form>

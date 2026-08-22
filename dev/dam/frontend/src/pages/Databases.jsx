@@ -80,7 +80,7 @@ export default function Databases() {
     const lines = instances.map((i) => [i.instance, engineDisplay(i.engine, i.version), i.deployment, i.environment, i.monitoring.join(' + ') || 'Not monitored', i.database_count, i.risk_score, i.status]);
     const csv = [header, ...lines].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const a = document.createElement('a'); a.href = url; a.download = 'toovix-instances.csv'; a.click(); URL.revokeObjectURL(url);
+    const a = document.createElement('a'); a.href = url; a.download = 'securera-instances.csv'; a.click(); URL.revokeObjectURL(url);
     toast('Exported to CSV', 'ok');
   };
 

@@ -378,7 +378,7 @@ function DeployMonitoring({ instances, agents = [], initialInstanceId, initialMo
       <div className="section-label">Capture modes {isPaas ? '' : isFullStack ? '(most-preferred first · pick any combination)' : `(AgentLite audit for ${engineLabel})`}</div>
       {!isPaas && !isFullStack && (
         <div style={{ background: 'rgba(22,163,74,.10)', borderRadius: 10, padding: '10px 14px', fontSize: 12, marginBottom: 10, lineHeight: 1.5 }}>
-          <b>{engineLabel}</b> uses a proprietary / encrypted-by-default protocol, so TooVix captures it with <b>AgentLite</b> — a lightweight forwarder on the host that ships the database&apos;s native audit trail (works with TLS). Network / host / proxy are reserved for MySQL &amp; PostgreSQL.
+          <b>{engineLabel}</b> uses a proprietary / encrypted-by-default protocol, so SecurEra captures it with <b>AgentLite</b> — a lightweight forwarder on the host that ships the database&apos;s native audit trail (works with TLS). Network / host / proxy are reserved for MySQL &amp; PostgreSQL.
         </div>
       )}
       {isPaas ? (
@@ -846,7 +846,7 @@ sudo install -D -m 0755 /tmp/dam-agent /usr/local/bin/dam-agent && rm -f /tmp/da
 # 2) Install the systemd TEMPLATE once (lets host/network/proxy coexist as dam-agent@<mode>):
 sudo tee /etc/systemd/system/dam-agent@.service >/dev/null <<'EOF'
 [Unit]
-Description=TooVix DAM agent (%i)
+Description=SecurEra DAM agent (%i)
 After=network-online.target
 Wants=network-online.target
 [Service]

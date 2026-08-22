@@ -5,6 +5,7 @@ import useApiData from '../hooks/useApiData';
 import { getBranding, onBrandingChange } from '../branding';
 import { canSee as roleCanSee } from '../roles';
 import useFeatures, { SCREEN_FEATURE } from '../hooks/useFeatures';
+import BrandMark from './BrandMark';
 
 const NAV = [
   { sec: 'Monitor' },
@@ -75,10 +76,12 @@ export default function Sidebar({ collapsed, onToggle }) {
       <div className="sidebar-brand">
         {brand.logo && brand.placement !== 'header'
           ? <img src={brand.logo} alt="logo" className="brand-logo" />
-          : <span className="brand-dot">{(brand.name[0] || 'T').toUpperCase()}</span>}
+          : (brand.custom && brand.name
+              ? <span className="brand-dot">{brand.name[0].toUpperCase()}</span>
+              : <BrandMark size={30} />)}
         {!collapsed && (brand.custom
           ? <span className="brand-label">{brand.name}</span>
-          : <span className="brand-label">TooVix <span className="brand-sub">DAM</span></span>)}
+          : <span className="brand-label">SecurEra <span className="brand-sub">DAM</span></span>)}
         <button className="sidebar-toggle" onClick={onToggle} title="Toggle sidebar">
           {collapsed ? '☰' : '⇤'}
         </button>

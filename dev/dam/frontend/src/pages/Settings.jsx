@@ -114,7 +114,7 @@ export default function Settings() {
           <div className="card-header"><span className="card-title">Branding (white-label)</span><span className="card-sub">shown in the sidebar</span></div>
           <div className="card-body">
             <div className="form-field"><label>Product name</label>
-              <input value={bName} onChange={(e) => setBName(e.target.value)} placeholder="TooVix DAM" />
+              <input value={bName} onChange={(e) => setBName(e.target.value)} placeholder="SecurEra DAM" />
             </div>
             <div className="form-field"><label>Logo</label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>

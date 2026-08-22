@@ -1,7 +1,7 @@
 // Renders a report into a standalone, print-optimized, branded document in a new window,
 // then triggers the browser's print dialog (from which the user can "Save as PDF").
 // Header shows the tenant's custom logo when one is set (Settings → branding); otherwise
-// it falls back to the TooVix mark.
+// it falls back to the SecurEra mark.
 
 import { getBranding } from './branding';
 
@@ -12,7 +12,7 @@ const esc = (v) => String(v == null ? '' : v)
 export function printReport(report, { tenantName = '', generatedBy = '' } = {}) {
   const brand = getBranding();
   const hasLogo = !!brand.logo;
-  const companyName = brand.custom ? brand.name : 'TooVix DAM';
+  const companyName = brand.custom ? brand.name : 'SecurEra DAM';
   const logoHtml = hasLogo
     ? `<img class="logo-img" src="${esc(brand.logo)}" alt="${esc(companyName)} logo" />`
     : `<span class="logo-mark">T</span>`;
@@ -111,7 +111,7 @@ export function printReport(report, { tenantName = '', generatedBy = '' } = {}) 
     <header class="rpt-header">
       <div class="brand">
         ${logoHtml}
-        <div class="co">${esc(companyName)}${brand.custom ? '<small>Powered by TooVix DAM</small>' : '<small>Database Activity Monitoring</small>'}</div>
+        <div class="co">${esc(companyName)}${brand.custom ? '<small>Powered by SecurEra DAM</small>' : '<small>Database Activity Monitoring</small>'}</div>
       </div>
       <div class="hdr-right">
         <span class="confidential">Confidential</span>

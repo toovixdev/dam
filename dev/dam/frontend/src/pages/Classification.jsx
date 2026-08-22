@@ -64,12 +64,12 @@ export default function Classification() {
 
   const onExport = () => {
     if (activeTab === 'objects') {
-      exportCsv('toovix-classified-objects.csv',
+      exportCsv('securera-classified-objects.csv',
         ['Database', 'Schema', 'Object', 'Type', 'Columns', 'Rows', 'Sensitivity', 'Owner'],
         objects.map((o) => [o.database_name, o.schema_name, o.object_name, o.object_type, o.column_count, o.row_count, o.sensitivity, o.owner]));
       toast(`Exported ${objects.length} objects`, 'ok');
     } else {
-      exportCsv('toovix-classified-columns.csv',
+      exportCsv('securera-classified-columns.csv',
         ['Database', 'Schema', 'Table', 'Column', 'Classification', 'Sensitivity', 'Detector', 'Masked', 'Overridden', 'Override Reason'],
         inventory.map((c) => [c.database_name, c.schema_name, c.table_name, c.column_name, c.tag, c.sensitivity, c.detector, c.is_masked, c.overridden ? 'yes' : '', c.override_reason || '']));
       toast(`Exported ${inventory.length} columns`, 'ok');

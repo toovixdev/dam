@@ -5,7 +5,7 @@ const NAME_KEY = 'nx-brand-name';
 const LOGO_KEY = 'nx-brand-logo';
 const PLACE_KEY = 'nx-brand-placement';
 const EVT = 'nx-branding';
-const DEFAULT_NAME = 'TooVix DAM';
+const DEFAULT_NAME = 'SecurEra DAM';
 const DEFAULT_PLACEMENT = 'sidebar'; // 'sidebar' | 'header' | 'both'
 
 export function getBranding() {
