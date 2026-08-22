@@ -69,7 +69,8 @@ for n, s in svcs.items():
                     rel = f"./config/{n}/" + base   # namespaced → no collisions
                     manifest.append((src, rel))
                     v["source"] = rel
-        # Caddy resolves {$DOMAIN} from its container env; compose passes it from .env at deploy.
+        # Caddy resolves {$DOMAIN}/{$ADMIN_DOMAIN} from its container env; compose passes them
+        # from .env at deploy (tenant console + super-admin console on separate subdomains).
         if n == "dam-caddy":
             env = s.get("environment")
             if isinstance(env, list):
@@ -77,6 +78,7 @@ for n, s in svcs.items():
             elif not isinstance(env, dict):
                 env = {}
             env["DOMAIN"] = "${DOMAIN}"
+            env["ADMIN_DOMAIN"] = "${ADMIN_DOMAIN}"
             s["environment"] = env
 
 d.pop("name", None)   # let the deploy set the project name

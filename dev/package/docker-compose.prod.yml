@@ -268,7 +268,11 @@
           "type": "volume",
           "volume": {}
         }
-      ]
+      ],
+      "environment": {
+        "DOMAIN": "${DOMAIN}",
+        "ADMIN_DOMAIN": "${ADMIN_DOMAIN}"
+      }
     },
     "dam-clickhouse": {
       "container_name": "dam-clickhouse",

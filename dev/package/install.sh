@@ -86,8 +86,9 @@ CREDENTIAL_ENCRYPTION_KEY=$(gen 32)
 DAM_JWT_SECRET=$(gen 32)
 DAM_PG_PASSWORD=$(gen 16)
 DAM_CLICKHOUSE_PASSWORD=$(gen 16)
-# DOMAIN drives Caddy's automatic TLS (the prod Caddyfile reads {\$DOMAIN}).
+# DOMAIN + ADMIN_DOMAIN drive Caddy's automatic TLS (the Caddyfile reads {\$DOMAIN}/{\$ADMIN_DOMAIN}).
 DOMAIN=${DOMAIN}
+ADMIN_DOMAIN=admin-${DOMAIN}
 APP_BASE_URL=https://${DOMAIN}
 API_PUBLIC_URL=https://${DOMAIN}
 PUBLIC_CONTROL_PLANE=${DOMAIN}

@@ -1,8 +1,9 @@
 # SecurEra DAM — automatic HTTPS (Let's Encrypt) reverse proxy — PARAMETERIZED for the installer.
 #
-# The public domain is NOT hard-coded: Caddy reads it from the DOMAIN container env, which
-# docker-compose passes through from the installer's .env (${DOMAIN}). So one bundle deploys to
-# any domain — no hand-editing per deployment.
+# The public domains are NOT hard-coded: Caddy reads them from the DOMAIN and ADMIN_DOMAIN
+# container env vars, which docker-compose passes through from the installer's .env. So one
+# bundle deploys to any domain pair — no hand-editing per deployment. The tenant console is
+# served on {$DOMAIN}; the super-admin console on {$ADMIN_DOMAIN} (convention: admin-<domain>).
 #
 # Routing note: in dev, the Vite dev server proxied /api, /auth, /ws to dam-api. The prod
 # frontend is static nginx (SPA only), so THIS edge must send those paths to dam-api itself;
@@ -40,5 +41,24 @@
 	# Everything else → the console SPA (static nginx).
 	handle {
 		reverse_proxy dam-react:5173
+	}
+}
+
+# Super-admin console — its own subdomain. Same split as the tenant console: API / SSO /
+# websockets go to dam-api, everything else to the admin SPA. Defaults to admin.localhost
+# when ADMIN_DOMAIN is unset so an omitted var can never take down the main site (Caddy
+# serves localhost with an internal cert — no ACME, unreachable externally, harmless).
+{$ADMIN_DOMAIN:admin.localhost} {
+	handle /api/* {
+		reverse_proxy dam-api:3000
+	}
+	handle /auth/* {
+		reverse_proxy dam-api:3000
+	}
+	handle /ws/* {
+		reverse_proxy dam-api:3000
+	}
+	handle {
+		reverse_proxy dam-admin-react:5174
 	}
 }
