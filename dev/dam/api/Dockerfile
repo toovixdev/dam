@@ -33,7 +33,8 @@ RUN npm install --production
 COPY api/main.js api/archive.js api/compliance-catalog.js api/secrets.js api/tenant-crypto.js ./
 # Customer-installable agent artifacts, served by the control plane at /api/download.
 COPY --from=agent /out/dam-agent-linux-amd64 /app/artifacts/dam-agent-linux-amd64
-COPY --from=pkg /out/dam-agent_0.1.0_amd64.deb /app/artifacts/dam-agent_amd64.deb
-COPY --from=pkg /out/dam-agent-0.1.0-1.x86_64.rpm /app/artifacts/dam-agent_amd64.rpm
+# Version-agnostic globs so an agent version bump (nfpm.yaml) never breaks the API image build.
+COPY --from=pkg /out/dam-agent_*_amd64.deb /app/artifacts/dam-agent_amd64.deb
+COPY --from=pkg /out/dam-agent-*.x86_64.rpm /app/artifacts/dam-agent_amd64.rpm
 EXPOSE 3000
 CMD ["node", "main.js"]

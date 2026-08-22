@@ -319,11 +319,6 @@ services:
     volumes:
       # Read-only: the AppRole bootstrap identity (role_id + secret_id). No DB password here.
       - dam-vault-bootstrap:/vault-bootstrap:ro
-      - ./dam/api/main.js:/app/main.js:ro
-      - ./dam/api/compliance-catalog.js:/app/compliance-catalog.js:ro
-      - ./dam/api/secrets.js:/app/secrets.js:ro
-      - ./dam/api/tenant-crypto.js:/app/tenant-crypto.js:ro
-      - ./dam/api/archive.js:/app/archive.js:ro
     environment:
       NODE_ENV: development
       # ── JIT: Vault (dynamic broker creds) + Approval Signer (anti-compromise gate) ──
