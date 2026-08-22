@@ -2052,7 +2052,7 @@ async function runAdminMigration() {
     await client.query(`ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS password_hash VARCHAR(200)`);
     await client.query(`ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'`);
     // Seed the first super-admin (idempotent). Credentials are env-configurable.
-    const padminEmail = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin@toovix.com').toLowerCase().trim();
+    const padminEmail = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin').toLowerCase().trim();
     const padminExists = await client.query('SELECT id, password_hash FROM platform_operators WHERE email = $1', [padminEmail]);
     if (!padminExists.rows.length) {
       const padminPass = process.env.PLATFORM_ADMIN_PASSWORD || 'ChangeMe@Admin1';

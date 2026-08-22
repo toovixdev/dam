@@ -32,8 +32,8 @@ export default function Login() {
         <h1 style={{ fontSize: 20, margin: '10px 0 4px' }}>Super-Admin sign-in</h1>
         <p style={{ fontSize: 13, color: 'var(--muted, #94a3b8)', margin: '0 0 20px' }}>Platform operations console. Restricted to platform administrators.</p>
         <form onSubmit={handleSubmit}>
-          <label style={{ fontSize: 13, fontWeight: 600 }}>Email
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="superadmin@toovix.com" autoComplete="username" style={field} />
+          <label style={{ fontSize: 13, fontWeight: 600 }}>Username
+            <input type="text" value={email} onChange={e => setEmail(e.target.value)} placeholder="superadmin" autoComplete="username" style={field} />
           </label>
           <label style={{ fontSize: 13, fontWeight: 600, display: 'block', marginTop: 14 }}>Password
             <div style={{ position: 'relative' }}>
