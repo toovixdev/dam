@@ -6128,7 +6128,7 @@ app.post('/api/access/jit/:id/provision', authRequired, featureRequired('jit-acc
     const n = (await pgPool.query(
       `SELECT COUNT(*)::int AS c FROM jit_grants WHERE broker_id=$1 AND provisioned_at > now() - interval '1 hour'`, [b.id])).rows[0].c;
     if (n >= (b.rate_limit_per_hour || 10)) {
-      await dispatchAlert({ severity: 'critical', summary: `JIT circuit breaker tripped on ${b.label} (${n} grants/hour)`, principal: g.requester, database: b.label, raw_sql: null });
+      await dispatchAlert({ tenantId: req.user.tenantId, severity: 'critical', summary: `JIT circuit breaker tripped on ${b.label} (${n} grants/hour)`, principal: g.requester, database: b.label, raw_sql: null });
       await writeAudit({ tenantId: req.user.tenantId, actorEmail: req.user.email, action: 'jit.breaker.trip', resourceType: 'jit_broker', resourceId: b.id, details: { count: n, limit: b.rate_limit_per_hour } });
       return res.status(429).json({ error: `Rate limit: ${n} JIT grants provisioned on this DB in the last hour (cap ${b.rate_limit_per_hour}). A critical alert was raised.` });
     }
@@ -6907,7 +6907,11 @@ function sampleAlert() {
 // send is isolated — one failing never blocks the others or the alert.
 async function dispatchAlert(a) {
   try {
-    const rows = (await pgPool.query('SELECT type, config FROM integrations WHERE type = ANY($1) AND status = $2', [ALERT_TYPES, 'active'])).rows;
+    // Tenant-scoped: only THIS alert's tenant's active channels get it. Without the
+    // tenant_id filter, one tenant's active email/webhook channel received every other
+    // tenant's alerts (cross-tenant notification leak). No tenantId ⇒ don't dispatch.
+    if (!a.tenantId) { console.log('[dispatch] skipped: alert has no tenantId (refusing to broadcast across tenants)'); return; }
+    const rows = (await pgPool.query('SELECT type, config FROM integrations WHERE tenant_id = $1 AND type = ANY($2) AND status = $3', [a.tenantId, ALERT_TYPES, 'active'])).rows;
     for (const row of rows) {
       const connector = CONNECTORS[row.type], cfg = decIntegrationConfig(row.type, row.config || {});
       if (!connector) continue;
