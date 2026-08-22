@@ -61,9 +61,23 @@ for n, s in svcs.items():
             for v in vols:
                 if isinstance(v, dict) and v.get("type") == "bind":
                     src = v.get("source", "")
-                    rel = f"./config/{n}/" + os.path.basename(src.rstrip("/"))   # namespaced → no collisions
+                    base = os.path.basename(src.rstrip("/"))
+                    # Caddy: bundle the DOMAIN-PARAMETERIZED package Caddyfile instead of the
+                    # hard-coded dev one, so the installer's domain drives TLS (no per-deploy edit).
+                    if n == "dam-caddy" and base == "Caddyfile":
+                        src = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config-src", "Caddyfile")
+                    rel = f"./config/{n}/" + base   # namespaced → no collisions
                     manifest.append((src, rel))
                     v["source"] = rel
+        # Caddy resolves {$DOMAIN} from its container env; compose passes it from .env at deploy.
+        if n == "dam-caddy":
+            env = s.get("environment")
+            if isinstance(env, list):
+                env = dict((e.split("=", 1) + [""])[:2] for e in env)
+            elif not isinstance(env, dict):
+                env = {}
+            env["DOMAIN"] = "${DOMAIN}"
+            s["environment"] = env
 
 d.pop("name", None)   # let the deploy set the project name
 json.dump(d, sys.stdout, indent=2)

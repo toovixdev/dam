@@ -1,0 +1,28 @@
+# SecurEra DAM — automatic HTTPS (Let's Encrypt) reverse proxy — PARAMETERIZED for the installer.
+#
+# The public domain is NOT hard-coded: Caddy reads it from the DOMAIN container env, which
+# docker-compose passes through from the installer's .env (${DOMAIN}). So one bundle deploys to
+# any domain — no hand-editing per deployment.
+#
+# Requirements: the domain's A record points at this host, and inbound 80 + 443 are open
+# (Caddy solves the ACME HTTP-01 challenge on 80, serves on 443).
+
+{$DOMAIN} {
+	# Self-hosted agent-image registry — PULL-ONLY from the internet. Pushes happen on-host
+	# (localhost:5001); external writes are refused.
+	@registry_write {
+		path /v2/*
+		method POST PUT PATCH DELETE
+	}
+	@registry_read path /v2/*
+	handle @registry_write {
+		respond "registry is read-only" 403
+	}
+	handle @registry_read {
+		reverse_proxy dam-registry:5000
+	}
+	# Everything else → the console (its nginx already proxies /api, /auth, /ws to dam-api).
+	handle {
+		reverse_proxy dam-react:5173
+	}
+}
