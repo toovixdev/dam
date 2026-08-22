@@ -60,8 +60,8 @@ step "3 · images"
 if [ -n "$REGISTRY" ]; then
   c_ok "using registry $REGISTRY (run 'docker login' first if it is private)"
 else
-  TARBALL="$(ls -1 dam-images-*.tar.gz 2>/dev/null | head -1 || true)"
-  [ -n "$TARBALL" ] || die "no dam-images-*.tar.gz here and no REGISTRY set"
+  TARBALL="$(ls -1 dam-images-*.tar.gz dist/dam-images-*.tar.gz 2>/dev/null | head -1 || true)"
+  [ -n "$TARBALL" ] || die "no dam-images-*.tar.gz in $DIR or $DIR/dist and no REGISTRY set"
   c_warn "loading $TARBALL (this is the biggest step) …"
   gunzip -c "$TARBALL" | docker load | sed 's/^/    /'
   c_ok "images loaded"
