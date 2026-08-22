@@ -1,6 +1,6 @@
 //go:build linux
 
-// TooVix DAM Agent — host (eBPF) capture mode.
+// SecurEra DAM Agent — host (eBPF) capture mode.
 //
 // Loads the SSL_read/SSL_write uprobes (see hostcap.bpf.c), attaches them to the
 // DB server's libssl, and feeds the captured *plaintext* into the SAME wire-protocol

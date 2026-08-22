@@ -1,4 +1,4 @@
-// TooVix DAM Agent — AgentLite (audit-forward) collector for MongoDB.
+// SecurEra DAM Agent — AgentLite (audit-forward) collector for MongoDB.
 //
 // MongoDB Community has NO audit log (auditing is an Enterprise/Atlas feature), so unlike the
 // MySQL/PostgreSQL collectors there is no file on disk to tail. The equivalent source is the

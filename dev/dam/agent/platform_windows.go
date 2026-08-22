@@ -101,8 +101,8 @@ func winInstall() error {
 		return fmt.Errorf("service %q is already installed", winServiceName)
 	}
 	s, err := m.CreateService(winServiceName, exe, mgr.Config{
-		DisplayName: "TooVix DAM Agent",
-		Description: "TooVix Database Activity Monitoring agent (SQL Server — audit-forward / Extended Events).",
+		DisplayName: "SecurEra DAM Agent",
+		Description: "SecurEra Database Activity Monitoring agent (SQL Server — audit-forward / Extended Events).",
 		StartType:   mgr.StartAutomatic,
 	})
 	if err != nil {

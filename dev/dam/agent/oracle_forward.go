@@ -1,4 +1,4 @@
-// TooVix DAM Agent — AgentLite (audit-forward) collector for Oracle Database.
+// SecurEra DAM Agent — AgentLite (audit-forward) collector for Oracle Database.
 //
 // Oracle's telemetry is Unified Auditing: every audited action lands in the AUDSYS view
 // UNIFIED_AUDIT_TRAIL. Like SQL Server (and unlike MySQL/PG) there is no text log to tail, so

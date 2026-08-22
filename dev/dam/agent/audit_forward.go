@@ -1,4 +1,4 @@
-// TooVix DAM Agent — AgentLite (audit-forward) capture mode.
+// SecurEra DAM Agent — AgentLite (audit-forward) capture mode.
 //
 // A lightweight forwarder that tails the database's OWN native audit log on the host and
 // ships each statement as an event — no wire tap, no path change, and no DB connection to

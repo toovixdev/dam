@@ -1,4 +1,4 @@
-// TooVix DAM Agent — single binary, MODE-selectable capture.
+// SecurEra DAM Agent — single binary, MODE-selectable capture.
 //
 // One image, three installable modes (network | host | proxy), selected by MODE:
 //
@@ -236,7 +236,7 @@ func runAgent() {
 	loadEnvFileIfPresent()
 	cfg := loadConfig()
 	log.SetFlags(log.Ltime)
-	log.Printf("=== TooVix DAM Agent v%s · mode=%s engine=%s target=%s:%s ===", cfg.Version, cfg.Mode, cfg.Engine, cfg.TargetHost, cfg.TargetPort)
+	log.Printf("=== SecurEra DAM Agent v%s · mode=%s engine=%s target=%s:%s ===", cfg.Version, cfg.Mode, cfg.Engine, cfg.TargetHost, cfg.TargetPort)
 	if len(cfg.ExemptUsers) > 0 {
 		exempt := make([]string, 0, len(cfg.ExemptUsers))
 		for u := range cfg.ExemptUsers {
@@ -1728,14 +1728,14 @@ func processPackets(cfg Config, st *connState, buf []byte, client, upstream net.
 			st.mu.Unlock()
 			if isQuarantined(st.principal) {
 				// Quarantined account: refuse and DROP the live session (no resume).
-				writeMySQLError(client, seq+1, 1142, "Session quarantined by TooVix DAM — account access is blocked")
+				writeMySQLError(client, seq+1, 1142, "Session quarantined by SecurEra DAM — account access is blocked")
 				log.Printf("[QUARANTINED] %-14s session dropped: %s", st.principal, truncate(sql, 60))
 				client.Close()
 				return nil
 			}
 			if denied(cfg, sql) {
 				blocked = true
-				writeMySQLError(client, seq+1, 1142, "Query blocked by TooVix DAM policy")
+				writeMySQLError(client, seq+1, 1142, "Query blocked by SecurEra DAM policy")
 				log.Printf("[BLOCKED] %-14s %s", st.principal, truncate(sql, 80))
 				go raiseAlert(cfg, st.principal, clientIP, sql)
 				go quarantineSession(cfg, st.principal, clientIP, sql)
