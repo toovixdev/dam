@@ -279,6 +279,28 @@ async function sendInviteEmail({ to, fullName, role, tenantName, inviterName, ac
   }
 }
 
+// Password-reset email — sent through the user's OWN tenant SMTP (resolveTenantSmtp), falling
+// back to the platform relay when the tenant has none. Never reveals whether the account exists;
+// the caller always returns a generic response regardless of send outcome.
+async function sendPasswordResetEmail({ to, tenantId, fullName, tenantName, resetUrl }) {
+  const smtp = await resolveTenantSmtp(tenantId);
+  const from = (smtp && smtp.from) || platformFrom();
+  const subject = 'Reset your SecurEra DAM password';
+  const text = `Hi ${fullName || 'there'},\n\nWe received a request to reset your password for ${tenantName} on SecurEra DAM.\n\n`
+    + `Reset it here (this link expires in 1 hour):\n${resetUrl}\n\n`
+    + `If you didn't request this, you can safely ignore this email — your password won't change.\n\n— SecurEra DAM`;
+  const html = `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:520px;color:#0f172a">
+    <h2 style="font-size:18px;margin:0 0 10px">Reset your password</h2>
+    <p style="font-size:14px;margin:0 0 8px">Hi ${_xEsc(fullName) || 'there'}, we received a request to reset your SecurEra DAM password for <b>${_xEsc(tenantName)}</b>.</p>
+    <p style="margin:18px 0"><a href="${resetUrl}" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 22px;border-radius:10px">Reset password</a></p>
+    <p style="font-size:12px;color:#64748b;margin:0 0 4px">This link expires in 1 hour.</p>
+    <p style="font-size:12px;color:#64748b;margin:0">If you didn't request this, ignore this email — your password won't change.</p>
+  </div>`;
+  await buildTransport(smtp).sendMail({ from, to, subject, text, html });
+  if (!smtp || !smtp.host) console.log(`[Reset] No SMTP configured — reset link for ${to}: ${resetUrl}`);
+  else console.log(`[Reset] Sent password-reset email to ${to}`);
+}
+
 // Signup email verification: confirms the first admin owns the address before the workspace goes live.
 async function sendVerifyEmail({ to, fullName, tenantName, slug, verifyUrl }) {
   const subject = `Verify your email to activate ${tenantName} on SecurEra DAM`;
@@ -398,6 +420,10 @@ async function runAuthMigration() {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_expires_at TIMESTAMPTZ`);
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by UUID`);
     await client.query(`CREATE INDEX IF NOT EXISTS idx_users_invite_token ON users (invite_token)`);
+    // Password-reset columns (forgot-password flow) — additive, idempotent.
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token VARCHAR(64)`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_expires_at TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_users_reset_token ON users (reset_token)`);
 
     // MFA (TOTP) columns — secret is the base32 shared key; enrolled_at set once the
     // user confirms a first code; backup_codes holds bcrypt hashes of one-time recovery codes.
@@ -2776,6 +2802,51 @@ app.get('/api/auth/me', authRequired, async (req, res) => {
 });
 
 // ── Change password ───────────────────────────────────────
+// Forgot password — issues a single-use, 1-hour reset token and emails a reset link. ALWAYS
+// returns the same generic response so it can't be used to enumerate which emails have accounts.
+// Local-auth only (SSO users reset via their IdP). If the email spans multiple workspaces, a
+// separate link is sent for each (every token is bound to one specific user).
+app.post('/api/auth/forgot-password', async (req, res) => {
+  const email = String(req.body?.email || '').toLowerCase().trim();
+  const workspace = String(req.body?.workspace || req.body?.slug || '').toLowerCase().trim();
+  const generic = { ok: true, message: 'If an account exists for that email, a password-reset link is on its way.' };
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+  try {
+    const params = [email];
+    let where = `u.email = $1 AND u.status = 'active' AND (u.auth_provider IS NULL OR u.auth_provider = 'local')`;
+    if (workspace) { params.push(workspace); where += ` AND t.slug = $${params.length}`; }
+    const users = (await pgPool.query(
+      `SELECT u.id, u.email, u.full_name, u.tenant_id, t.name AS tenant_name
+         FROM users u JOIN tenants t ON t.id = u.tenant_id WHERE ${where}`, params)).rows;
+    for (const u of users) {
+      const token = crypto.randomBytes(32).toString('hex');
+      await pgPool.query(`UPDATE users SET reset_token = $1, reset_expires_at = now() + interval '1 hour' WHERE id = $2`, [token, u.id]);
+      const resetUrl = `${APP_BASE_URL}/reset-password?token=${token}`;
+      try { await sendPasswordResetEmail({ to: u.email, tenantId: u.tenant_id, fullName: u.full_name, tenantName: u.tenant_name, resetUrl }); }
+      catch (e) { console.log('[Reset] send failed:', e.message); }
+    }
+    res.json(generic);
+  } catch (e) { console.log('[Reset] forgot-password error:', e.message); res.json(generic); }
+});
+
+// Reset password — consumes a valid, unexpired token and sets the new password. Single-use: the
+// token is cleared on success. Does NOT issue a session (the user then signs in; MFA still applies).
+app.post('/api/auth/reset-password', async (req, res) => {
+  const token = String(req.body?.token || '').trim();
+  const password = String(req.body?.password || '');
+  if (!token) return res.status(400).json({ error: 'Reset token is required' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  try {
+    const u = (await pgPool.query(
+      `SELECT id, email, tenant_id FROM users WHERE reset_token = $1 AND reset_expires_at > now() LIMIT 1`, [token])).rows[0];
+    if (!u) return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
+    const hash = await bcrypt.hash(password, 10);
+    await pgPool.query(`UPDATE users SET password_hash = $1, reset_token = NULL, reset_expires_at = NULL WHERE id = $2`, [hash, u.id]);
+    try { await writeAudit({ tenantId: u.tenant_id, actorId: u.id, actorEmail: u.email, action: 'auth.password_reset', resourceType: 'user', resourceId: u.id, details: { via: 'forgot-password' } }); } catch (e) { /* audit best-effort */ }
+    res.json({ ok: true, message: 'Your password has been reset. You can now sign in.' });
+  } catch (e) { console.log('[Reset] reset-password error:', e.message); res.status(500).json({ error: 'Could not reset your password. Please try again.' }); }
+});
+
 app.post('/api/auth/change-password', authRequired, async (req, res) => {
   const { currentPassword, newPassword } = req.body;
 

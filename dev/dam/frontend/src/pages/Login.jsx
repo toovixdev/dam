@@ -308,6 +308,10 @@ export default function Login() {
                     <label className="remember-label">
                       <input type="checkbox" checked={remember} onChange={e => setRemember(e.target.checked)} /> Remember this device
                     </label>
+                    <Link className="forgot-link" style={{ marginLeft: 'auto', fontSize: 13 }}
+                      to={`/forgot-password?email=${encodeURIComponent(email)}${workspace?.slug ? `&workspace=${encodeURIComponent(workspace.slug)}` : ''}`}>
+                      Forgot password?
+                    </Link>
                   </div>
 
                   <button type="submit" className="login-submit" disabled={loading}>
