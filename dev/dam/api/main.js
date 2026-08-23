@@ -3330,14 +3330,14 @@ app.post('/api/admin/auth/login', async (req, res) => {
 // mount protects all 40+ admin endpoints (and any future ones) on ALL domains — so the
 // unauthenticated super-admin API is no longer reachable via the public app proxy.
 app.use('/api/admin', (req, res, next) => {
-  if (req.method === 'POST' && req.path === '/auth/login') return next(); // the login itself is public
+  // Public pre-auth endpoints: login + the forgot/reset password flow.
+  if (req.method === 'POST' && ['/auth/login', '/auth/forgot-password', '/auth/reset-password'].includes(req.path)) return next();
   const op = verifyPlatformToken(req);
   if (!op) return res.status(401).json({ error: 'Platform admin authentication required' });
   req.operator = op;
   next();
 });
 
-// Who am I (validates the platform token; reaches here only if the guard passed).
 // Super-admin forgot-password — single-use, 1-hour token; emails a reset link (to the admin's
 // own subdomain). Generic response (no operator enumeration). NOTE: a username-only operator
 // (e.g. 'superadmin') has no email address, so its link is LOGGED server-side instead — a
@@ -3375,6 +3375,7 @@ app.post('/api/admin/auth/reset-password', async (req, res) => {
   } catch (e) { console.log('[Admin Reset] reset error:', e.message); res.status(500).json({ error: 'Could not reset your password. Please try again.' }); }
 });
 
+// Who am I (validates the platform token; reaches here only if the guard passed).
 app.get('/api/admin/auth/me', (req, res) => {
   res.json({ operator: { id: req.operator.operatorId, email: req.operator.email, name: req.operator.name, role: req.operator.role } });
 });
