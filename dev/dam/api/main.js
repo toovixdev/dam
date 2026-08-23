@@ -7299,7 +7299,7 @@ app.post('/api/integrations/:type/test', authRequired, async (req, res) => {
     const config = decIntegrationConfig(type, buildConnectorConfig(connector, (req.body && req.body.fields) || {}, existing && existing.config));
     const missing = missingRequired(connector, config);
     if (missing.length) return res.status(400).json({ error: `Enter ${missing.join(', ')} first` });
-    const r = await connector.send(config, sampleAlert());
+    const r = await connector.send(config, { ...sampleAlert(), tenantId: req.user.tenantId });
     res.json({ ok: !!(r && r.ok), status: r && r.status, message: (r && r.ok) ? `Test alert delivered to ${connector.name}` : `${connector.name} responded ${r && r.status}${r && r.error ? ' — ' + r.error : ''}` });
   } catch (err) {
     res.status(502).json({ ok: false, error: `Could not reach ${connector.name}: ${err.message}` });
