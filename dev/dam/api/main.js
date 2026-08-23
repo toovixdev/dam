@@ -6700,15 +6700,27 @@ async function postEmailAlert(cfg, a) {
   const smtp = await resolveTenantSmtp(a.tenantId);
   if (!smtp || !smtp.host) return { ok: false, status: 'SMTP not configured — set it up in Settings → Email first' };
   const sev = String(a.severity || '').toUpperCase();
-  const subject = `[SecurEra DAM] ${sev} — ${a.summary || 'Security alert'}`.slice(0, 180);
-  const rows = [['Severity', a.severity || '—'], ['Principal', a.principal || '—'], ['Database', a.database || '—'], ['Time', new Date(a.ts || Date.now()).toISOString()]];
-  const text = `${a.summary || 'Security alert'}\n\n` + rows.map(([k, v]) => `${k}: ${v}`).join('\n') + (a.raw_sql ? `\n\nQuery:\n${String(a.raw_sql).slice(0, 500)}` : '');
-  const html = `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:560px;color:#0f172a">
+  // Custom subject/body (optional) let a tenant tailor the notification text with ${...}
+  // placeholders (see renderAlertTemplate/alertVars); blank falls back to the default layout.
+  const subject = (cfg.subject && cfg.subject.trim())
+    ? renderAlertTemplate(cfg.subject, a).slice(0, 180)
+    : `[SecurEra DAM] ${sev} — ${a.summary || 'Security alert'}`.slice(0, 180);
+  let text, html;
+  if (cfg.body && cfg.body.trim()) {
+    // Customer template → plain text; wrap in a minimal HTML shell with values HTML-escaped
+    // (a captured query containing < or & must not break the markup) and newlines preserved.
+    text = renderAlertTemplate(cfg.body, a);
+    html = `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:560px;color:#0f172a;font-size:14px;line-height:1.5;white-space:pre-wrap">${_xEsc(text)}</div>`;
+  } else {
+    const rows = [['Severity', a.severity || '—'], ['Principal', a.principal || '—'], ['Database', a.database || '—'], ['Time', new Date(a.ts || Date.now()).toISOString()]];
+    text = `${a.summary || 'Security alert'}\n\n` + rows.map(([k, v]) => `${k}: ${v}`).join('\n') + (a.raw_sql ? `\n\nQuery:\n${String(a.raw_sql).slice(0, 500)}` : '');
+    html = `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:560px;color:#0f172a">
     <h2 style="margin:0 0 6px;font-size:18px">🛡 SecurEra DAM — ${sev}${a.test ? ' (test)' : ''} alert</h2>
     <p style="font-size:14px;margin:0 0 14px"><b>${a.summary || 'Security alert'}</b></p>
     <table style="font-size:13px;border-collapse:collapse">${rows.map(([k, v]) => `<tr><td style="padding:3px 14px 3px 0;color:#64748b">${k}</td><td><b>${String(v)}</b></td></tr>`).join('')}</table>
     ${a.raw_sql ? `<pre style="background:#f1f5f9;padding:10px;border-radius:8px;font-size:12px;white-space:pre-wrap;margin-top:12px">${String(a.raw_sql).slice(0, 500)}</pre>` : ''}
   </div>`;
+  }
   await buildTransport(smtp).sendMail({ from: smtp.from || SMTP_FROM, to: to.join(','), subject, text, html });
   return { ok: true, status: 'sent' };
 }
@@ -6719,10 +6731,10 @@ async function postEmailAlert(cfg, a) {
 function alertVars(a) {
   return {
     username: a.principal, principal: a.principal, severity: a.severity,
-    database: a.database_name, db: a.database_name, schema: a.schema_name, table: a.table_name,
+    database: a.database_name || a.database, db: a.database_name || a.database, schema: a.schema_name, table: a.table_name,
     operation: a.operation, rule: a.rule_name || a.summary, summary: a.summary,
     client_ip: a.client_ip, source_ip: a.client_ip, rows: a.row_count,
-    sql: a.raw_sql, time: a.timestamp || new Date().toISOString(),
+    sql: a.raw_sql, time: a.timestamp || a.ts || new Date().toISOString(),
   };
 }
 function renderAlertTemplate(tmpl, a) {
@@ -6842,8 +6854,12 @@ const CONNECTORS = {
       { key: 'trap_oid', label: 'Trap OID (optional)', type: 'text', placeholder: 'defaults to <enterprise OID>.1' },
       { key: 'message', label: 'Custom message varbind (optional)', type: 'text', placeholder: '${Alert.username} ran ${Alert.operation} on ${Alert.database}' },
     ], send: postSnmpTrap },
-  email_alerts: { name: 'Email', kind: 'alert', help: 'Emails alerts to a recipient list using your configured SMTP (set up Settings → Email first). Comma-separate multiple addresses.',
-    fields: [{ key: 'recipients', label: 'Recipients', type: 'text', required: true, placeholder: 'soc@company.com, oncall@company.com' }],
+  email_alerts: { name: 'Email', kind: 'alert', help: 'Emails alerts to a recipient list using your configured SMTP (set up Settings → Email first). Comma-separate multiple addresses. Subject and Body are optional — leave blank for the default layout, or customize the text with placeholders: ${severity} ${summary} ${principal} ${database} ${table} ${operation} ${sql} ${rows} ${client_ip} ${time}.',
+    fields: [
+      { key: 'recipients', label: 'Recipients', type: 'text', required: true, placeholder: 'soc@company.com, oncall@company.com' },
+      { key: 'subject', label: 'Custom subject (optional)', type: 'text', placeholder: '[SecurEra DAM] ${severity} — ${summary}' },
+      { key: 'body', label: 'Custom body (optional)', type: 'textarea', placeholder: '${principal} ran ${operation} on ${database} (${rows} rows) at ${time}.\n\n${summary}\n\nQuery:\n${sql}' },
+    ],
     send: (c, a) => postEmailAlert(c, a) },
   msteams: { name: 'Microsoft Teams', kind: 'alert', help: 'Add an Incoming Webhook (Power Automate Workflows) to the target Teams channel and paste its URL.',
     fields: [{ key: 'webhook_url', label: 'Webhook URL', type: 'url', required: true, secret: true, placeholder: 'https://….webhook.office.com/…' }],

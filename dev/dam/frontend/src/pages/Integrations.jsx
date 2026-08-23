@@ -486,6 +486,14 @@ function IntegrationModal({ open, type, schema, title, accent, logo, category, c
               <select value={vals[f.key] ?? ''} onChange={e => setVal(f.key, e.target.value)}>
                 {(f.options || []).map(o => <option key={o} value={o}>{o}</option>)}
               </select>
+            ) : f.type === 'textarea' ? (
+              <textarea
+                value={vals[f.key] ?? ''}
+                onChange={e => setVal(f.key, e.target.value)}
+                placeholder={f.placeholder || ''}
+                rows={5}
+                style={{ fontFamily: 'ui-monospace, Menlo, monospace', fontSize: 12.5, lineHeight: 1.5, resize: 'vertical', width: '100%' }}
+              />
             ) : (
               <input
                 type={f.type === 'password' ? 'password' : 'text'}
