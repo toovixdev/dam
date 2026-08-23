@@ -22,6 +22,8 @@ import DetectorPacks from './pages/DetectorPacks';
 import Runbooks from './pages/Runbooks';
 import Placeholder from './pages/Placeholder';
 import Login from './pages/Login';
+import ForgotPassword from './pages/ForgotPassword';
+import ResetPassword from './pages/ResetPassword';
 import { getToken } from './api/client';
 import './App.css';
 
@@ -41,6 +43,8 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password" element={<ResetPassword />} />
         <Route path="/" element={<RequireAuth><PlatformDashboard /></RequireAuth>} />
         <Route path="/tenants" element={<RequireAuth><Tenants /></RequireAuth>} />
         <Route path="/feature-flags" element={<RequireAuth><FeatureFlags /></RequireAuth>} />

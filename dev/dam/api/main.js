@@ -45,6 +45,9 @@ const pgPool = new Pool({
 // fall back to a no-network JSON transport and log the invite link so the flow stays
 // testable in dev without leaking real email.
 const APP_BASE_URL = (process.env.APP_BASE_URL || 'http://localhost:5173').replace(/\/$/, '');
+// The super-admin console lives on its own subdomain (convention: admin-<domain>). Used to
+// build admin password-reset links. Override with ADMIN_BASE_URL; else derive from APP_BASE_URL.
+const ADMIN_BASE_URL = (process.env.ADMIN_BASE_URL || APP_BASE_URL.replace(/^(https?:\/\/)/, '$1admin-')).replace(/\/$/, '');
 const SMTP_FROM = process.env.SMTP_FROM || 'SecurEra DAM <no-reply@toovix.security>';
 
 // ── Payment gateways (Razorpay + PayU) ────────────────────
@@ -299,6 +302,25 @@ async function sendPasswordResetEmail({ to, tenantId, fullName, tenantName, rese
   await buildTransport(smtp).sendMail({ from, to, subject, text, html });
   if (!smtp || !smtp.host) console.log(`[Reset] No SMTP configured — reset link for ${to}: ${resetUrl}`);
   else console.log(`[Reset] Sent password-reset email to ${to}`);
+}
+
+// Super-admin console password-reset email — always via the PLATFORM relay (operators aren't
+// tenant-scoped). Falls back to logging the link when no platform SMTP is configured.
+async function sendAdminResetEmail({ to, name, resetUrl }) {
+  const subject = 'Reset your SecurEra DAM admin password';
+  const text = `Hi ${name || 'there'},\n\nWe received a request to reset your SecurEra DAM super-admin password.\n\n`
+    + `Reset it here (this link expires in 1 hour):\n${resetUrl}\n\n`
+    + `If you didn't request this, ignore this email — your password won't change.\n\n— SecurEra DAM`;
+  const html = `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:520px;color:#0f172a">
+    <h2 style="font-size:18px;margin:0 0 10px">Reset your admin password</h2>
+    <p style="font-size:14px;margin:0 0 8px">Hi ${_xEsc(name) || 'there'}, we received a request to reset your SecurEra DAM super-admin password.</p>
+    <p style="margin:18px 0"><a href="${resetUrl}" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:11px 22px;border-radius:10px">Reset password</a></p>
+    <p style="font-size:12px;color:#64748b;margin:0 0 4px">This link expires in 1 hour.</p>
+    <p style="font-size:12px;color:#64748b;margin:0">If you didn't request this, ignore this email — your password won't change.</p>
+  </div>`;
+  await getPlatformMailer().sendMail({ from: platformFrom(), to, subject, text, html });
+  if (!platformConfigured()) console.log(`[Admin Reset] No platform SMTP — reset link for ${to}: ${resetUrl}`);
+  else console.log(`[Admin Reset] Sent admin password-reset email to ${to}`);
 }
 
 // Signup email verification: confirms the first admin owns the address before the workspace goes live.
@@ -2102,6 +2124,10 @@ async function runAdminMigration() {
     // with their own credentials, separate from tenant users.
     await client.query(`ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS password_hash VARCHAR(200)`);
     await client.query(`ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'`);
+    // Password-reset columns for the super-admin console — additive, idempotent.
+    await client.query(`ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS reset_token VARCHAR(64)`);
+    await client.query(`ALTER TABLE platform_operators ADD COLUMN IF NOT EXISTS reset_expires_at TIMESTAMPTZ`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_operators_reset_token ON platform_operators (reset_token)`);
     // Seed the first super-admin (idempotent). Credentials are env-configurable.
     const padminEmail = (process.env.PLATFORM_ADMIN_EMAIL || 'superadmin').toLowerCase().trim();
     const padminExists = await client.query('SELECT id, password_hash FROM platform_operators WHERE email = $1', [padminEmail]);
@@ -3312,6 +3338,43 @@ app.use('/api/admin', (req, res, next) => {
 });
 
 // Who am I (validates the platform token; reaches here only if the guard passed).
+// Super-admin forgot-password — single-use, 1-hour token; emails a reset link (to the admin's
+// own subdomain). Generic response (no operator enumeration). NOTE: a username-only operator
+// (e.g. 'superadmin') has no email address, so its link is LOGGED server-side instead — a
+// deliberate break-glass, since retrieving it requires server access.
+app.post('/api/admin/auth/forgot-password', async (req, res) => {
+  const email = String(req.body?.email || '').toLowerCase().trim();
+  const generic = { ok: true, message: 'If an admin account exists for that identifier, a reset link is on its way.' };
+  if (!email) return res.status(400).json({ error: 'Email or username is required' });
+  try {
+    const op = (await pgPool.query(`SELECT id, name, email FROM platform_operators WHERE email = $1 AND status = 'active'`, [email])).rows[0];
+    if (op) {
+      const token = crypto.randomBytes(32).toString('hex');
+      await pgPool.query(`UPDATE platform_operators SET reset_token = $1, reset_expires_at = now() + interval '1 hour' WHERE id = $2`, [token, op.id]);
+      const resetUrl = `${ADMIN_BASE_URL}/reset-password?token=${token}`;
+      try { await sendAdminResetEmail({ to: op.email, name: op.name, resetUrl }); } catch (e) { console.log('[Admin Reset] send failed:', e.message, '→ link for', op.email + ':', resetUrl); }
+      try { await logPlatformAudit({ actor: op.email, action: 'platform.password_reset_requested', resource: 'admin-console', ip: req.ip, details: 'Password reset requested' }); } catch (e) { /* best-effort */ }
+    }
+    res.json(generic);
+  } catch (e) { console.log('[Admin Reset] forgot error:', e.message); res.json(generic); }
+});
+
+// Super-admin reset-password — consumes a valid, unexpired token; single-use; issues no session.
+app.post('/api/admin/auth/reset-password', async (req, res) => {
+  const token = String(req.body?.token || '').trim();
+  const password = String(req.body?.password || '');
+  if (!token) return res.status(400).json({ error: 'Reset token is required' });
+  if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  try {
+    const op = (await pgPool.query(`SELECT id, email FROM platform_operators WHERE reset_token = $1 AND reset_expires_at > now() LIMIT 1`, [token])).rows[0];
+    if (!op) return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
+    const hash = await bcrypt.hash(password, 10);
+    await pgPool.query(`UPDATE platform_operators SET password_hash = $1, reset_token = NULL, reset_expires_at = NULL WHERE id = $2`, [hash, op.id]);
+    try { await logPlatformAudit({ actor: op.email, action: 'platform.password_reset', resource: 'admin-console', ip: req.ip, details: 'Password reset via forgot-password' }); } catch (e) { /* best-effort */ }
+    res.json({ ok: true, message: 'Your password has been reset. You can now sign in.' });
+  } catch (e) { console.log('[Admin Reset] reset error:', e.message); res.status(500).json({ error: 'Could not reset your password. Please try again.' }); }
+});
+
 app.get('/api/admin/auth/me', (req, res) => {
   res.json({ operator: { id: req.operator.operatorId, email: req.operator.email, name: req.operator.name, role: req.operator.role } });
 });

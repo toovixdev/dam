@@ -59,4 +59,17 @@ async function adminLogin(email, password) {
 }
 function adminLogout() { clearSession(); location.href = '/login'; }
 
-export { apiFetch, apiPost, apiPut, apiDelete, adminLogin, adminLogout, getToken, getOperator };
+// Request a super-admin password-reset link (no auth). Always resolves generically.
+async function adminForgotPassword(email) {
+  const res = await fetch(`${API_BASE}/admin/auth/forgot-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, data, error: data.error };
+}
+// Set a new super-admin password from a reset token (no auth). No session issued.
+async function adminResetPassword(token, password) {
+  const res = await fetch(`${API_BASE}/admin/auth/reset-password`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token, password }) });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, data, error: data.error };
+}
+
+export { apiFetch, apiPost, apiPut, apiDelete, adminLogin, adminLogout, adminForgotPassword, adminResetPassword, getToken, getOperator };

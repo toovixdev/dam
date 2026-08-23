@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { adminLogin } from '../api/client';
 
 // Platform super-admin sign-in for the DAM Admin console.
@@ -46,7 +46,8 @@ export default function Login() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
-        <p style={{ fontSize: 11, color: 'var(--subtle, #64748b)', marginTop: 18, textAlign: 'center' }}>All platform actions are logged for audit.</p>
+        <p style={{ marginTop: 14, textAlign: 'center' }}><Link to="/forgot-password" style={{ color: 'var(--muted, #94a3b8)', fontSize: 13, textDecoration: 'none' }}>Forgot password?</Link></p>
+        <p style={{ fontSize: 11, color: 'var(--subtle, #64748b)', marginTop: 12, textAlign: 'center' }}>All platform actions are logged for audit.</p>
       </div>
     </div>
   );
