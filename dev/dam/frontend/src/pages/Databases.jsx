@@ -6,7 +6,7 @@ import KpiCard from '../components/KpiCard';
 import Modal from '../components/shared/Modal';
 import TabNav from '../components/shared/TabNav';
 import useApiData from '../hooks/useApiData';
-import { apiPost, apiDelete } from '../api/client';
+import { apiPost, apiDelete, apiPut } from '../api/client';
 import { toast } from '../components/shared/Toast';
 
 const ENGINE_TABS = [
@@ -55,6 +55,17 @@ export default function Databases() {
   const [confirm, setConfirm] = useState(null); // { kind, id, name, extra }
 
   const refreshAll = () => { inst.refetch(); dbs.refetch(); };
+
+  const renameInstance = async (i) => {
+    const next = window.prompt('Instance display name (cosmetic — host/port and capture are unchanged):', i.name || i.instance || '');
+    if (next === null) return; // cancelled
+    const name = next.trim();
+    if (!name) { toast('Name cannot be empty', 'err'); return; }
+    if (name === i.name) return;
+    const res = await apiPut(`/instances/${i.id}/name`, { name });
+    if (res && res.ok) { toast(`Instance renamed to "${name}"`, 'ok'); refreshAll(); }
+    else toast(res?.data?.error || 'Rename failed', 'err');
+  };
 
   const instances = Array.isArray(inst.data) ? inst.data : [];
   const databases = Array.isArray(dbs.data) ? dbs.data : [];
@@ -129,6 +140,7 @@ export default function Databases() {
                     <td className="num"><b style={{ color: riskColor(i.risk_score) }}>{i.risk_score}</b></td>
                     <td><StatusBadge status={i.status} /></td>
                     <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                      <button className="btn-secondary" style={{ padding: '4px 9px', fontSize: 12 }} title="Rename the instance's display label" onClick={() => renameInstance(i)}>Rename</button>{' '}
                       <button className="btn-secondary" style={{ padding: '4px 9px', fontSize: 12 }} onClick={() => setAddDbTo(i)}>＋ DB</button>{' '}
                       {i.is_paas
                         ? <button className="btn-secondary" style={{ padding: '4px 9px', fontSize: 12 }} title="Managed database — no agent to install. Capture is agentless (cloud audit stream); set it up under Discovery → Cloud connectors." onClick={() => navigate('/discovery')}>Agentless</button>

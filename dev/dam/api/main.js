@@ -5709,6 +5709,23 @@ app.post('/api/instances', authRequired, async (req, res) => {
 });
 
 // Decommission a whole instance — removes its agents, databases, and the instance.
+// Rename an instance's DISPLAY name (cosmetic). host/port are untouched, so capture, agent
+// connection and database resolution (by host) are unaffected — only the label on the UI changes.
+app.put('/api/instances/:id/name', authRequired, async (req, res) => {
+  const name = ((req.body && req.body.name) || '').trim();
+  if (!name) return res.status(400).json({ error: 'name is required' });
+  if (name.length > 200) return res.status(400).json({ error: 'name must be 200 characters or fewer' });
+  try {
+    const { rowCount } = await pgPool.query(
+      'UPDATE db_instances SET name = $1 WHERE id = $2 AND tenant_id = $3', [name, req.params.id, req.user.tenantId]);
+    if (!rowCount) return res.status(404).json({ error: 'Instance not found' });
+    res.json({ ok: true, id: req.params.id, name });
+  } catch (e) {
+    console.error('[Instances] rename failed:', e.message);
+    res.status(500).json({ error: 'Failed to rename instance' });
+  }
+});
+
 app.delete('/api/instances/:id', authRequired, async (req, res) => {
   try {
     const own = await pgPool.query('SELECT 1 FROM db_instances WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId]);
