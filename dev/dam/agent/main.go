@@ -280,6 +280,11 @@ func runAgent() {
 		log.Printf("VA scan enabled but skipped (need DB_USER and engine mysql|postgresql|mssql|oracle)")
 	}
 
+	// Session-catalog principal enrichment: attribute wire-captured connections whose login
+	// handshake we never saw (pre-existing connection pool) by joining to the server's live
+	// session view. Server-side, so no app restart and works under TLS. mysql|postgresql|mssql.
+	maybeStartSessionPoller(cfg)
+
 	switch cfg.Mode {
 	case "proxy":
 		runProxy(cfg)
@@ -332,7 +337,7 @@ func handleFrame(cfg Config, f []byte, targetPort uint16, conns map[string]*conn
 		key := fmt.Sprintf("%s:%d", srcIP, srcPort)
 		st := conns[key]
 		if st == nil {
-			st = &connState{principal: "unknown"}
+			st = &connState{principal: "unknown", clientKey: key, clientIPOnly: srcIP}
 			conns[key] = st
 		}
 		// Defer emitting until the server's response is parsed so we know the row count.
@@ -450,6 +455,7 @@ func parseResponse(cfg Config, st *connState, buf []byte) []byte {
 // emitCaptured ships the pending query with its real row count, then resets.
 func emitCaptured(cfg Config, st *connState, rowCount int) {
 	if st.haveQuery {
+		enrichPrincipal(st) // backfill "unknown" from the session catalog (pooled/pre-existing conns)
 		large := cfg.LargeResultBytes > 0 && st.respBytes >= cfg.LargeResultBytes
 		forwardEvent(cfg, st.principal, st.pendingIP, st.pendingSQL, st.application, rowCount, large)
 	}
@@ -1611,6 +1617,8 @@ type connState struct {
 	mu           sync.Mutex // guards fields shared with the server→client (masking) goroutine
 	principal    string
 	application  string // source application (from the connection handshake), attached to each event
+	clientKey    string // "ip:port" of the client end — join key for session-catalog enrichment
+	clientIPOnly string // client ip only — ip-only enrichment fallback
 	firstSeen    bool   // proxy mode: first client packet seen
 	gotUser      bool   // network mode: handshake response (seq 1) decoded
 	queryAttrs   bool   // MySQL 8 CLIENT_QUERY_ATTRIBUTES negotiated → COM_QUERY has a param header
@@ -1696,11 +1704,13 @@ func handleConn(cfg Config, client net.Conn) {
 	defer upstream.Close()
 
 	clientIP := "127.0.0.1"
+	clientKey := ""
 	if a, ok := client.RemoteAddr().(*net.TCPAddr); ok {
 		clientIP = a.IP.String()
+		clientKey = fmt.Sprintf("%s:%d", a.IP.String(), a.Port)
 	}
 
-	st := &connState{principal: "unknown"}
+	st := &connState{principal: "unknown", clientKey: clientKey, clientIPOnly: clientIP}
 
 	// upstream → client: frame result sets and redact masked columns per the connecting
 	// principal (falls back to a straight copy on TLS/unparseable streams).
@@ -1767,6 +1777,7 @@ func processPackets(cfg Config, st *connState, buf []byte, client, upstream net.
 			st.pendingSQL = sql
 			st.pendingIP = clientIP
 			st.mu.Unlock()
+			enrichPrincipal(st) // pooled/pre-existing conn with no handshake → attribute from the session catalog
 			if isQuarantined(st.principal) {
 				// Quarantined account: refuse and DROP the live session (no resume).
 				writeMySQLError(client, seq+1, 1142, "Session quarantined by SecurEra DAM — account access is blocked")
