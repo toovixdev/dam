@@ -49,7 +49,7 @@ export default function AlertDetail() {
   const [notFound, setNotFound] = useState(false);
   const [panel, setPanel] = useState(null); // null | 'ack' | 'resolve' | 'fp' | 'quarantine'
   const [note, setNote] = useState('');
-  const [scope, setScope] = useState('both');
+  const [scope, setScope] = useState('database');
   const [reason, setReason] = useState('');
   const [qReason, setQReason] = useState('');
   const [notes, setNotes] = useState([]);
@@ -325,9 +325,10 @@ export default function AlertDetail() {
             <div className="form-field">
               <label>Suppression scope</label>
               <select value={scope} onChange={(e) => setScope(e.target.value)}>
-                <option value="principal">This principal — {a.principal}</option>
-                <option value="object">This object — {a.object_name || '—'}</option>
-                <option value="both">This principal + object</option>
+                <option value="database">This principal + object, only on {a.database_name || 'this database'} (recommended)</option>
+                <option value="both">This principal + object — any database</option>
+                <option value="principal">This principal — {a.principal} (any object/db)</option>
+                <option value="object">This object — {a.object_name || '—'} (any db)</option>
                 <option value="rule">Rule-wide — {a.rule}</option>
               </select>
             </div>

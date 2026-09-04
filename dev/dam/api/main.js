@@ -7718,20 +7718,31 @@ app.post('/api/alerts/:id/escalate', authRequired, async (req, res) => {
 // Mark an alert as false positive: distinct disposition + create a suppression
 // (so the rule stops re-firing on this pattern) + write an audit entry.
 app.post('/api/alerts/:id/false-positive', authRequired, async (req, res) => {
-  const scope = (req.body && req.body.scope) || 'both'; // principal | object | both | rule
+  const scope = (req.body && req.body.scope) || 'database'; // principal | object | both | database | rule
   const reason = (req.body && req.body.reason) || null;
-  const a = (await pgPool.query('SELECT id, rule, principal, object_name FROM alerts WHERE id = $1 AND tenant_id = $2', [req.params.id, req.user.tenantId])).rows[0];
+  // Join databases so we can db-qualify the suppression (alerts store only database_id,
+  // a UUID FK — not the name that alert_suppressions.database_name wants).
+  const a = (await pgPool.query(
+    `SELECT a.id, a.rule, a.principal, a.object_name, d.name AS database_name
+       FROM alerts a LEFT JOIN databases d ON d.id = a.database_id
+      WHERE a.id = $1 AND a.tenant_id = $2`,
+    [req.params.id, req.user.tenantId])).rows[0];
   if (!a) return res.status(404).json({ error: 'Alert not found' });
 
   await pgPool.query(`UPDATE alerts SET status = 'false_positive', resolved_at = now() WHERE id = $1 AND tenant_id = $2`, [a.id, req.user.tenantId]);
 
-  // Build the suppression scope (NULL = wildcard).
-  const supPrincipal = scope === 'principal' || scope === 'both' ? a.principal : null;
-  const supObject = scope === 'object' || scope === 'both' ? a.object_name : null;
+  // Build the suppression scope (NULL = wildcard). 'database' is the narrowest: it
+  // db-qualifies principal+object so the exception applies ONLY to this database — not
+  // to every DB that happens to have an object/principal of the same name.
+  const withPrincipal = scope === 'principal' || scope === 'both' || scope === 'database';
+  const withObject    = scope === 'object'    || scope === 'both' || scope === 'database';
+  const supPrincipal = withPrincipal ? a.principal : null;
+  const supObject    = withObject ? a.object_name : null;
+  const supDatabase  = scope === 'database' ? (a.database_name || null) : null;
   await pgPool.query(
-    `INSERT INTO alert_suppressions (tenant_id, rule, principal, object_name, reason, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6)`,
-    [req.user.tenantId, a.rule, supPrincipal, supObject, reason, req.user.email]
+    `INSERT INTO alert_suppressions (tenant_id, rule, principal, object_name, database_name, reason, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [req.user.tenantId, a.rule, supPrincipal, supObject, supDatabase, reason, req.user.email]
   );
 
   // Disposition timeline entry (unified with ack/resolve notes).
@@ -7741,10 +7752,10 @@ app.post('/api/alerts/:id/false-positive', authRequired, async (req, res) => {
   );
 
   // Audit (control plane) — hash-chained.
-  await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'alert.false_positive', resourceType: 'alert', resourceId: a.id, details: { rule: a.rule, scope, principal: supPrincipal, object: supObject, reason } });
+  await writeAudit({ tenantId: req.user.tenantId, actorId: req.user.userId, actorEmail: req.user.email, action: 'alert.false_positive', resourceType: 'alert', resourceId: a.id, details: { rule: a.rule, scope, principal: supPrincipal, object: supObject, database: supDatabase, reason } });
 
   try { broadcast({ type: 'alert', alert: { id: a.id, status: 'false_positive' } }); } catch (e) { /* WS optional */ }
-  res.json({ id: a.id, status: 'false_positive', suppressed: { rule: a.rule, principal: supPrincipal, object_name: supObject } });
+  res.json({ id: a.id, status: 'false_positive', suppressed: { rule: a.rule, principal: supPrincipal, object_name: supObject, database_name: supDatabase } });
 });
 
 // ── Quarantine ────────────────────────────────────────────
