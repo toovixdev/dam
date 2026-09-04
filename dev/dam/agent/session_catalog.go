@@ -25,16 +25,20 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// catSession is one live server session: which user is behind a client endpoint.
+// catSession is one live server session: which user is behind a client endpoint and/or
+// connection id. (Audit-forward joins by connID — MySQL's PROCESSLIST.ID == the general log's
+// connection id — which is exact; wire modes join by ip:port.)
 type catSession struct {
-	ip   string
-	port string
-	user string
+	ip     string
+	port   string
+	user   string
+	connID string
 }
 
 // SessionCatalog enumerates the current server sessions for one engine.
@@ -46,20 +50,28 @@ type SessionCatalog interface {
 // sessionCache maps a client endpoint → DB user. Written by the poller goroutine, read by the
 // capture goroutine(s), so guarded by an RWMutex; replaced wholesale each poll.
 type sessionCache struct {
-	mu    sync.RWMutex
-	byKey map[string]string // "ip:port" -> user (exact match)
-	byIP  map[string]string // "ip" -> user (fallback; only when that ip has ONE distinct user)
+	mu       sync.RWMutex
+	byKey    map[string]string // "ip:port" -> user (exact, wire modes)
+	byIP     map[string]string // "ip" -> user (fallback; only when that ip has ONE distinct user)
+	byConnID map[string]string // connection id -> user (exact, audit-forward)
 }
 
 func newSessionCache() *sessionCache {
-	return &sessionCache{byKey: map[string]string{}, byIP: map[string]string{}}
+	return &sessionCache{byKey: map[string]string{}, byIP: map[string]string{}, byConnID: map[string]string{}}
 }
 
 func (c *sessionCache) replace(sessions []catSession) {
-	byKey := make(map[string]string, len(sessions))
+	byKey := map[string]string{}
+	byConnID := map[string]string{}
 	ipUsers := map[string]map[string]struct{}{}
 	for _, s := range sessions {
-		if s.user == "" || s.ip == "" {
+		if s.user == "" {
+			continue
+		}
+		if s.connID != "" {
+			byConnID[s.connID] = s.user
+		}
+		if s.ip == "" {
 			continue
 		}
 		if s.port != "" {
@@ -72,7 +84,7 @@ func (c *sessionCache) replace(sessions []catSession) {
 	}
 	// ip-only fallback is safe only when a single user is seen from that client ip (the common
 	// app-host case). If a host runs services as different DB users, we require the exact port.
-	byIP := make(map[string]string, len(ipUsers))
+	byIP := map[string]string{}
 	for ip, users := range ipUsers {
 		if len(users) == 1 {
 			for u := range users {
@@ -81,8 +93,14 @@ func (c *sessionCache) replace(sessions []catSession) {
 		}
 	}
 	c.mu.Lock()
-	c.byKey, c.byIP = byKey, byIP
+	c.byKey, c.byIP, c.byConnID = byKey, byIP, byConnID
 	c.mu.Unlock()
+}
+
+func (c *sessionCache) lookupConnID(id string) string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.byConnID[id]
 }
 
 // lookup resolves a user: exact ip:port first, then — only if the ip-only fallback is enabled —
@@ -108,6 +126,16 @@ var sessCache *sessionCache
 // sessIPFallback enables the ip-only enrichment fallback (SESSION_ENRICH_IP_FALLBACK=true).
 // Default false — exact ip:port only, so enrichment is "correct or unknown, never wrong".
 var sessIPFallback bool
+
+// sessionUserByConnID resolves a DB user from the session-catalog poll by connection id — used by
+// the MySQL audit-forward path, whose general-log connection id matches PROCESSLIST.ID exactly.
+// Returns "" when enrichment is off or the id isn't currently live. Nil-safe.
+func sessionUserByConnID(id string) string {
+	if sessCache == nil || id == "" {
+		return ""
+	}
+	return sessCache.lookupConnID(id)
+}
 
 // enrichPrincipal backfills st.principal from the session catalog when the login handshake was
 // never observed (pooled/pre-existing connection). Safety-critical for an audit trail:
@@ -144,7 +172,12 @@ func enrichPrincipal(st *connState) {
 // maybeStartSessionPoller starts enrichment when the mode is wire-capture, a monitoring DB login
 // is configured, and the engine has a catalog. Returns quietly otherwise.
 func maybeStartSessionPoller(cfg Config) {
-	if cfg.Mode != "network" && cfg.Mode != "host" && cfg.Mode != "proxy" {
+	// Wire modes join by ip:port; MySQL audit-forward joins by connection id (PROCESSLIST.ID ==
+	// the general log's connection id) to attribute pre-existing pooled connections whose Connect
+	// line predates the tail. Other engines' audit-forward paths carry the principal natively.
+	wire := cfg.Mode == "network" || cfg.Mode == "host" || cfg.Mode == "proxy"
+	auditMySQL := cfg.Mode == "audit-forward" && cfg.Engine == "mysql"
+	if !wire && !auditMySQL {
 		return
 	}
 	if cfg.DBUser == "" {
@@ -239,23 +272,28 @@ func (m *mysqlCatalog) snapshot(ctx context.Context) ([]catSession, error) {
 		db.SetConnMaxLifetime(30 * time.Minute)
 		m.db = db
 	}
-	// HOST is "ip:port" for TCP sessions (the join key), "localhost" for the unix socket.
-	rows, err := m.db.QueryContext(ctx, `SELECT USER, HOST FROM information_schema.PROCESSLIST WHERE HOST <> '' AND USER IS NOT NULL`)
+	// ID = connection id (audit-forward join). HOST = "ip:port" for TCP (wire join), "localhost"
+	// for the unix socket. We keep EVERY row for the connID map; ip:port is added only for TCP.
+	rows, err := m.db.QueryContext(ctx, `SELECT ID, USER, HOST FROM information_schema.PROCESSLIST WHERE USER IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []catSession
 	for rows.Next() {
+		var id sql.NullInt64
 		var user, host string
-		if err := rows.Scan(&user, &host); err != nil {
+		if err := rows.Scan(&id, &user, &host); err != nil {
 			continue
 		}
-		ip, port := splitHostPort(host)
-		if port == "" {
-			continue // no client port → unix socket / internal thread (event_scheduler) — no wire conn
+		cs := catSession{user: user}
+		if id.Valid {
+			cs.connID = strconv.FormatInt(id.Int64, 10)
 		}
-		out = append(out, catSession{ip: normalizeCatalogIP(ip), port: port, user: user})
+		if ip, port := splitHostPort(host); port != "" {
+			cs.ip, cs.port = normalizeCatalogIP(ip), port
+		}
+		out = append(out, cs)
 	}
 	return out, rows.Err()
 }

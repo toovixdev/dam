@@ -397,7 +397,14 @@ func tailMySQLGeneralLog(cfg Config, path string) {
 	flush := func() {
 		if havePend {
 			if sql := strings.TrimSpace(pendSQL); sql != "" && shouldForward(sql) {
-				forwardEvent(cfg, orDefault(connUser[pendID], "unknown"), connHost[pendID], sql, "", 0, false)
+				// Principal from the Connect line if we saw it; else enrich from the PROCESSLIST
+				// poll by connection id (PROCESSLIST.ID == the general log's id) — this recovers the
+				// user for connections whose Connect predates the tail (pre-existing pool).
+				principal := connUser[pendID]
+				if principal == "" {
+					principal = sessionUserByConnID(pendID)
+				}
+				forwardEvent(cfg, orDefault(principal, "unknown"), connHost[pendID], sql, "", 0, false)
 			}
 			havePend, pendSQL = false, ""
 		}
