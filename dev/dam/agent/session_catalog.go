@@ -181,6 +181,20 @@ func splitHostPort(h string) (ip, port string) {
 	return h, ""
 }
 
+// normalizeCatalogIP maps a resolved loopback hostname back to the numeric address the wire
+// sniffer sees. MySQL with skip_name_resolve=OFF reports a loopback TCP client as "localhost",
+// which would never equal the packet's "127.0.0.1". (For non-loopback remote clients resolved to
+// a hostname, set skip_name_resolve=ON so HOST is the IP — otherwise the join can't match.)
+func normalizeCatalogIP(ip string) string {
+	switch strings.ToLower(ip) {
+	case "localhost", "localhost.localdomain":
+		return "127.0.0.1"
+	case "ip6-localhost", "ip6-loopback":
+		return "::1"
+	}
+	return ip
+}
+
 // ── MySQL: information_schema.PROCESSLIST (privilege: PROCESS) ────────────────
 type mysqlCatalog struct {
 	cfg Config
@@ -214,10 +228,10 @@ func (m *mysqlCatalog) snapshot(ctx context.Context) ([]catSession, error) {
 			continue
 		}
 		ip, port := splitHostPort(host)
-		if ip == "" || strings.EqualFold(ip, "localhost") {
-			continue // socket session — no wire connection to attribute
+		if port == "" {
+			continue // no client port → unix socket / internal thread (event_scheduler) — no wire conn
 		}
-		out = append(out, catSession{ip: ip, port: port, user: user})
+		out = append(out, catSession{ip: normalizeCatalogIP(ip), port: port, user: user})
 	}
 	return out, rows.Err()
 }
