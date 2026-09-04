@@ -20,7 +20,7 @@ echo "== 1/4 gather pre-built agent artifacts (Dockerfile.prod copies the whole 
 mkdir -p dam/prebuilt-artifacts
 # Keep any artifact you pre-placed (e.g. a locally-built dam-agent.exe); otherwise fetch it from
 # the control plane. A 404 is non-fatal — the download for that platform is simply unavailable.
-for f in dam-agent-linux-amd64 dam-agent.exe dam-agent_amd64.deb dam-agent_amd64.rpm; do
+for f in dam-agent-linux-amd64 dam-agent-linux-arm64 dam-agent.exe dam-agent_amd64.deb dam-agent_amd64.rpm dam-agent_arm64.deb dam-agent_arm64.rpm; do
   if [ -s "dam/prebuilt-artifacts/$f" ]; then
     printf '   %-26s %s (kept — pre-placed)\n' "$f" "$(du -h dam/prebuilt-artifacts/$f | cut -f1)"
   elif curl -fsSL "$CP/api/download/$f" -o "dam/prebuilt-artifacts/$f"; then

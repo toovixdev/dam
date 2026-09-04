@@ -5786,7 +5786,7 @@ app.delete('/api/agents/:id', authRequired, async (req, res) => {
 // Serve installable agent artifacts (public — customers curl these during install).
 // The static Linux binary is built into the image (see api/Dockerfile). Allow-listed.
 app.get('/api/download/:file', (req, res) => {
-  const ALLOWED = new Set(['dam-agent-linux-amd64', 'dam-agent.exe', 'dam-agent_amd64.deb', 'dam-agent_amd64.rpm']);
+  const ALLOWED = new Set(['dam-agent-linux-amd64', 'dam-agent-linux-arm64', 'dam-agent.exe', 'dam-agent_amd64.deb', 'dam-agent_amd64.rpm', 'dam-agent_arm64.deb', 'dam-agent_arm64.rpm']);
   const file = req.params.file;
   if (!ALLOWED.has(file)) return res.status(404).json({ error: 'Unknown artifact' });
   res.download(`${__dirname}/artifacts/${file}`, file, (err) => {

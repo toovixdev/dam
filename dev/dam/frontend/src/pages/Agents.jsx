@@ -825,9 +825,14 @@ helm install dam-${m} toovix/dam-agent \\
   if (format === 'package') {
     // Templated unit: one .deb serves every mode. Each mode gets its own agent-<mode>.env, so
     // host/network/proxy coexist on the same host without colliding.
-    return `${warn}${auditPrereq}# Debian/Ubuntu (.deb) — RHEL/Rocky: sudo dnf install ./dam-agent-<ver>.x86_64.rpm
-curl -fsSL ${cp}/api/download/dam-agent_amd64.deb -o dam-agent.deb
-sudo dpkg -i dam-agent.deb   # installs the binary + the dam-agent@.service template (once)
+    return `${warn}${auditPrereq}# Auto-detects CPU arch (x86_64/aarch64) and package manager (dpkg/rpm).
+ARCH=$(uname -m); case "$ARCH" in aarch64|arm64) A=arm64 ;; *) A=amd64 ;; esac
+if command -v dpkg >/dev/null 2>&1; then
+  curl -fsSL ${cp}/api/download/dam-agent_$A.deb -o dam-agent.deb && sudo dpkg -i dam-agent.deb
+else
+  curl -fsSL ${cp}/api/download/dam-agent_$A.rpm -o dam-agent.rpm && sudo rpm -i dam-agent.rpm
+fi
+# (installs the binary + the dam-agent@.service template, once)
 
 # Configure THIS mode — one env file per mode (repeat for other modes to run them side by side):
 sudo tee /etc/toovix/agent-${m}.env >/dev/null <<'EOF'
@@ -840,7 +845,8 @@ journalctl -u dam-agent@${m} -f`;
   // Default: static binary (eBPF embedded, no Docker, no deps) — installed via a systemd template.
   return `${warn}${auditPrereq}# 1) Download the static binary (eBPF embedded, no deps). 'install' replaces it safely
 #    even if an agent is already running (avoids "text file busy").
-curl -fsSL ${cp}/api/download/dam-agent-linux-amd64 -o /tmp/dam-agent
+ARCH=$(uname -m); case "$ARCH" in aarch64|arm64) A=arm64 ;; *) A=amd64 ;; esac
+curl -fsSL ${cp}/api/download/dam-agent-linux-$A -o /tmp/dam-agent
 sudo install -D -m 0755 /tmp/dam-agent /usr/local/bin/dam-agent && rm -f /tmp/dam-agent
 
 # 2) Install the systemd TEMPLATE once (lets host/network/proxy coexist as dam-agent@<mode>):
