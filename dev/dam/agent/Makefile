@@ -4,12 +4,17 @@
 # runtime). Building it needs clang/libbpf/bpf2go, which live in the Docker builder — so the
 # host that RUNS the agent needs none of that, and the build machine needs only Docker.
 #
-#   make binary     -> dist/dam-agent-linux-amd64   (static, amd64)
-#   make packages   -> dist/dam-agent_<ver>_amd64.deb + dam-agent-<ver>.x86_64.rpm
+#   make binary                 -> dist/dam-agent-linux-amd64   (static, amd64)
+#   make packages               -> dist/dam-agent_<ver>_amd64.deb + dam-agent-<ver>.x86_64.rpm
+#   make packages ARCH=arm64    -> dist/dam-agent-linux-arm64 + *_arm64.deb + *.aarch64.rpm
 #   make clean
+#
+# ARCH selects the Linux target (amd64|arm64). On an Apple-Silicon/ARM build host, arm64 is
+# native (fast) and amd64 is emulated; on an x86 host it's the reverse.
 
-IMAGE   ?= dam-agent:pkg-build
-PLATFORM ?= linux/amd64
+ARCH     ?= amd64
+IMAGE    ?= dam-agent:pkg-build-$(ARCH)
+PLATFORM ?= linux/$(ARCH)
 DIST     := dist
 NFPM_IMG ?= goreleaser/nfpm:latest
 
@@ -19,9 +24,9 @@ binary:
 	mkdir -p $(DIST)
 	DOCKER_BUILDKIT=1 docker build --platform $(PLATFORM) -t $(IMAGE) .
 	cid=$$(docker create --platform $(PLATFORM) $(IMAGE)); \
-	docker cp $$cid:/usr/local/bin/dam-agent $(DIST)/dam-agent-linux-amd64; \
+	docker cp $$cid:/usr/local/bin/dam-agent $(DIST)/dam-agent-linux-$(ARCH); \
 	docker rm $$cid >/dev/null
-	@echo "==> $(DIST)/dam-agent-linux-amd64"
+	@echo "==> $(DIST)/dam-agent-linux-$(ARCH)"
 
 # Solaris / illumos build. eBPF (host) and AF_PACKET (network) are Linux-only, so on Solaris
 # the agent runs in MODE=proxy (inline TCP) or MODE=audit-forward (tail the DB audit log) —
@@ -42,13 +47,18 @@ windows:
 	  sh -c 'apk add --no-cache git >/dev/null 2>&1; go build -trimpath -o $(DIST)/dam-agent-windows-amd64.exe .'
 	@echo "==> $(DIST)/dam-agent-windows-amd64.exe"
 
-deb: binary
-	docker run --rm --platform $(PLATFORM) -v "$$PWD":/w -w /w $(NFPM_IMG) \
-	  package --config packaging/nfpm.yaml --target $(DIST) --packager deb
+# nfpm's arch + binary path come from the config; template a per-ARCH copy (no-op for amd64).
+$(DIST)/nfpm-$(ARCH).yaml: packaging/nfpm.yaml
+	@mkdir -p $(DIST)
+	sed 's/amd64/$(ARCH)/g' packaging/nfpm.yaml > $@
 
-rpm: binary
+deb: binary $(DIST)/nfpm-$(ARCH).yaml
 	docker run --rm --platform $(PLATFORM) -v "$$PWD":/w -w /w $(NFPM_IMG) \
-	  package --config packaging/nfpm.yaml --target $(DIST) --packager rpm
+	  package --config $(DIST)/nfpm-$(ARCH).yaml --target $(DIST) --packager deb
+
+rpm: binary $(DIST)/nfpm-$(ARCH).yaml
+	docker run --rm --platform $(PLATFORM) -v "$$PWD":/w -w /w $(NFPM_IMG) \
+	  package --config $(DIST)/nfpm-$(ARCH).yaml --target $(DIST) --packager rpm
 
 packages: deb rpm
 	@ls -la $(DIST)

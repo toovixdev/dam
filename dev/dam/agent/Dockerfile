@@ -12,8 +12,12 @@ COPY maskdetect/ ./maskdetect/
 # Resolve the module graph first (tidy only needs import paths, not the generated symbols),
 # so `go run bpf2go` has a consistent go.mod/go.sum.
 RUN go mod tidy
-# Compile the eBPF program and generate its Go bindings (amd64 + arm64 objects).
-RUN go generate ./...
+# Compile the eBPF program + generate its Go bindings — amd64 only. The eBPF host (below-TLS)
+# mode is gated to linux/amd64 (host_linux.go); arm64 builds use the network/proxy modes with
+# no eBPF, so there is nothing to generate there (and bpf2go's uprobe pt_regs macros don't
+# cross-compile to arm64 without a libbpf/CO-RE port).
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then go generate ./...; fi
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /dam-agent .
 
 FROM alpine:3.20
