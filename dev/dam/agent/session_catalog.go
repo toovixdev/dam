@@ -85,7 +85,9 @@ func (c *sessionCache) replace(sessions []catSession) {
 	c.mu.Unlock()
 }
 
-// lookup resolves a user: exact ip:port first, then an unambiguous ip-only match.
+// lookup resolves a user: exact ip:port first, then — only if the ip-only fallback is enabled —
+// an unambiguous ip-only match. The ip-only path is a GUESS (a client host with a single user at
+// poll time), so it is OFF by default: for an audit trail we prefer "unknown" over a wrong user.
 func (c *sessionCache) lookup(ipPort, ip string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -94,7 +96,7 @@ func (c *sessionCache) lookup(ipPort, ip string) string {
 			return u
 		}
 	}
-	if ip != "" {
+	if sessIPFallback && ip != "" {
 		return c.byIP[ip]
 	}
 	return ""
@@ -103,14 +105,28 @@ func (c *sessionCache) lookup(ipPort, ip string) string {
 // Package-level cache the capture path reads; nil until a poller starts (enrichment off).
 var sessCache *sessionCache
 
+// sessIPFallback enables the ip-only enrichment fallback (SESSION_ENRICH_IP_FALLBACK=true).
+// Default false — exact ip:port only, so enrichment is "correct or unknown, never wrong".
+var sessIPFallback bool
+
 // enrichPrincipal backfills st.principal from the session catalog when the login handshake was
-// never observed (pooled/pre-existing connection). No-op once a real user is known, or when the
-// connection has no client endpoint to join on (host/eBPF mode reads below TCP).
+// never observed (pooled/pre-existing connection). Safety-critical for an audit trail:
+//   - A principal set from the WIRE (handshake/startup) is authoritative and is NEVER overridden.
+//   - We do NOT pin the result on the connState (no gotUser): the value is RE-RESOLVED from the
+//     fresh (≤poll-interval) cache on every emit, so if this ip:port is reused by a different
+//     session the attribution self-corrects, and a real handshake still wins if one arrives.
+//   - If a previously-enriched session is no longer live in the catalog, we revert to "unknown"
+//     rather than keep asserting a user we can no longer confirm.
+// No-op when the connection has no client endpoint to join on (host/eBPF reads below TCP).
 func enrichPrincipal(st *connState) {
-	if sessCache == nil || st.gotUser {
+	if sessCache == nil {
 		return
 	}
-	if st.principal != "" && st.principal != "unknown" {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	// Authoritative wire principal (handshake/startup) → never touch. Enriched values carry the
+	// `enriched` flag so they remain re-resolvable here.
+	if st.principal != "" && st.principal != "unknown" && !st.enriched {
 		return
 	}
 	if st.clientKey == "" && st.clientIPOnly == "" {
@@ -118,7 +134,10 @@ func enrichPrincipal(st *connState) {
 	}
 	if u := sessCache.lookup(st.clientKey, st.clientIPOnly); u != "" {
 		st.principal = u
-		st.gotUser = true // learned — stop re-looking (a later handshake would only re-confirm)
+		st.enriched = true
+	} else if st.enriched {
+		st.principal = "unknown" // session gone / port reused in flight — stop asserting it
+		st.enriched = false
 	}
 }
 
@@ -135,6 +154,7 @@ func maybeStartSessionPoller(cfg Config) {
 	if cat == nil {
 		return
 	}
+	sessIPFallback = env("SESSION_ENRICH_IP_FALLBACK", "false") == "true"
 	every := time.Duration(atoiDefault(env("SESSION_POLL_SECS", "5"), 5)) * time.Second
 	if every < time.Second {
 		every = 5 * time.Second
@@ -144,7 +164,11 @@ func maybeStartSessionPoller(cfg Config) {
 
 func runSessionPoller(cfg Config, cat SessionCatalog, every time.Duration) {
 	sessCache = newSessionCache()
-	log.Printf("session-principal enrichment ON (%s, every %s) — attributes pooled/pre-existing connections without an app restart", cat.name(), every)
+	match := "exact ip:port only"
+	if sessIPFallback {
+		match = "ip:port + ip-only fallback"
+	}
+	log.Printf("session-principal enrichment ON (%s, every %s, %s) — attributes pooled/pre-existing connections without an app restart", cat.name(), every, match)
 	for {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		sessions, err := cat.snapshot(ctx)

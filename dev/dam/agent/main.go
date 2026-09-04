@@ -1619,6 +1619,7 @@ type connState struct {
 	application  string // source application (from the connection handshake), attached to each event
 	clientKey    string // "ip:port" of the client end — join key for session-catalog enrichment
 	clientIPOnly string // client ip only — ip-only enrichment fallback
+	enriched     bool   // principal was set from the session catalog (not the wire) — re-resolvable
 	firstSeen    bool   // proxy mode: first client packet seen
 	gotUser      bool   // network mode: handshake response (seq 1) decoded
 	queryAttrs   bool   // MySQL 8 CLIENT_QUERY_ATTRIBUTES negotiated → COM_QUERY has a param header
