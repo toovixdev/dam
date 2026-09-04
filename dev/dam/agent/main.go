@@ -390,6 +390,23 @@ func parseResponse(cfg Config, st *connState, buf []byte) []byte {
 			}
 			continue
 		}
+		if st.awaitingPrepareResp {
+			// First packet of a COM_STMT_PREPARE_OK response: [00][stmt_id:4][num_cols:2][num_params:2]…
+			// Map the id → the SQL from the prepare so later COM_STMT_EXECUTEs resolve to it. The
+			// trailing param/column-def packets carry no id and fall through the !haveQuery skip below
+			// (framing stays in sync — every packet is walked by its 4-byte header). ERR (0xff) = the
+			// prepare failed, so nothing is mapped.
+			if plen >= 5 && b0 == 0x00 {
+				stmtID := uint32(payload[1]) | uint32(payload[2])<<8 | uint32(payload[3])<<16 | uint32(payload[4])<<24
+				if st.preparedSQL == nil {
+					st.preparedSQL = map[uint32]string{}
+				}
+				st.preparedSQL[stmtID] = st.pendingPrepareSQL
+			}
+			st.awaitingPrepareResp = false
+			st.pendingPrepareSQL = ""
+			continue
+		}
 		if !st.haveQuery {
 			continue // a response with no query we tracked (e.g. mid-stream start)
 		}
@@ -443,7 +460,9 @@ func emitCaptured(cfg Config, st *connState, rowCount int) {
 }
 
 // frameAndDecode frames complete MySQL client→server packets, decoding the login username
-// (handshake response, seq 1) and COM_QUERY SQL. Returns unconsumed remainder. Capture-only.
+// (handshake response, seq 1), COM_QUERY SQL (text protocol) and the prepared-statement binary
+// protocol (COM_STMT_PREPARE carries the SQL; COM_STMT_EXECUTE replays it by statement id).
+// Returns unconsumed remainder. Capture-only.
 func frameAndDecode(st *connState, buf []byte, onQuery func(sql string)) []byte {
 	for len(buf) >= 4 {
 		plen := int(buf[0]) | int(buf[1])<<8 | int(buf[2])<<16
@@ -454,8 +473,11 @@ func frameAndDecode(st *connState, buf []byte, onQuery func(sql string)) []byte 
 		// Handshake response = the first client→server packet. Network mode sees it at seq 1;
 		// host (eBPF/below-TLS) mode sees it as the first SSL_read at a higher seq (the pre-TLS
 		// SSLRequest already consumed seq 1), so detect it by shape instead of seq: not yet
-		// authed, not a command byte (COM_QUERY=0x03), and long enough for caps+filler+user.
-		if !st.gotUser && plen > 32 && payload[0] != 0x03 {
+		// authed, not a command byte (COM_QUERY=0x03, COM_STMT_PREPARE=0x16, COM_STMT_EXECUTE=0x17
+		// — the packets most likely to be first-seen on a pooled connection), and long enough for
+		// caps+filler+user. Excluding the command bytes keeps principal honestly "unknown" on a
+		// mid-stream connection rather than mis-reading command bytes as a username.
+		if !st.gotUser && plen > 32 && payload[0] != 0x03 && payload[0] != 0x16 && payload[0] != 0x17 {
 			st.gotUser = true
 			var caps uint32
 			if len(payload) >= 4 {
@@ -477,6 +499,19 @@ func frameAndDecode(st *connState, buf []byte, onQuery func(sql string)) []byte 
 				q = skipQueryAttrs(q)
 			}
 			onQuery(strings.TrimSpace(string(q)))
+		} else if len(payload) > 1 && payload[0] == 0x16 { // COM_STMT_PREPARE — the SQL text follows
+			// Don't emit yet: a prepare doesn't run the statement. Stash the SQL until the server's
+			// response assigns a statement id (see parseResponse), then each COM_STMT_EXECUTE emits it.
+			st.pendingPrepareSQL = strings.TrimSpace(string(payload[1:]))
+			st.awaitingPrepareResp = true
+		} else if len(payload) >= 5 && payload[0] == 0x17 { // COM_STMT_EXECUTE — [0x17][stmt_id:4]…
+			stmtID := uint32(payload[1]) | uint32(payload[2])<<8 | uint32(payload[3])<<16 | uint32(payload[4])<<24
+			if sql := st.preparedSQL[stmtID]; sql != "" {
+				onQuery(sql) // defer emit to the result set, same as COM_QUERY, for a real row count
+			}
+		} else if len(payload) >= 5 && payload[0] == 0x19 { // COM_STMT_CLOSE — free the mapping
+			stmtID := uint32(payload[1]) | uint32(payload[2])<<8 | uint32(payload[3])<<16 | uint32(payload[4])<<24
+			delete(st.preparedSQL, stmtID)
 		}
 		buf = buf[4+plen:]
 	}
@@ -1591,6 +1626,12 @@ type connState struct {
 	pendingSQL        string // the query awaiting its result set
 	pendingIP         string
 	haveQuery         bool
+	// MySQL prepared-statement (binary protocol): COM_STMT_PREPARE carries the SQL text, which
+	// the server answers with a statement id; each later COM_STMT_EXECUTE references that id, so
+	// we resolve it back to the prepared SQL and emit it with the execute's real row count.
+	preparedSQL         map[uint32]string
+	pendingPrepareSQL   string // SQL of a COM_STMT_PREPARE awaiting the server's id assignment
+	awaitingPrepareResp bool   // next server response's first packet carries the new statement id
 	respBytes         int64 // host mode: total response bytes for the pending query (real sizes, summed)
 	pgStartupDone     bool  // postgres: startup message consumed (principal pulled from it)
 	pgSSLReplyPending bool  // postgres: client sent SSLRequest; skip the server's 1-byte reply
