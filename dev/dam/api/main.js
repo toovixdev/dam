@@ -14110,9 +14110,13 @@ async function runDetectionEngine() {
       const pols = (await pgPool.query(`SELECT * FROM policies WHERE tenant_id = $1 AND status = 'enabled'`, [tenantId])).rows;
       if (!pols.length) continue;
       const evDb = await eventsDbFor(tenantId);
-      const dbByName = {}, dbByHost = {};
+      const dbByName = {}, dbByHost = {}, dbById = {};
       (await pgPool.query('SELECT d.id, d.name, i.host FROM databases d LEFT JOIN db_instances i ON d.instance_id = i.id WHERE d.tenant_id = $1', [tenantId]))
-        .rows.forEach((d) => { dbByName[d.name] = d.id; if (d.host && !dbByHost[d.host]) dbByHost[d.host] = d.id; });
+        .rows.forEach((d) => { dbByName[d.name] = d.id; dbById[d.id] = d.name; if (d.host && !dbByHost[d.host]) dbByHost[d.host] = d.id; });
+      // Canonical DB name for an event: agents tag database_name as the endpoint (e.g.
+      // "127.0.0.1:3306"), so resolve it to the registered databases.name the SAME way the
+      // alert's database_id is resolved below — otherwise db-scoped suppressions never match.
+      const resolveDbName = (ev) => dbById[dbByName[ev.database_name] || dbByHost[ev.source_host]] || ev.database_name;
       const supp = (await pgPool.query(`SELECT rule, principal, object_name, database_name FROM alert_suppressions WHERE tenant_id = $1 AND status = 'active' AND (expires_at IS NULL OR expires_at > now())`, [tenantId])).rows;
       const suppressed = (rule, principal, object, database) => supp.some((s) =>
         s.rule === rule
@@ -14134,7 +14138,7 @@ async function runDetectionEngine() {
         if (!Array.isArray(evs)) continue;
         for (const ev of evs) {
           const object = eventObject(ev);
-          if (suppressed(p.name, ev.principal, object, ev.database_name)) continue; // exception / allow-list honored
+          if (suppressed(p.name, ev.principal, object, resolveDbName(ev))) continue; // exception / allow-list honored (db-name resolved to canonical)
           const score = (+ev.anomaly_score > 0) ? +ev.anomaly_score : Math.min(99, sevBaseScore(p.severity) + 20);
           const rowsTxt = ['LOGIN', 'GRANT', 'DDL'].includes(ev.operation) ? '—' : Number(ev.row_count || 0).toLocaleString();
           const ins = await pgPool.query(
