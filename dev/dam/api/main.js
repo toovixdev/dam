@@ -4241,7 +4241,11 @@ app.get('/api/admin/tenants/:id/health', async (req, res) => {
 // Redis / NATS / MinIO). Single region ("local"). No main-app tables touched.
 const REDIS_HOST = (process.env.REDIS_URL || 'redis://dam-redis:6379').replace(/^redis:\/\//, '').split(':')[0];
 const NATS_HOST = (process.env.NATS_URL || 'nats://dam-nats:4222').replace(/^nats:\/\//, '').split(':')[0];
-const MINIO_HOST = process.env.S3_ENDPOINT || 'dam-minio';
+// Object store (S3) health probe — backend-agnostic (MinIO / Ceph RGW / AWS S3), not tied to
+// MinIO's /minio/health/live path or port 9000. Reads the configured S3 endpoint.
+const S3_HOST = process.env.S3_ENDPOINT || process.env.MINIO_HOST || 'dam-minio';
+const S3_PORT = parseInt(process.env.S3_PORT || process.env.MINIO_PORT || '9000', 10);
+const S3_SSL = String(process.env.S3_USE_SSL || 'false') === 'true';
 
 function checkTcp(host, port, timeoutMs = 1500) {
   return new Promise((resolve) => {
@@ -4273,7 +4277,8 @@ async function gatherInfra() {
     chOne('SELECT 1').then(v => v !== null),
     checkTcp(REDIS_HOST, 6379),
     natsVarz(),
-    checkHttp(`http://${MINIO_HOST}:9000/minio/health/live`),
+    // A GET on the S3 endpoint root returns <500 on any S3 server (MinIO/RGW/AWS) → reachable.
+    checkHttp(`${S3_SSL ? 'https' : 'http'}://${S3_HOST}:${S3_PORT}/`),
   ]);
 
   // ClickHouse real metrics — aggregate storage across EVERY data plane (the shared
@@ -4305,7 +4310,7 @@ async function gatherInfra() {
     svc('Control DB', 'postgres', pgOk, `Postgres · ${formatBytes(parseInt(pgStat.rows[0].sz))} · ${pgStat.rows[0].conns} conns`),
     svc('Cache / Sessions', 'redis', redisOk, `Redis · ${REDIS_HOST}:6379`),
     svc('Event Bus', 'nats', !!natsInfo, natsInfo ? `NATS · ${natsInfo.connections} conns · ${(natsInfo.in_msgs || 0).toLocaleString()} msgs in` : 'NATS · unreachable'),
-    svc('WORM Archive', 'minio', minioOk, `MinIO (S3) · ${MINIO_HOST}`),
+    svc('WORM Archive', 'minio', minioOk, `S3 object store · ${S3_HOST}:${S3_PORT}`),
     { name: 'Ingest Collector', kind: 'collector', status: collectorLive ? 'healthy' : 'degraded', detail: collectorLive ? `${eps} events/s` : 'no events in last 60s' },
     {
       name: 'Agent Fleet', kind: 'agents',

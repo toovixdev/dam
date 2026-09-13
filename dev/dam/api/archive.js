@@ -32,10 +32,23 @@ function makeS3Provider(cfg) {
       const exists = await client.bucketExists(cfg.bucket).catch(() => false);
       // Object Lock can only be enabled at bucket creation time.
       if (!exists) await client.makeBucket(cfg.bucket, cfg.region, { ObjectLocking: true });
-      // Default retention so every object inherits WORM protection on PUT.
+      // Default retention so every object inherits WORM protection on PUT. On a re-init this also
+      // UPDATES the default (e.g. GOVERNANCE→COMPLIANCE when ARCHIVE_LOCK_MODE changes).
       try {
         await client.setObjectLockConfig(cfg.bucket, { mode: cfg.lockMode, unit: 'Days', validity: cfg.lockDays });
-      } catch (e) { /* may already be set, or endpoint lacks Object Lock */ }
+        // Conformance self-check: read the lock config back and confirm WORM is actually enforced.
+        // A backend that silently ignores Object Lock (a non-WORM S3 clone) fails here LOUDLY,
+        // rather than giving a false sense of immutability for compliance evidence.
+        const lc = await client.getObjectLockConfig(cfg.bucket).catch(() => null);
+        const active = lc && (lc.mode || lc.objectLockEnabled === 'Enabled');
+        if (active) {
+          console.log(`[Archive] WORM verified — Object Lock ${cfg.lockMode}/${cfg.lockDays}d active on ${cfg.bucket} @ ${cfg.endPoint}`);
+        } else {
+          console.error(`[Archive] ⚠ WORM NOT ENFORCED — ${cfg.endPoint} accepted the bucket but Object Lock is not active on ${cfg.bucket}. Archived evidence is NOT immutable. Use an Object-Lock-capable backend (MinIO / Ceph RGW / AWS S3) or set ARCHIVE_PROVIDER=none.`);
+        }
+      } catch (e) {
+        console.error(`[Archive] ⚠ Object Lock config FAILED on ${cfg.bucket} @ ${cfg.endPoint}: ${e.message} — evidence may NOT be immutable. Verify the backend supports S3 Object Lock.`);
+      }
     },
     async put(key, body, contentType) {
       await client.putObject(cfg.bucket, key, body, Buffer.byteLength(body), { 'Content-Type': contentType });
